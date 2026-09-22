@@ -63,9 +63,12 @@ Trino does.
 
 ## Consequences
 
-- `catalog.config-dir` must be declared in `etc/catalog-store.properties`, not
-  `config.properties` — the filename is hardcoded in `CatalogStoreManager.java` and setting it
-  in `config.properties` fails validation.
+- `catalog.store` and `catalog.config-dir` live in **different files**: the former in
+  `config.properties`, the latter in `etc/catalog-store.properties`. Each is rejected as
+  unused in the other's file. The relative path resolves to `/etc/trino/`, because the
+  launcher runs from `/data/trino` whose `etc` symlinks there.
+- The store directory must be writable by the non-root `trino` user, so it lives under
+  `/data/trino`. A path under `/var` fails before Trino starts.
 - **The deployment needs an initContainer.** Without it the Cluster starts with no catalogs.
   It is a precondition Apchi checks before every Apply (§16), not an assumption.
 - **Apply writes twice: the Secret, then the DDL.** The two can diverge, and the ordering is

@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trino-coordinator
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: trino, component: coordinator}
+  template:
+    metadata:
+      labels: {app: trino, component: coordinator}
+    spec:
+      initContainers:
+        # Seeds the writable store directory from the Secret before Trino
+        # reads it. FileCatalogStore enumerates the directory only in its
+        # constructor, so anything absent here is absent until the next
+        # pod start.
+        - name: seed-catalogs
+          image: trinodb/trino:483
+          command: ["sh", "-c"]
+          args:
+            - mkdir -p /data/trino/catalogs &&
+              cp -L /data/trino/catalog-seed/*.properties /data/trino/catalogs/ 2>/dev/null || true;
+              ls -l /data/trino/catalogs
+          volumeMounts:
+            - {name: catalog-seed, mountPath: /data/trino/catalog-seed, readOnly: true}
+            - {name: catalog-store, mountPath: /data/trino/catalogs}
+      containers:
+        - name: trino
+          image: trinodb/trino:483
+          ports: [{containerPort: 8080, name: http}]
+          readinessProbe:
+            exec: {command: ["/usr/lib/trino/bin/health-check"]}
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 30
+          volumeMounts:
+            - {name: config, mountPath: /etc/trino/config.properties, subPath: coordinator-config.properties}
+            - {name: config, mountPath: /etc/trino/node.properties, subPath: node.properties}
+            - {name: config, mountPath: /etc/trino/jvm.config, subPath: jvm.config}
+            - {name: config, mountPath: /etc/trino/catalog-store.properties, subPath: catalog-store.properties}
+            - {name: config, mountPath: /etc/trino/access-control.properties, subPath: access-control.properties}
+            # Apchi-managed: whole-volume mount, never subPath, so the
+            # kubelet keeps it current.
+            - {name: access-control, mountPath: /etc/trino/access-control, readOnly: true}
+            - {name: catalog-store, mountPath: /data/trino/catalogs}
+      volumes:
+        - {name: config, configMap: {name: trino-config}}
+        - {name: access-control, secret: {secretName: trino-access-control}}
+        - {name: catalog-seed, secret: {secretName: trino-catalog-seed}}
+        # Ephemeral by design. Durability lives in the Secret, not here.
+        - {name: catalog-store, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trino
+spec:
+  selector: {app: trino, component: coordinator}
+  ports: [{port: 8080, targetPort: http, name: http}]

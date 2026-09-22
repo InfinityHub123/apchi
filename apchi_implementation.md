@@ -244,12 +244,19 @@ Secret ──read-only──▶ /etc/trino/catalog-seed
 
 Requirements on the Trino deployment:
 
-- `catalog.management=dynamic`, `catalog.store=file`
-- `catalog.config-dir` on the **container filesystem** — a plain path, no volume. Writable by
-  default, ephemeral, and reseeded at every pod start. No PVC, no `emptyDir`, no `fsGroup`.
-- `catalog.config-dir` declared in `etc/catalog-store.properties`, **not**
-  `config.properties`; the filename is hardcoded in `CatalogStoreManager.java` and putting it
-  elsewhere fails validation
+- `catalog.management=dynamic` and `catalog.store=file` in **`config.properties`**
+- `catalog.config-dir` in **`etc/catalog-store.properties`** — a different file. That filename
+  is hardcoded in `CatalogStoreManager.java`, and the relative path resolves to
+  `/etc/trino/catalog-store.properties` (the launcher runs from `/data/trino`, whose `etc`
+  symlinks to `/etc/trino`; the image's `WorkingDir` metadata is misleading). The two
+  properties are **not interchangeable between the files**: `catalog.store` in
+  `catalog-store.properties` is rejected as unused, and `catalog.config-dir` in
+  `config.properties` likewise.
+- `catalog.config-dir` pointing at a **plain path the non-root `trino` user can write** —
+  under `/data/trino`, which is trino-owned. A path under `/var` fails with a permission error
+  before Trino starts. No PVC and no `fsGroup` are needed.
+- `access-control.name` in **`access-control.properties`** only; in `config.properties` it is
+  rejected.
 - A Secret of catalog `.properties` mounted read-only at a seed path, and an initContainer
   copying it into `catalog.config-dir` before Trino starts
 - Catalog DDL restricted to Apchi's identity in the generated access-control rules
@@ -358,7 +365,8 @@ configuration and stay healthy?*
 
 1. `/v1/info` — coordinator responding, `"starting": false`
 2. `/v1/status` — node liveness
-3. `/v1/node` — worker count matches the Kubernetes replica count
+3. `SELECT count(*) FROM system.runtime.nodes WHERE NOT coordinator AND state = 'active'` —
+   worker count matches the Kubernetes replica count
 4. `SHOW CATALOGS` — every catalog in the Candidate is present
 5. A smoke query against a default catalog, run as Apchi's reserved identity
 
@@ -367,9 +375,10 @@ still in flight, rather than leaving it to surface at the next restart. It is Ve
 not a background reconciler, so §17 still holds.
 
 Step 3 matters: the standard readiness probe only proves the JVM booted. **A coordinator
-with zero workers passes it.** `/v1/node` is not part of Trino's documented API surface —
-it is known from server source and carries no cross-version guarantee — so it lives behind
-a single adapter and the supported Trino version range is pinned explicitly.
+with zero workers passes it.** Use the `system.runtime.nodes` system table, not `/v1/node` —
+that endpoint returns 404 on Trino 483, verified against a running cluster. The system table
+is a documented SQL interface reachable over the connection Apchi already holds, and needs no
+management credentials.
 
 Step 4 is what distinguishes "the coordinator came back up" from "the coordinator came back
 up running the configuration we just applied". Trino exposes no endpoint reporting which
@@ -1037,8 +1046,9 @@ shape but far less recognised; the official client is what every example and ans
 Keep all Kubernetes access behind one module so swapping later is a change in one place.
 
 **Trino: the official `trino` package**, also synchronous, also via a threadpool. Only
-`/v1/statement` is documented public API, so `/v1/info`, `/v1/node` and `/v1/query` go through
-plain `httpx` — behind the single adapter §8 already requires.
+`/v1/statement` is documented public API, so `/v1/info`, `/v1/status` and `/v1/query` go
+through plain `httpx` — behind the single adapter §8 already requires. Cluster membership comes
+from the `system.runtime.nodes` system table over the SQL connection, not a REST endpoint.
 
 **MongoDB: PyMongo's Async API**, optionally with Beanie for Pydantic-native documents.
 **Not Motor** — MongoDB deprecated it in May 2025 with end of life in May 2026, and it is now
@@ -1165,7 +1175,7 @@ incident, so it must not be a pure function of environment type.
 **Correlation.** Stdlib `logging`. A `contextvar` holds the id of the Apply in progress and a
 filter injects it into every record, so filtering on one id yields the complete story of a
 failure. During an Apply several things run concurrently — polling `/v1/query`, watching a
-rollout, polling `/v1/node` — and without correlation the lines interleave and no log level
+rollout, polling node state — and without correlation the lines interleave and no log level
 makes them readable. JSON formatter in-cluster, plain console formatter locally, selected by
 the same setting.
 
@@ -1261,6 +1271,8 @@ Additional constraints:
 - **Workers announce every 5s with a 30s in-process TTL**, so two coordinators behind one
   Service each see a partial, shifting subset.
 - **No endpoint reports which configuration is loaded.** Verification must be functional.
+- **`/v1/node` does not exist on Trino 483** (404). Cluster membership comes from the
+  `system.runtime.nodes` system table.
 - **ConfigMap volume updates are watch-driven** — normally a few seconds, bounded by the
   kubelet's `syncFrequency` (default 1 minute); `subPath` mounts never update at all.
 - **Fault-tolerant execution does not survive a coordinator restart** — it recovers from
