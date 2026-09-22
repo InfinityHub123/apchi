@@ -33,3 +33,15 @@ async def test_openapi_is_served(client: AsyncClient) -> None:
 
     assert response.status_code == 200
     assert "/api/v1/health" in response.json()["paths"]
+
+
+async def test_apchi_starts_when_mongo_is_unreachable() -> None:
+    """Starting degraded beats crashlooping: the health endpoint is the readiness
+    signal, and a pod that dies on a transient blip loses its logs."""
+    from app.config import Settings
+    from app.main import create_app
+
+    app = create_app(Settings(mongo_uri="mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=200"))
+
+    async with app.router.lifespan_context(app):
+        pass  # startup recovery cannot run, and that must not stop the app

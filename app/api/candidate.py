@@ -5,7 +5,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, status
 from pydantic import BaseModel, Field
 
-from app.api.deps import CandidateStoreDep
+from app.api.deps import CandidateStoreDep, CandidateUnfrozen
 from app.sections import SECTIONS, SectionName
 
 router = APIRouter(tags=["candidate"])
@@ -76,6 +76,7 @@ async def review(store: CandidateStoreDep) -> Review:
     "/candidate/reset",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Discard everything staged",
+    dependencies=[CandidateUnfrozen],
 )
 async def reset(store: CandidateStoreDep) -> None:
     """Re-derives the Candidate from the latest Snapshot.
