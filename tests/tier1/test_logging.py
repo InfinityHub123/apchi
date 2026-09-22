@@ -89,3 +89,16 @@ def test_records_outside_an_apply_carry_no_identifier() -> None:
     ApplyIdFilter().filter(record)
 
     assert record.apply_id is None
+
+
+def test_credentials_embedded_in_a_url_are_redacted() -> None:
+    """mongodb.connection-url carries user:pass in the value, and its name matches
+    no secret pattern -- so the value has to be inspected, not just the key."""
+    result = redact({"mongodb.connection-url": "mongodb://trino:hunter2@db:27017/x"})
+
+    assert "hunter2" not in result["mongodb.connection-url"]
+    assert result["mongodb.connection-url"].startswith("mongodb://trino:")
+
+
+def test_a_url_without_credentials_is_untouched() -> None:
+    assert redact("https://example.com/path") == "https://example.com/path"
