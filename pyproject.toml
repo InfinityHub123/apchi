@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "apchi"
+version = "0.1.0"
+description = "Control plane for configuring one Trino cluster"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.135.0",
+    "uvicorn[standard]>=0.34",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "pymongo>=4.13",
+    "httpx>=0.28",
+    "trino>=0.330",
+    "kubernetes>=31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "testcontainers>=4.9",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["app"]
+
+# adapters/ wraps third-party clients whose generated types are poor;
+# strictness there buys arguments with the type checker rather than safety.
+[[tool.mypy.overrides]]
+module = "app.adapters.*"
+disallow_untyped_calls = false
+disallow_any_generics = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+module = ["kubernetes.*", "trino.*", "testcontainers.*"]
+ignore_missing_imports = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = ["tier2: end-to-end tests requiring a Kubernetes cluster"]
