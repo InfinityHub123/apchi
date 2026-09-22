@@ -37,7 +37,13 @@ _SECRET_NAMES = (
     "authorization",
     "api_key",
     "apikey",
+    "keytab",
 )
+
+# Credentials embedded in a URL, e.g. mongodb://user:pass@host:27017. The property
+# name (mongodb.connection-url) matches no secret pattern, so the value has to be
+# inspected rather than the key.
+_URL_CREDENTIALS = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)([^/\s:@]+):([^/\s@]+)@")
 _INLINE = re.compile(
     r"(?i)\b(" + "|".join(re.escape(n) for n in _SECRET_NAMES) + r")\b(\s*[=:]\s*)(\S+)"
 )
@@ -56,7 +62,8 @@ def redact(value: Any) -> Any:
     if isinstance(value, list):
         return [redact(v) for v in value]
     if isinstance(value, str):
-        return _INLINE.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", value)
+        value = _INLINE.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", value)
+        return _URL_CREDENTIALS.sub(lambda m: f"{m.group(1)}{m.group(2)}:{REDACTED}@", value)
     return value
 
 

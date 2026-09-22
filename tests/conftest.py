@@ -4,7 +4,7 @@ Two tiers, two seams. Every test drives the HTTP API; only the Kubernetes adapte
 is ever substituted. MongoDB and Trino are real in both tiers.
 """
 
-import os
+import uuid
 from collections.abc import AsyncIterator, Iterator
 
 import pytest
@@ -67,10 +67,14 @@ def trino_validation() -> Iterator[TrinoContainer]:
 
 @pytest.fixture
 def settings(mongo_container: MongoDbContainer) -> Settings:
+    # A database per test. The Configuration Candidate is a singleton per Cluster,
+    # so tests sharing one database share one Candidate and leak state into each
+    # other -- the same shared-mutable-state problem the design accepts for
+    # Operators, which tests must not inherit.
     return Settings(
         environment=Environment.TEST,
         mongo_uri=mongo_container.get_connection_url(),
-        mongo_database=f"apchi_test_{os.getpid()}",
+        mongo_database=f"apchi_test_{uuid.uuid4().hex}",
     )
 
 
