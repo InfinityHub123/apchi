@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trino-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: trino, component: worker}
+  template:
+    metadata:
+      labels: {app: trino, component: worker}
+    spec:
+      containers:
+        - name: trino
+          image: trinodb/trino:483
+          ports: [{containerPort: 8080, name: http}]
+          readinessProbe:
+            exec: {command: ["/usr/lib/trino/bin/health-check"]}
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 30
+          volumeMounts:
+            - {name: config, mountPath: /etc/trino/config.properties, subPath: worker-config.properties}
+            - {name: config, mountPath: /etc/trino/node.properties, subPath: node.properties}
+            - {name: config, mountPath: /etc/trino/jvm.config, subPath: jvm.config}
+      volumes:
+        - {name: config, configMap: {name: trino-config}}

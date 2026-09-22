@@ -54,8 +54,9 @@ Reach for these rather than the ones most tutorials suggest:
 - **SSE** — `from fastapi.sse import EventSourceResponse, ServerSentEvent`, built into
   FastAPI. `sse-starlette` is a redundant dependency.
 - **Kubernetes** — the official `kubernetes` client.
-- **Trino** — the official `trino` package; `httpx` for `/v1/info`, `/v1/node`, `/v1/query`,
-  which are not part of Trino's documented API.
+- **Trino** — the official `trino` package; `httpx` for `/v1/info`, `/v1/status` and
+  `/v1/query`, which are not part of Trino's documented API. Cluster membership comes from the
+  `system.runtime.nodes` system table, not `/v1/node` — that endpoint 404s on Trino 483.
 - **Trino in tests** — `testcontainers.community.trino`.
 
 ## Types
