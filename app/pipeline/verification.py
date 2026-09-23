@@ -9,12 +9,10 @@ nothing about whether it is running what was asked for.
 """
 
 import logging
-from typing import Any
 
-from app.adapters.kubernetes import KubernetesAdapter
-from app.adapters.trino import Trino
 from app.sections import SectionName
-from app.sections.catalogs.section import SECTION
+from app.sections.base import Cluster, Resources
+from app.sections.registry import REGISTERED
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +22,13 @@ class VerificationFailed(Exception):
 
 
 async def verify(
-    trino: Trino,
-    kubernetes: KubernetesAdapter,
-    desired: dict[SectionName, dict[str, Any]],
+    cluster: Cluster,
+    desired: dict[SectionName, Resources],
     worker_deployment: str,
     verification_catalog: str,
 ) -> None:
+    trino = cluster.trino
+
     # 1. The coordinator is responding and past its own startup.
     starting = await trino.is_starting()
     if starting is None:
@@ -41,24 +40,21 @@ async def verify(
     #    a coordinator with zero workers passes it. The expectation comes from
     #    Kubernetes so it adjusts when an Admin scales the Cluster, rather than
     #    drifting against a number configured in Apchi.
-    expected = await kubernetes.ready_replicas(worker_deployment)
+    expected = await cluster.kubernetes.ready_replicas(worker_deployment)
     actual = await trino.active_worker_count()
     if actual < expected:
         raise VerificationFailed(
             f"Only {actual} of {expected} workers have registered with the coordinator."
         )
 
-    # 3. The Cluster is running the catalogs the Candidate asked for. This is what
-    #    catches divergence between the Secret and Trino's store while the Apply is
-    #    still in flight, rather than leaving it to surface at the next restart.
-    wanted = set(desired.get(SECTION, {}))
-    live = await trino.catalogs()
-    missing = sorted(wanted - live)
-    if missing:
-        raise VerificationFailed(
-            f"The coordinator is not serving {', '.join(missing)}: "
-            "the configuration was applied but is not live."
-        )
+    # 3. Every Section confirms the Cluster adopted it. For catalogs this is what
+    #    catches divergence between the Secret and Trino's store while the Apply is still
+    #    in flight, rather than leaving it to surface at the next restart. Each Section
+    #    knows what adoption means for itself; the pipeline only knows that a reason
+    #    returned here fails the Apply.
+    for section in REGISTERED:
+        for reason in await section.verify(cluster, desired.get(section.name, {})):
+            raise VerificationFailed(reason)
 
     # 4. The Cluster can actually serve work. "Healthy" should not mean an endpoint
     #    returned 200.
@@ -67,7 +63,4 @@ async def verify(
     except Exception as exc:
         raise VerificationFailed(f"The smoke query failed: {exc}") from exc
 
-    logger.info(
-        "verification passed",
-        extra={"workers": actual, "catalogs": len(wanted)},
-    )
+    logger.info("verification passed", extra={"workers": actual})

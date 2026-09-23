@@ -15,7 +15,8 @@ from typing import Any
 from pydantic import BaseModel, Field
 from pymongo.asynchronous.database import AsyncDatabase
 
-from app.sections import SECTIONS, SectionName
+from app.sections import SectionName
+from app.sections.registry import SECTIONS
 
 
 class Snapshot(BaseModel):

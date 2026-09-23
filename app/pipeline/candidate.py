@@ -16,7 +16,8 @@ from pydantic import BaseModel, Field
 from pymongo.asynchronous.database import AsyncDatabase
 
 from app.pipeline.snapshots import SnapshotStore
-from app.sections import SECTIONS, SectionName
+from app.sections import SectionName
+from app.sections.registry import SECTIONS
 
 # One Cluster per Apchi deployment, so the Candidate is a singleton document.
 CANDIDATE_ID = "candidate"

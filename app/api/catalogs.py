@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.api.deps import CandidateStoreDep, OperatorMutationAllowed, SnapshotStoreDep
 from app.pipeline.recovery import RevertEffect, section_revert
+from app.sections.catalogs import SECTION as CATALOGS
 from app.sections.catalogs import section
 from app.sections.catalogs.model import Catalog, CatalogUpdate, CatalogWrite
 
@@ -33,12 +34,12 @@ async def revert(
     The response says which catalogs an Apply would drop, and that reverting one Section
     while the others stay put produces a configuration that has never run.
     """
-    return await section_revert(store, snapshots, section.SECTION, request.snapshot)
+    return await section_revert(store, snapshots, CATALOGS, request.snapshot)
 
 
 @router.get("", response_model=list[Catalog], summary="List staged Catalogs")
 async def list_catalogs(store: CandidateStoreDep) -> list[Catalog]:
-    return section.list_catalogs(await store.load())
+    return section.list_catalogs((await store.load()).resources(CATALOGS))
 
 
 @router.post(
@@ -50,14 +51,14 @@ async def list_catalogs(store: CandidateStoreDep) -> list[Catalog]:
 )
 async def create_catalog(write: CatalogWrite, store: CandidateStoreDep) -> Catalog:
     candidate = await store.load()
-    created = section.create_catalog(candidate, write)
+    created = section.create_catalog(candidate.resources(CATALOGS), write)
     await store.save(candidate)
     return created
 
 
 @router.get("/{name}", response_model=Catalog, summary="Fetch a staged Catalog")
 async def get_catalog(name: str, store: CandidateStoreDep) -> Catalog:
-    return section.get_catalog(await store.load(), name)
+    return section.get_catalog((await store.load()).resources(CATALOGS), name)
 
 
 @router.patch(
@@ -68,7 +69,7 @@ async def get_catalog(name: str, store: CandidateStoreDep) -> Catalog:
 )
 async def update_catalog(name: str, update: CatalogUpdate, store: CandidateStoreDep) -> Catalog:
     candidate = await store.load()
-    updated = section.update_catalog(candidate, name, update)
+    updated = section.update_catalog(candidate.resources(CATALOGS), name, update)
     await store.save(candidate)
     return updated
 
@@ -81,5 +82,5 @@ async def update_catalog(name: str, update: CatalogUpdate, store: CandidateStore
 )
 async def delete_catalog(name: str, store: CandidateStoreDep) -> None:
     candidate = await store.load()
-    section.delete_catalog(candidate, name)
+    section.delete_catalog(candidate.resources(CATALOGS), name)
     await store.save(candidate)

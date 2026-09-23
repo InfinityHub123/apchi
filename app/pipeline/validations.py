@@ -23,7 +23,8 @@ from pymongo.asynchronous.database import AsyncDatabase
 
 from app.logging import apply_id_var
 from app.pipeline.applies import EngineFactory
-from app.pipeline.validation import ValidationFailed, ValidationFailure
+from app.pipeline.validation import ValidationFailed
+from app.sections.base import ValidationFailure
 
 logger = logging.getLogger(__name__)
 

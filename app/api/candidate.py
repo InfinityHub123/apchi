@@ -7,7 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import CandidateStoreDep, OperatorMutationAllowed, SnapshotStoreDep
 from app.pipeline.recovery import RevertEffect, full_rollback
-from app.sections import SECTIONS, SectionName
+from app.sections import SectionName
+from app.sections.registry import SECTIONS
 
 router = APIRouter(tags=["candidate"])
 
