@@ -600,13 +600,27 @@ For catalogs, a revert issues real `CREATE` and `DROP` statements against a runn
 The warning must be specific: "3 catalogs will be dropped" is materially different from
 "resource groups will be rewritten".
 
+Both actions therefore return the **effect** rather than a bare acknowledgement: which catalogs
+an Apply would drop, create and replace, which Snapshot the other Sections stay at, and a
+sentence saying what it does. The drop list names the catalogs, it does not count them — an
+Operator about to lose one should see which. The plan behind it is the same one Apply computes,
+against the Candidate's base Snapshot, so it is the statements an Operator would actually cause
+rather than an estimate. Whether the other Sections stay put is stated by the action, never
+inferred from how many Sections were replaced: while catalogs is the only Section, a revert of
+it covers all of them and is still not a Full Rollback.
+
 ## Full Rollback — disaster only
 
 Replaces the entire Candidate with an earlier Snapshot. Never implicit; always an explicit
 Operator choice.
 
-Rollback does not rewrite history. The selected Snapshot is loaded as the desired target,
-validated, applied, verified, and committed as a **new** Snapshot:
+```
+POST /api/v1/candidate/rollback  {"snapshot": 10}
+```
+
+Like a Section Revert it only **stages**: the Candidate is replaced wholesale, and an ordinary
+`POST /applies` follows. Rollback does not rewrite history. The selected Snapshot is loaded as
+the desired target, validated, applied, verified, and committed as a **new** Snapshot:
 
 ```
 Snapshot 13 (current) → restore Snapshot 10 → Snapshot 14

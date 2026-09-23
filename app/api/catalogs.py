@@ -2,12 +2,38 @@
 else -- not Trino, not Kubernetes. Apply is what makes a change real."""
 
 from fastapi import APIRouter, status
+from pydantic import BaseModel, ConfigDict
 
-from app.api.deps import CandidateStoreDep, OperatorMutationAllowed
+from app.api.deps import CandidateStoreDep, OperatorMutationAllowed, SnapshotStoreDep
+from app.pipeline.recovery import RevertEffect, section_revert
 from app.sections.catalogs import section
 from app.sections.catalogs.model import Catalog, CatalogUpdate, CatalogWrite
 
 router = APIRouter(prefix="/catalogs", tags=["catalogs"])
+
+
+class RevertRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot: int
+
+
+@router.post(
+    "/revert",
+    response_model=RevertEffect,
+    summary="Stage this Section's content from an earlier Snapshot",
+    dependencies=[OperatorMutationAllowed],
+)
+async def revert(
+    request: RevertRequest, store: CandidateStoreDep, snapshots: SnapshotStoreDep
+) -> RevertEffect:
+    """Stages into the Candidate; it does not apply. An ordinary POST /applies follows,
+    like any other edit.
+
+    The response says which catalogs an Apply would drop, and that reverting one Section
+    while the others stay put produces a configuration that has never run.
+    """
+    return await section_revert(store, snapshots, section.SECTION, request.snapshot)
 
 
 @router.get("", response_model=list[Catalog], summary="List staged Catalogs")
