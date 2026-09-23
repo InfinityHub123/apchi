@@ -48,6 +48,12 @@
             "title": "Id",
             "type": "string"
           },
+          "interrupted": {
+            "default": false,
+            "description": "True when an Apchi restart ended this Apply rather than a failure in it. The Cluster was still put back; what differs is why.",
+            "title": "Interrupted",
+            "type": "boolean"
+          },
           "operator_message": {
             "anyOf": [
               {
