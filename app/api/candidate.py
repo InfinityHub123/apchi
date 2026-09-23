@@ -3,9 +3,10 @@
 from typing import Any, Literal
 
 from fastapi import APIRouter, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import CandidateStoreDep, OperatorMutationAllowed, SnapshotStoreDep
+from app.pipeline.recovery import RevertEffect, full_rollback
 from app.sections import SECTIONS, SectionName
 
 router = APIRouter(tags=["candidate"])
@@ -86,3 +87,26 @@ async def reset(store: CandidateStoreDep) -> None:
     """
     current = await store.load()
     await store.reset(base_snapshot=current.base_snapshot)
+
+
+class RollbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot: int
+
+
+@router.post(
+    "/candidate/rollback",
+    response_model=RevertEffect,
+    summary="Stage an earlier Snapshot in its entirety",
+    dependencies=[OperatorMutationAllowed],
+)
+async def rollback(
+    request: RollbackRequest, store: CandidateStoreDep, snapshots: SnapshotStoreDep
+) -> RevertEffect:
+    """Full Rollback: for a serious mistake, and never implicit.
+
+    Like a Section Revert this only stages. The Snapshot being restored from is not
+    modified -- applying this produces a new one, so history is never rewritten.
+    """
+    return await full_rollback(store, snapshots, request.snapshot)

@@ -332,6 +332,91 @@
         "title": "ResourceChange",
         "type": "object"
       },
+      "RevertEffect": {
+        "description": "What was staged, and what an Apply would then do to the Cluster.\n\nThe catalog lists are the point of this model. A revert is not a paper change:\napplying it issues real DROP CATALOG statements, and \"3 catalogs will be dropped\"\nis a materially different warning from \"the configuration will be rewritten\".",
+        "properties": {
+          "catalogs_created": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Catalogs Created",
+            "type": "array"
+          },
+          "catalogs_dropped": {
+            "description": "Catalogs an Apply will DROP. Destructive.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Catalogs Dropped",
+            "type": "array"
+          },
+          "catalogs_replaced": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Catalogs Replaced",
+            "type": "array"
+          },
+          "from_snapshot": {
+            "title": "From Snapshot",
+            "type": "integer"
+          },
+          "other_sections_stay_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Snapshot every other Section remains at. Null for a Full Rollback.",
+            "title": "Other Sections Stay At"
+          },
+          "sections": {
+            "description": "The Sections replaced in the Candidate.",
+            "items": {
+              "enum": [
+                "catalogs",
+                "client_certificates",
+                "certificate_mapping",
+                "permissions",
+                "resource_groups",
+                "event_listeners"
+              ],
+              "type": "string"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "summary": {
+            "description": "What this does, in words, for an Operator to read.",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_snapshot",
+          "sections",
+          "summary"
+        ],
+        "title": "RevertEffect",
+        "type": "object"
+      },
+      "RevertRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "snapshot": {
+            "title": "Snapshot",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "snapshot"
+        ],
+        "title": "RevertRequest",
+        "type": "object"
+      },
       "Review": {
         "description": "The diff between the Configuration Candidate and the latest Snapshot.\n\nEvery Section is reported, not only the caller's changes: the Candidate is\nshared, and an Apply promotes everything in it.",
         "properties": {
@@ -374,6 +459,20 @@
         ],
         "title": "Rollback",
         "type": "string"
+      },
+      "RollbackRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "snapshot": {
+            "title": "Snapshot",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "snapshot"
+        ],
+        "title": "RollbackRequest",
+        "type": "object"
       },
       "SectionDiff": {
         "properties": {
@@ -857,6 +956,48 @@
         ]
       }
     },
+    "/api/v1/candidate/rollback": {
+      "post": {
+        "description": "Full Rollback: for a serious mistake, and never implicit.\n\nLike a Section Revert this only stages. The Snapshot being restored from is not\nmodified -- applying this produces a new one, so history is never rewritten.",
+        "operationId": "rollback_api_v1_candidate_rollback_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RollbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevertEffect"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stage an earlier Snapshot in its entirety",
+        "tags": [
+          "candidate"
+        ]
+      }
+    },
     "/api/v1/catalogs": {
       "get": {
         "operationId": "list_catalogs_api_v1_catalogs_get",
@@ -916,6 +1057,48 @@
           }
         },
         "summary": "Stage a new Catalog",
+        "tags": [
+          "catalogs"
+        ]
+      }
+    },
+    "/api/v1/catalogs/revert": {
+      "post": {
+        "description": "Stages into the Candidate; it does not apply. An ordinary POST /applies follows,\nlike any other edit.\n\nThe response says which catalogs an Apply would drop, and that reverting one Section\nwhile the others stay put produces a configuration that has never run.",
+        "operationId": "revert_api_v1_catalogs_revert_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevertEffect"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stage this Section's content from an earlier Snapshot",
         "tags": [
           "catalogs"
         ]
