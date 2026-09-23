@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     mongo_uri: str = "mongodb://localhost:27017"
     mongo_database: str = "apchi"
 
+    #: The namespace Apchi reads and writes: the Cluster's own.
+    kubernetes_namespace: str = "default"
+
     # The one Trino Cluster this Apchi manages.
     trino_host: str = "trino"
     trino_port: int = 8080
@@ -36,6 +39,14 @@ class Settings(BaseSettings):
     worker_deployment_name: str = "trino-worker"
     #: The catalog the Verification smoke query runs against.
     verification_catalog: str = "system"
+
+    #: Validation reads the image from this Deployment's container, so the ephemeral
+    #: coordinator is always the version the Cluster runs.
+    coordinator_deployment_name: str = "trino-coordinator"
+    trino_container_name: str = "trino"
+    #: The hard timeout on Validation. A coordinator that never starts serving fails
+    #: Validation; it must never hang the pipeline.
+    validation_timeout_seconds: float = 300.0
 
     # None means "derive from environment"; an explicit value always wins, so the
     # level can be raised during a production incident without a rebuild.
