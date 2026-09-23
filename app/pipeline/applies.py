@@ -76,6 +76,13 @@ class ApplyRecord(BaseModel):
     stage: Stage
     history: list[StageEvent] = Field(default_factory=list)
     failure_reason: str | None = None
+    interrupted: bool = Field(
+        default=False,
+        description=(
+            "True when an Apchi restart ended this Apply rather than a failure in it. "
+            "The Cluster was still put back; what differs is why."
+        ),
+    )
     rollback: Rollback | None = Field(
         default=None,
         description=(
@@ -149,6 +156,9 @@ class ApplyStore:
     async def fail(self, apply_id: str, reason: str) -> None:
         await self._collection.update_one({"_id": apply_id}, {"$set": {"failure_reason": reason}})
         await self.advance(apply_id, Stage.FAILED, detail=reason)
+
+    async def mark_interrupted(self, apply_id: str) -> None:
+        await self._collection.update_one({"_id": apply_id}, {"$set": {"interrupted": True}})
 
     async def record_rollback(self, apply_id: str, outcome: Rollback) -> None:
         await self._collection.update_one({"_id": apply_id}, {"$set": {"rollback": outcome.value}})
@@ -276,19 +286,58 @@ class ApplyRunner:
             task.cancel()
 
 
-async def recover_interrupted(store: ApplyStore) -> list[str]:
+INTERRUPTED_REASON = "Apchi restarted while this Apply was in flight; it was not completed."
+
+
+async def recover_interrupted(store: ApplyStore, engine_factory: EngineFactory) -> list[str]:
     """Resolve Applies left in flight by a restart.
 
     The Candidate is frozen for the whole of an Apply, so an Apchi crash mid-flight
     would freeze it permanently. Whatever else recovery decides, the Candidate must
-    end up unfrozen -- that is the part that must never be left to chance.
+    end up unfrozen -- that is the part that must never be left to chance, which is why
+    the record is resolved before the Cluster is touched.
+
+    An interrupted Apply may also have left the Cluster diverged: Apply writes the
+    catalog Secret before issuing DDL, so a crash in that window leaves the durable copy
+    naming a catalog Trino never got. Recovery therefore rolls the Cluster back exactly
+    as a failed Apply does -- one attempt, no retry, no Snapshot -- and escalates to an
+    incident if that attempt fails. It can do this because the rollback plan is a diff of
+    two durable records and needs nothing from the process that died.
     """
     recovered: list[str] = []
     while (record := await store.in_flight()) is not None:
-        await store.fail(
-            record.id,
-            "Apchi restarted while this Apply was in flight; it was not completed.",
+        reached = record.stage
+        await store.mark_interrupted(record.id)
+        await store.fail(record.id, INTERRUPTED_REASON)
+        logger.warning(
+            "recovered interrupted apply",
+            extra={"recovered_apply": record.id, "reached": reached.value},
         )
-        logger.warning("recovered interrupted apply", extra={"recovered_apply": record.id})
         recovered.append(record.id)
+
+        if reached in ROLLED_BACK_FROM:
+            await _restore_after_interruption(store, engine_factory, record.id)
     return recovered
+
+
+async def _restore_after_interruption(
+    store: ApplyStore, engine_factory: EngineFactory, apply_id: str
+) -> None:
+    """The same bounded attempt Auto Rollback makes, from a process that did not run
+    the Apply."""
+    token = apply_id_var.set(apply_id)
+    try:
+        engine = engine_factory(apply_id)
+        try:
+            await engine.roll_back()
+        except Exception as exc:
+            logger.exception("rollback of an interrupted apply failed")
+            await store.record_rollback(apply_id, Rollback.FAILED)
+            reason = f"{INTERRUPTED_REASON} Auto Rollback then failed: {exc}"
+            await engine.declare_incident(reason)
+            await store.declare_incident(apply_id, reason, INCIDENT_MESSAGE)
+            return
+        await store.record_rollback(apply_id, Rollback.SUCCEEDED)
+        logger.info("cluster returned to its latest snapshot after a restart")
+    finally:
+        apply_id_var.reset(token)

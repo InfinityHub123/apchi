@@ -523,6 +523,17 @@ The Candidate is **not** rolled back. Auto Rollback restores the Cluster; discar
 Operator's edit would throw away their work along with the failure, and Reset (§4) already
 exists for the Operator who wants that.
 
+It also runs at **startup**, for an Apply that a restart ended mid-flight. Such an Apply leaves
+the Candidate frozen and may leave the Cluster diverged — Apply writes the catalog Secret before
+issuing DDL, so a process that dies in that window leaves the durable copy naming a catalog Trino
+never got, and it arrives at the next pod restart with nothing linking it to the Apply that caused
+it. Recovery therefore unfreezes the Candidate **first** — that is the part that must never be
+left to chance, so it is done before the Cluster is touched — and then makes the same single
+bounded attempt, escalating to an incident if it fails. It can do this from a process that did not
+run the Apply precisely because the rollback plan is a diff of two durable records. The Apply
+record is marked `interrupted`, so an Operator can tell a restart that landed mid-Apply from a
+configuration that failed.
+
 Auto Rollback runs after an Apply or Verification failure and after no others. A **Validation**
 failure touched nothing, so there is nothing to undo. A **Commit** failure is the opposite case:
 the configuration was applied *and verified*, and what failed was MongoDB. Rolling back there

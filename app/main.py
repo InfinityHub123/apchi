@@ -64,7 +64,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.validation_runner = ValidationRunner(app.state.validation_store, build_engine)
     logger.info("apchi starting", extra={"environment": settings.environment})
 
-    # An Apply left in flight by a restart would freeze the Candidate forever.
+    # An Apply left in flight by a restart would freeze the Candidate forever, and may
+    # also have left the Cluster diverged -- so recovery unfreezes it and then rolls the
+    # Cluster back, one attempt, exactly as a failed Apply does.
     #
     # If MongoDB is unreachable this cannot run, and the choice is between refusing
     # to start and starting degraded. Starting degraded wins: the health endpoint
@@ -73,7 +75,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # logs and is harder to diagnose than one reporting unhealthy. Recovery is
     # retried at the next start.
     try:
-        recovered = await recover_interrupted(app.state.apply_store)
+        recovered = await recover_interrupted(app.state.apply_store, build_engine)
     except Exception:
         logger.exception(
             "startup recovery did not run; a Candidate frozen by an interrupted "
