@@ -3,7 +3,7 @@ else -- not Trino, not Kubernetes. Apply is what makes a change real."""
 
 from fastapi import APIRouter, status
 
-from app.api.deps import CandidateStoreDep
+from app.api.deps import CandidateStoreDep, CandidateUnfrozen
 from app.sections.catalogs import section
 from app.sections.catalogs.model import Catalog, CatalogUpdate, CatalogWrite
 
@@ -20,6 +20,7 @@ async def list_catalogs(store: CandidateStoreDep) -> list[Catalog]:
     response_model=Catalog,
     status_code=status.HTTP_201_CREATED,
     summary="Stage a new Catalog",
+    dependencies=[CandidateUnfrozen],
 )
 async def create_catalog(write: CatalogWrite, store: CandidateStoreDep) -> Catalog:
     candidate = await store.load()
@@ -33,7 +34,12 @@ async def get_catalog(name: str, store: CandidateStoreDep) -> Catalog:
     return section.get_catalog(await store.load(), name)
 
 
-@router.patch("/{name}", response_model=Catalog, summary="Edit a staged Catalog")
+@router.patch(
+    "/{name}",
+    response_model=Catalog,
+    summary="Edit a staged Catalog",
+    dependencies=[CandidateUnfrozen],
+)
 async def update_catalog(name: str, update: CatalogUpdate, store: CandidateStoreDep) -> Catalog:
     candidate = await store.load()
     updated = section.update_catalog(candidate, name, update)
@@ -41,7 +47,12 @@ async def update_catalog(name: str, update: CatalogUpdate, store: CandidateStore
     return updated
 
 
-@router.delete("/{name}", status_code=status.HTTP_204_NO_CONTENT, summary="Remove a staged Catalog")
+@router.delete(
+    "/{name}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove a staged Catalog",
+    dependencies=[CandidateUnfrozen],
+)
 async def delete_catalog(name: str, store: CandidateStoreDep) -> None:
     candidate = await store.load()
     section.delete_catalog(candidate, name)

@@ -1,6 +1,82 @@
 {
   "components": {
     "schemas": {
+      "ApplyRecord": {
+        "properties": {
+          "base_snapshot": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Snapshot"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/StageEvent"
+            },
+            "title": "History",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "snapshot": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Snapshot this Apply committed, when it succeeded.",
+            "title": "Snapshot"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/Stage"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "stage",
+          "started_at"
+        ],
+        "title": "ApplyRecord",
+        "type": "object"
+      },
       "Catalog": {
         "description": "A Catalog as it is stored and returned.",
         "properties": {
@@ -235,6 +311,47 @@
         "title": "SectionDiff",
         "type": "object"
       },
+      "Stage": {
+        "enum": [
+          "validating",
+          "applying",
+          "verifying",
+          "committing",
+          "succeeded",
+          "failed"
+        ],
+        "title": "Stage",
+        "type": "string"
+      },
+      "StageEvent": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/Stage"
+          }
+        },
+        "required": [
+          "stage",
+          "at"
+        ],
+        "title": "StageEvent",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -284,6 +401,149 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/applies": {
+      "get": {
+        "operationId": "list_applies_api_v1_applies_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ApplyRecord"
+                  },
+                  "title": "Response List Applies Api V1 Applies Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Past and current Applies",
+        "tags": [
+          "applies"
+        ]
+      },
+      "post": {
+        "operationId": "start_apply_api_v1_applies_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplyRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Promote the Configuration Candidate",
+        "tags": [
+          "applies"
+        ]
+      }
+    },
+    "/api/v1/applies/{apply_id}": {
+      "get": {
+        "operationId": "get_apply_api_v1_applies__apply_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "apply_id",
+            "required": true,
+            "schema": {
+              "title": "Apply Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplyRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "One Apply's progress",
+        "tags": [
+          "applies"
+        ]
+      }
+    },
+    "/api/v1/applies/{apply_id}/events": {
+      "get": {
+        "description": "Streams every stage transition, replaying the ones already past.\n\nA client that reconnects sends Last-Event-ID; everything after it is replayed,\nso a dropped connection does not leave a blank timeline.",
+        "operationId": "stream_apply_api_v1_applies__apply_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "apply_id",
+            "required": true,
+            "schema": {
+              "title": "Apply Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream stage transitions",
+        "tags": [
+          "applies"
+        ]
+      }
+    },
     "/api/v1/candidate/reset": {
       "post": {
         "description": "Re-derives the Candidate from the latest Snapshot.\n\nBecause nothing reaches the Cluster before Apply, this cannot affect production.",
