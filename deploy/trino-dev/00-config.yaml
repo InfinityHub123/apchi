@@ -36,7 +36,7 @@ data:
   access-control.properties: |
     access-control.name=file
     security.config-file=/etc/trino/access-control/rules.json
-    security.refresh-period=30s
+    security.refresh-period=1s
 ---
 apiVersion: v1
 kind: Secret
