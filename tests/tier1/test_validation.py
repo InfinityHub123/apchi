@@ -16,6 +16,7 @@ from testcontainers.core.container import DockerContainer
 from app.adapters.trino import Trino
 from app.config import Settings
 from app.main import create_app
+from app.pipeline.applies import TERMINAL
 from app.pipeline.validation import ROLE_LABEL, VALIDATION_ROLE
 from tests.conftest import FakeKubernetes
 
@@ -31,7 +32,7 @@ async def _settled(client: AsyncClient, apply_id: str, timeout: float = 60.0) ->
     record: dict = {}
     while asyncio.get_running_loop().time() < deadline:
         record = (await client.get(f"/api/v1/applies/{apply_id}")).json()
-        if record["stage"] in {"succeeded", "failed"}:
+        if record["stage"] in TERMINAL:
             return record
         await asyncio.sleep(0.05)
     raise AssertionError(f"Apply never settled; last={record.get('stage')}")

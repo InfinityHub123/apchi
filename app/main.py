@@ -10,6 +10,7 @@ from app.adapters.kubernetes import RealKubernetes
 from app.adapters.mongo import Mongo
 from app.adapters.trino import Trino
 from app.api import errors
+from app.api.admin import router as admin_router
 from app.api.applies import router as applies_router
 from app.api.candidate import router as candidate_router
 from app.api.catalogs import router as catalogs_router
@@ -21,6 +22,7 @@ from app.logging import configure_logging
 from app.pipeline.applies import ApplyEngine, ApplyRunner, ApplyStore, recover_interrupted
 from app.pipeline.candidate import CandidateStore
 from app.pipeline.engine import Engine
+from app.pipeline.maintenance import MaintenanceStore
 from app.pipeline.snapshots import SnapshotStore
 from app.pipeline.validation import VALIDATION_SELECTOR
 from app.pipeline.validations import ValidationRunner, ValidationStore
@@ -36,6 +38,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.candidate_store = CandidateStore(app.state.mongo.database, app.state.snapshot_store)
     app.state.apply_store = ApplyStore(app.state.mongo.database)
     app.state.validation_store = ValidationStore(app.state.mongo.database)
+    app.state.maintenance_store = MaintenanceStore(app.state.mongo.database)
 
     # Tests substitute the Kubernetes adapter before the lifespan runs; nothing else
     # is ever substituted.
@@ -54,6 +57,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             snapshots=app.state.snapshot_store,
             trino=app.state.trino,
             kubernetes=app.state.kubernetes,
+            maintenance=app.state.maintenance_store,
         )
 
     app.state.apply_runner = ApplyRunner(app.state.apply_store, build_engine)
@@ -114,6 +118,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(applies_router, prefix="/api/v1")
     app.include_router(snapshots_router, prefix="/api/v1")
     app.include_router(validations_router, prefix="/api/v1")
+    app.include_router(admin_router, prefix="/api/v1")
     return app
 
 

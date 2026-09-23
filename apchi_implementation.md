@@ -478,15 +478,44 @@ Full Rollback — it is automatic, not an Operator action, and it produces no Sn
 - It creates **no** Snapshot.
 - It **never retries.**
 
+Auto Rollback also restores the **catalog Secret**, not only the live catalogs. Restoring the
+live ones alone would leave the durable copy holding a catalog the Snapshot never had, to be
+seeded back in at the next pod restart — the divergence below, arriving weeks later with
+nothing linking it to this Apply.
+
+The compensating plan is computed against what is **live**, not against what the failed Apply
+intended: a DDL apply that fails partway got some distance through its statements and Apchi
+cannot assume how far. Catalogs that neither the Snapshot nor the failed Apply knows about are
+left alone — dropping them would be Apchi destroying configuration it never managed.
+
+The Candidate is **not** rolled back. Auto Rollback restores the Cluster; discarding the
+Operator's edit would throw away their work along with the failure, and Reset (§4) already
+exists for the Operator who wants that.
+
+Auto Rollback runs after an Apply or Verification failure and after no others. A **Validation**
+failure touched nothing, so there is nothing to undo. A **Commit** failure is the opposite case:
+the configuration was applied *and verified*, and what failed was MongoDB. Rolling back there
+would tear down a healthy Cluster to recover from a database error.
+
 If that single attempt fails, Apchi stops touching the Cluster:
 
 - Prominent UI message: "The Trino cluster is currently unhealthy after applying
-  configuration. Please contact our team."
-- An internal alert (e.g. to a Mattermost channel).
+  configuration. Please contact our team." The Apply record carries it, so the UI does not
+  have to construct it, alongside the diagnostic failure reason an Operator needs to work out
+  what happened without log access.
+- An internal alert (e.g. to a Mattermost channel). Maintenance Mode engages **first**: it is
+  the part that protects the Cluster, and it must not wait on a notification to a system that
+  may itself be down. A failure to alert is logged and never raised.
 - **Maintenance Mode engages automatically**, so nobody edits a Cluster in an unknown state.
 
 Two consecutive verification failures mean the problem is not the configuration. That is an
 operational incident, not a validation error.
+
+An Apply therefore has two failed terminal states, and they mean different things. `failed`
+means the Apply did not go through and the Cluster is back on its latest Snapshot. `incident`
+means Auto Rollback could not put it back, and what keeps Operators off the Cluster from then
+on is Maintenance Mode rather than the Candidate freeze — which would also block the Admin
+action that clears it.
 
 ## Apply is not atomic
 
@@ -849,8 +878,14 @@ While frozen:
   temporarily disabled by an Admin
 - Admin operations are unaffected
 
-Not yet decided: the endpoint path, persistence model, and behaviour for an Apply already in
-flight when an Admin engages the freeze.
+The state is persisted in MongoDB rather than held in memory, because an incident must not be
+cleared by Apchi restarting. `GET` and `PUT /api/v1/admin/maintenance-mode` read and set it;
+releasing is how an incident is closed, and so must work while the mode is engaged. Every
+Operator mutation passes one dependency that checks Maintenance Mode and then the Candidate
+freeze, so a new mutating route cannot pick up half the gate. Validation is deliberately still
+allowed: it changes nothing on the Cluster, and an Operator working out what to fix needs it.
+
+Not yet decided: behaviour for an Apply already in flight when an Admin engages the freeze.
 
 ## Ownership boundary
 
@@ -946,6 +981,12 @@ The contract must be stable, because Operators automate against it.
 /api/v1/applies
 /api/v1/validations
 /api/v1/snapshots
+```
+
+Admin-only, and outside the stability promise above:
+
+```
+/api/v1/admin/maintenance-mode
 ```
 
 Admin capabilities (§14) sit on a separate Admin-only surface — arbitrary Trino
@@ -1344,8 +1385,8 @@ Additional constraints:
 - **Admin arbitrary configuration** — which files and properties may be targeted, and how
   secrets among those values are handled (§14). Storage, precedence, validation, audit and
   Snapshot scope are settled.
-- **Maintenance Mode mechanics** — endpoint, persistence, and behaviour when an Apply is
-  already in flight.
+- **Maintenance Mode mechanics** — behaviour when an Apply is already in flight. The endpoint
+  and the persistence model are settled (§14).
 - **Certificate mapping migration** — the procedure for moving an existing Cluster onto a
   single Certificate Mapping Pattern is undefined: sequencing, authorization edge cases,
   naming and domain constraints, grace-period duration, rollback, and whether every existing

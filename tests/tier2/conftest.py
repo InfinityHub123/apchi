@@ -11,6 +11,7 @@ import socket
 import subprocess
 import time
 from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
@@ -240,6 +241,28 @@ def forward(cluster: None) -> Iterator[PortForward]:
 @pytest.fixture
 def forwarded_kubernetes(real_kubernetes: RealKubernetes) -> ForwardedKubernetes:
     return ForwardedKubernetes(real_kubernetes)
+
+
+@asynccontextmanager
+async def running_apchi(
+    settings: Settings,
+    kubernetes: ForwardedKubernetes,
+    forward: PortForward,
+) -> AsyncIterator[AsyncClient]:
+    """Apchi over a real cluster, with settings of the test's choosing.
+
+    Used where a test needs a second Apchi differing only in configuration -- a
+    different Trino identity, a Verification that cannot pass -- against the same
+    cluster and the same MongoDB.
+    """
+    app = create_app(settings)
+    app.state.kubernetes = kubernetes
+    app.state.trino = Trino(host="127.0.0.1", port=forward.port, user=settings.trino_user)
+    async with (
+        AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as client,
+        app.router.lifespan_context(app),
+    ):
+        yield client
 
 
 @pytest.fixture

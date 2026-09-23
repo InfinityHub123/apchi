@@ -16,7 +16,9 @@ from typing import Any
 from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.config import Settings
+from app.pipeline.auto_rollback import declare_incident, restore
 from app.pipeline.candidate import CandidateStore
+from app.pipeline.maintenance import MaintenanceStore
 from app.pipeline.snapshots import SnapshotStore
 from app.pipeline.validation import validate_candidate
 from app.pipeline.verification import verify
@@ -39,6 +41,7 @@ class Engine:
         snapshots: SnapshotStore,
         trino: Trino,
         kubernetes: KubernetesAdapter,
+        maintenance: MaintenanceStore,
     ) -> None:
         self._apply_id = apply_id
         self._settings = settings
@@ -46,6 +49,7 @@ class Engine:
         self._snapshots = snapshots
         self._trino = trino
         self._kubernetes = kubernetes
+        self._maintenance = maintenance
         self._desired: dict[SectionName, dict[str, Any]] = {}
         self._plan = catalog_apply.CatalogPlan()
 
@@ -99,6 +103,21 @@ class Engine:
             self._settings.worker_deployment_name,
             self._settings.verification_catalog,
         )
+
+    async def roll_back(self) -> None:
+        """Put the Cluster back on the latest Snapshot.
+
+        The latest Snapshot is the one this Apply started from, and the pointer never
+        moved: no Snapshot is created here. An Apply that failed before any Snapshot
+        existed has nothing to go back to, and restoring an empty configuration is the
+        right answer -- it undoes exactly what this Apply did.
+        """
+        latest = await self._snapshots.latest()
+        sections = await self._snapshots.sections_of(None if latest is None else latest.number)
+        await restore(sections, self._plan, self._trino, self._kubernetes, self._settings)
+
+    async def declare_incident(self, reason: str) -> None:
+        await declare_incident(self._apply_id, reason, self._maintenance, self._settings)
 
     async def commit(self) -> int | None:
         snapshot = await self._snapshots.commit(self._desired, self._apply_id)

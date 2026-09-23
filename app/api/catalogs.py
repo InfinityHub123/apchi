@@ -3,7 +3,7 @@ else -- not Trino, not Kubernetes. Apply is what makes a change real."""
 
 from fastapi import APIRouter, status
 
-from app.api.deps import CandidateStoreDep, CandidateUnfrozen
+from app.api.deps import CandidateStoreDep, OperatorMutationAllowed
 from app.sections.catalogs import section
 from app.sections.catalogs.model import Catalog, CatalogUpdate, CatalogWrite
 
@@ -20,7 +20,7 @@ async def list_catalogs(store: CandidateStoreDep) -> list[Catalog]:
     response_model=Catalog,
     status_code=status.HTTP_201_CREATED,
     summary="Stage a new Catalog",
-    dependencies=[CandidateUnfrozen],
+    dependencies=[OperatorMutationAllowed],
 )
 async def create_catalog(write: CatalogWrite, store: CandidateStoreDep) -> Catalog:
     candidate = await store.load()
@@ -38,7 +38,7 @@ async def get_catalog(name: str, store: CandidateStoreDep) -> Catalog:
     "/{name}",
     response_model=Catalog,
     summary="Edit a staged Catalog",
-    dependencies=[CandidateUnfrozen],
+    dependencies=[OperatorMutationAllowed],
 )
 async def update_catalog(name: str, update: CatalogUpdate, store: CandidateStoreDep) -> Catalog:
     candidate = await store.load()
@@ -51,7 +51,7 @@ async def update_catalog(name: str, update: CatalogUpdate, store: CandidateStore
     "/{name}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Remove a staged Catalog",
-    dependencies=[CandidateUnfrozen],
+    dependencies=[OperatorMutationAllowed],
 )
 async def delete_catalog(name: str, store: CandidateStoreDep) -> None:
     candidate = await store.load()

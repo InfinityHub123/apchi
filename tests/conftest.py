@@ -95,6 +95,11 @@ class FakeKubernetes:
         self.pod_problem: str | None = None
         #: Set by a test to make the pod never reach serving, proving the timeout.
         self.pod_never_serves = False
+        #: Set by a test to force exactly one Verification failure, at the worker
+        #: check. One-shot on purpose: it is how a test gets an Apply to fail and the
+        #: Auto Rollback that follows it to succeed, which two verifications against a
+        #: permanently broken cluster could never show.
+        self.report_a_missing_worker_once = False
         self._validation = validation
         self._baselines: dict[str, set[str]] = {}
 
@@ -105,7 +110,13 @@ class FakeKubernetes:
         self.secrets[name] = dict(data)
 
     async def ready_replicas(self, deployment: str) -> int:
-        return self.replicas.get(deployment, 0)
+        ready = self.replicas.get(deployment, 0)
+        if self.report_a_missing_worker_once:
+            self.report_a_missing_worker_once = False
+            # Kubernetes says there is one more ready worker than Trino can see, which
+            # is what a worker dropping out mid-Apply looks like.
+            return ready + 1
+        return ready
 
     async def deployment_image(self, deployment: str, container: str) -> str:
         return self.image

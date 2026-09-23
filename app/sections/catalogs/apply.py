@@ -53,6 +53,28 @@ def plan(desired: dict[str, Any], current: dict[str, Any]) -> CatalogPlan:
     return result
 
 
+def rollback_plan(
+    snapshot_catalogs: dict[str, Any], forward: CatalogPlan, live: set[str]
+) -> CatalogPlan:
+    """What it takes to put the Cluster's catalogs back to a Snapshot.
+
+    Computed against what is *live* rather than against what the failed Apply
+    intended, because a DDL apply that fails partway got some distance through its
+    statements and Apchi cannot assume how far.
+
+    A catalog this Apply created and that exists is dropped; one the Snapshot holds
+    and that is missing is restored; one this Apply replaced is dropped and recreated
+    from the Snapshot, since Trino has no ALTER CATALOG. Catalogs neither the Snapshot
+    nor this Apply knows about are left alone -- they belong to nobody here, and
+    dropping them would be Apchi destroying configuration it never managed.
+    """
+    return CatalogPlan(
+        created=[name for name in sorted(snapshot_catalogs) if name not in live],
+        replaced=[name for name in forward.replaced if name in live],
+        dropped=[name for name in forward.created if name in live],
+    )
+
+
 async def execute(trino: Trino, desired: dict[str, Any], plan_: CatalogPlan) -> None:
     """Issues the plan against the running coordinator.
 
