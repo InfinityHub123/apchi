@@ -8,38 +8,8 @@ Verified against the Trino 483 connector documentation. Every schema drifts with
 Trino versions; the supported Trino range is what bounds the maintenance.
 """
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
-
-
-@dataclass(frozen=True)
-class Branch:
-    """A selector property whose value decides what else is required."""
-
-    selector: str
-    values: Mapping[str, frozenset[str]]
-    default: str | None = None
-    #: Values the selector itself accepts. Empty means "any value in `values`".
-    allowed: frozenset[str] = frozenset()
-
-
-@dataclass(frozen=True)
-class ConnectorSchema:
-    required: frozenset[str] = frozenset()
-    optional: frozenset[str] = frozenset()
-    branches: tuple[Branch, ...] = ()
-    #: Properties whose value is open-ended: present, but not otherwise constrained.
-    open_ended: frozenset[str] = frozenset()
-    prefixes: tuple[str, ...] = field(default=())
-
-    def known(self) -> frozenset[str]:
-        names = set(self.required) | set(self.optional) | set(self.open_ended)
-        for branch in self.branches:
-            names.add(branch.selector)
-            for required in branch.values.values():
-                names |= required
-        return frozenset(names)
-
+from app.sections.properties import Branch
+from app.sections.properties import PropertySchema as ConnectorSchema
 
 # --- shared families, modelled once ------------------------------------------
 

@@ -2,6 +2,8 @@
 
 from httpx import AsyncClient
 
+from app.sections.registry import SECTIONS
+
 PG = {
     "name": "finance",
     "connector": "postgresql",
@@ -13,7 +15,7 @@ async def test_review_of_an_untouched_candidate_reports_no_changes(client: Async
     review = (await client.get("/api/v1/review")).json()
 
     assert review["has_changes"] is False
-    assert [s["section"] for s in review["sections"]] == ["catalogs"]
+    assert [s["section"] for s in review["sections"]] == list(SECTIONS)
 
 
 async def test_review_reports_a_staged_catalog_as_added(client: AsyncClient) -> None:

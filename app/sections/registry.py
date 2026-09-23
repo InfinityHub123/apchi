@@ -8,14 +8,14 @@ beside it -- the two cannot drift.
 from app.sections import SectionName
 from app.sections.base import Section
 from app.sections.catalogs.section import CatalogsSection
+from app.sections.event_listeners.section import EventListenersSection
 
-REGISTERED: tuple[Section, ...] = (CatalogsSection(),)
+REGISTERED: tuple[Section, ...] = (CatalogsSection(), EventListenersSection())
 
 #: The names of the registered Sections, in registration order. Every other name in
 #: SectionName is vocabulary the model knows and nobody can edit yet.
 #:
-#: Nothing reads `requires_rollout` yet. The flag is one of the four things a Section
-#: provides and Catalogs declares it false; the minimal restart set is what will use it,
-#: and inventing the helper for it here before anything calls it would be a hook nobody
-#: calls.
+#: Nothing reads `requires_rollout` yet, though the two registered Sections now disagree
+#: about it: Catalogs are applied by DDL, Event Listeners only by restarting. The minimal
+#: restart set is what will use it.
 SECTIONS: tuple[SectionName, ...] = tuple(section.name for section in REGISTERED)

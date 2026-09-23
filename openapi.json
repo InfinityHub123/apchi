@@ -207,6 +207,99 @@
         "title": "EngagedBy",
         "type": "string"
       },
+      "EventListener": {
+        "description": "An Event Listener as it is stored and returned.",
+        "properties": {
+          "name": {
+            "pattern": "^[a-z][a-z0-9_]{0,62}$",
+            "title": "Name",
+            "type": "string"
+          },
+          "properties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Properties",
+            "type": "object"
+          },
+          "supported": {
+            "description": "False when the listener type has no curated schema. Its properties passed through unvalidated and are checked only by Trino at Apply.",
+            "title": "Supported",
+            "type": "boolean"
+          },
+          "type": {
+            "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "supported"
+        ],
+        "title": "EventListener",
+        "type": "object"
+      },
+      "EventListenerUpdate": {
+        "additionalProperties": false,
+        "description": "A partial update. The name is immutable; renaming is a remove and an add.",
+        "properties": {
+          "properties": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Properties"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          }
+        },
+        "title": "EventListenerUpdate",
+        "type": "object"
+      },
+      "EventListenerWrite": {
+        "additionalProperties": false,
+        "description": "What an Operator sends.",
+        "properties": {
+          "name": {
+            "pattern": "^[a-z][a-z0-9_]{0,62}$",
+            "title": "Name",
+            "type": "string"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "title": "Properties",
+            "type": "object"
+          },
+          "type": {
+            "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "EventListenerWrite",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1232,6 +1325,195 @@
         "summary": "Edit a staged Catalog",
         "tags": [
           "catalogs"
+        ]
+      }
+    },
+    "/api/v1/event-listeners": {
+      "get": {
+        "operationId": "list_event_listeners_api_v1_event_listeners_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EventListener"
+                  },
+                  "title": "Response List Event Listeners Api V1 Event Listeners Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List staged Event Listeners",
+        "tags": [
+          "event listeners"
+        ]
+      },
+      "post": {
+        "operationId": "create_event_listener_api_v1_event_listeners_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventListenerWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventListener"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stage a new Event Listener",
+        "tags": [
+          "event listeners"
+        ]
+      }
+    },
+    "/api/v1/event-listeners/{name}": {
+      "delete": {
+        "operationId": "delete_event_listener_api_v1_event_listeners__name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove a staged Event Listener",
+        "tags": [
+          "event listeners"
+        ]
+      },
+      "get": {
+        "operationId": "get_event_listener_api_v1_event_listeners__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventListener"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fetch a staged Event Listener",
+        "tags": [
+          "event listeners"
+        ]
+      },
+      "patch": {
+        "operationId": "update_event_listener_api_v1_event_listeners__name__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventListenerUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventListener"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Edit a staged Event Listener",
+        "tags": [
+          "event listeners"
         ]
       }
     },

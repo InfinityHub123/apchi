@@ -876,18 +876,35 @@ Operators configure event listeners by type. Like catalogs, the properties are d
 whichever plugin implements the listener, so the same curated-plus-pass-through rule applies
 (§13.1).
 
-**The curated set — Trino's built-in listeners:**
+The selector is `event-listener.name` in `etc/event-listener.properties`; every other property
+is prefixed by the listener type (`http-event-listener.*`, `kafka-event-listener.*`). Verified
+against the Trino 483 documentation.
 
-| Listener | `event-listener.name` |
-|---|---|
-| HTTP | `http` |
-| Kafka | `kafka` |
-| MySQL | `mysql` |
-| OpenLineage | `openlineage` |
+**Trino's built-in listeners, and which are curated:**
 
-Custom listener plugins pass through as key-value properties, validated only by the ephemeral
-pod at Apply. As with connectors, the supported Trino range (§8) is what bounds the
-maintenance on these schemas.
+| Listener | `event-listener.name` | Curated |
+|---|---|---|
+| HTTP | `http` | yes — requires the ingest URI |
+| Kafka | `kafka` | yes — requires broker endpoints, both event topics and a client id |
+| MySQL | `mysql` | not yet; passes through |
+| OpenLineage | `openlineage` | not yet; passes through |
+
+Custom listener plugins, and the two uncurated built-ins, pass through as key-value properties
+and are validated only by the ephemeral pod at Apply. As with connectors, the supported Trino
+range (§8) is what bounds the maintenance on these schemas.
+
+The HTTP listener documents `http-event-listener.*` as an escape hatch passing arbitrary
+configuration to its HTTP client. That is deliberately **not** modelled as a prefix: allowing
+any name under `http-event-listener.` would accept a typo of `connect-ingest-uri`, which is the
+exact thing curation exists to catch. An Operator needing a client-tuning property gets a schema
+update rather than a silent pass.
+
+**At most one Event Listener.** Trino reads a single `etc/event-listener.properties` by default;
+configuring more than one requires `event-listener.config-files` in `config.properties`, which is
+Admin-owned Trino configuration Apchi does not write (§14). The Candidate therefore holds one
+listener and refuses a second, saying why. The Section is still modelled as a set of resources, so
+lifting the limit later changes the limit and not the model. Whoever owns
+`event-listener.config-files` is the decision that lifts it.
 
 **Rollout-required.** `EventListenerManager.loadEventListeners()` is guarded by a
 `compareAndSet` that permits exactly one call per process lifetime. There is no reload path.
@@ -1468,8 +1485,11 @@ Additional constraints:
   single Certificate Mapping Pattern is undefined: sequencing, authorization edge cases,
   naming and domain constraints, grace-period duration, rollback, and whether every existing
   setup can migrate cleanly. Note each pattern change costs a coordinator restart (§13.3).
-- **Field-level models for Resource Groups and Event Listeners** — hierarchy, selectors and
-  guardrails for the former; supported types, schemas and plugin requirements for the latter.
+- **Field-level models for Resource Groups** — hierarchy, selectors and guardrails. Event
+  Listeners are settled for `http` and `kafka` (§13.6); `mysql` and `openlineage` pass through
+  until someone needs them curated.
+- **Who owns `event-listener.config-files`**, which is what limits the Candidate to a single
+  Event Listener (§13.6). It is `config.properties`, so today it is Admin territory.
 - **Event listener node scope** — whether workers genuinely need event listener configuration
   is unresolved in Trino's documentation.
 - **Apchi's own disaster recovery** — Mongo is the single copy of all Snapshots and audit
