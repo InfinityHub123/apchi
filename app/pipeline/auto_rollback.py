@@ -43,25 +43,34 @@ class RollbackFailed(Exception):
 
 async def restore(
     snapshot_sections: dict[SectionName, dict[str, Any]],
-    forward: catalog_apply.CatalogPlan,
     trino: Trino,
     kubernetes: KubernetesAdapter,
     settings: Settings,
 ) -> None:
     """Re-render the latest Snapshot's configuration, apply it, verify once.
 
-    The Secret is restored as well as the live catalogs. Restoring only the live ones
-    would leave the durable copy holding a catalog the Snapshot never had, to be
+    The plan is read before anything is written, because the Secret as the failed Apply
+    left it is half of the diff that decides what to undo.
+
+    The Secret is then restored as well as the live catalogs. Restoring only the live
+    ones would leave the durable copy holding a catalog the Snapshot never had, to be
     seeded back in at the next pod restart -- the failure of section 10's divergence
     table, arriving weeks later with nothing linking it to this Apply.
     """
     catalogs = snapshot_sections.get(SECTION, {})
+    snapshot_copy = render_secret(snapshot_sections)
 
-    await kubernetes.write_secret(settings.catalog_secret_name, render_secret(snapshot_sections))
+    plan = catalog_apply.rollback_plan(
+        catalogs,
+        await trino.catalogs(),
+        await kubernetes.read_secret(settings.catalog_secret_name),
+        snapshot_copy,
+    )
+    logger.info("rollback planned", extra={"catalogs": plan.summary()})
+
+    await kubernetes.write_secret(settings.catalog_secret_name, snapshot_copy)
     logger.info("restored the catalog Secret")
 
-    plan = catalog_apply.rollback_plan(catalogs, forward, await trino.catalogs())
-    logger.info("rollback planned", extra={"catalogs": plan.summary()})
     await catalog_apply.execute(trino, catalogs, plan)
 
     await verify(

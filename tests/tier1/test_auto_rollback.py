@@ -195,6 +195,51 @@ async def test_a_dropped_catalog_is_restored_by_the_rollback(
     assert set(fake_kubernetes.secrets[SECRET]) == {"kept.properties"}
 
 
+async def test_a_catalog_apchi_never_managed_survives_a_rollback(
+    snapshot_one: AsyncClient, fake_kubernetes: FakeKubernetes, trino_cluster: DockerContainer
+) -> None:
+    """The rollback is a diff, so anything live and not in the Snapshot looks like
+    something to remove. What separates the two is Apchi's own durable record: a catalog
+    Apchi never wrote to the Secret is not Apchi's to drop -- one that predates Apchi and
+    has not been through Adoption, or Trino's own `system`, which cannot be dropped at
+    all and would fail the rollback outright.
+    """
+    cluster = _cluster(trino_cluster)
+    await cluster.create_catalog("outsider", "memory", {})
+    try:
+        fake_kubernetes.report_a_missing_worker_once = True
+        await snapshot_one.post("/api/v1/catalogs", json=ADDED)
+
+        record = await _apply(snapshot_one)
+
+        assert record["rollback"] == "succeeded", record.get("failure_reason")
+        live = await cluster.catalogs()
+        assert "outsider" in live
+        assert "system" in live
+        assert "added" not in live
+    finally:
+        if "outsider" in await cluster.catalogs():
+            await cluster.drop_catalog("outsider")
+
+
+async def test_a_changed_catalog_is_restored_to_the_snapshot_version(
+    snapshot_one: AsyncClient, fake_kubernetes: FakeKubernetes, trino_cluster: DockerContainer
+) -> None:
+    """Trino will not report a catalog's properties back, so a changed catalog is
+    invisible in SHOW CATALOGS. It is found by comparing the Snapshot's rendering against
+    the Secret the failed Apply wrote, and undone by a drop and a create."""
+    fake_kubernetes.report_a_missing_worker_once = True
+    await snapshot_one.patch(
+        "/api/v1/catalogs/kept", json={"properties": {"memory.max-data-per-node": "128MB"}}
+    )
+
+    record = await _apply(snapshot_one)
+
+    assert record["rollback"] == "succeeded", record.get("failure_reason")
+    assert fake_kubernetes.secrets[SECRET] == {"kept.properties": "connector.name=memory\n"}
+    assert "kept" in await _cluster(trino_cluster).catalogs()
+
+
 async def test_a_failed_rollback_ends_in_an_incident(
     settings: Settings,
     fake_kubernetes: FakeKubernetes,
