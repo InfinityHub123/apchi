@@ -11,7 +11,6 @@ is issued.
 """
 
 import logging
-from typing import Any
 
 from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
@@ -25,9 +24,8 @@ from app.pipeline.snapshots import SnapshotStore
 from app.pipeline.validation import validate_candidate
 from app.pipeline.verification import verify
 from app.sections import SectionName
-from app.sections.catalogs import apply as catalog_apply
-from app.sections.catalogs.generator import render_secret
-from app.sections.catalogs.section import SECTION
+from app.sections.base import Cluster, Resources, SectionPlan
+from app.sections.registry import REGISTERED
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +50,9 @@ class Engine:
         self._trino = trino
         self._kubernetes = kubernetes
         self._maintenance = maintenance
-        self._desired: dict[SectionName, dict[str, Any]] = {}
-        self._plan = catalog_apply.CatalogPlan()
+        self._desired: dict[SectionName, Resources] = {}
+        self._plans: dict[SectionName, SectionPlan] = {}
+        self._cluster = Cluster(trino=trino, kubernetes=kubernetes, settings=settings)
 
     async def validate(self) -> None:
         """Capture the Candidate, plan the change, then prove it against a real Trino.
@@ -68,17 +67,18 @@ class Engine:
         self._desired = dict(candidate.sections)
 
         current = await self._snapshots.sections_of(candidate.base_snapshot)
-        self._plan = catalog_apply.plan(self._desired.get(SECTION, {}), current.get(SECTION, {}))
-        logger.info("planned", extra={"catalogs": self._plan.summary()})
-
-        await validate_candidate(
-            self._desired,
-            self._plan.created,
-            self._trino,
-            self._kubernetes,
-            self._settings,
-            self._apply_id,
+        self._plans = {
+            section.name: section.plan(
+                self._desired.get(section.name, {}), current.get(section.name, {})
+            )
+            for section in REGISTERED
+        }
+        logger.info(
+            "planned",
+            extra={name: plan.summary() for name, plan in self._plans.items()},
         )
+
+        await validate_candidate(self._desired, self._plans, self._cluster, self._apply_id)
 
     async def _assert_preconditions(self) -> None:
         """Before every Apply, not once at startup: a chart change can reintroduce a
@@ -106,17 +106,14 @@ class Engine:
         # instead of quietly keeping catalog DDL open to everyone.
         await deliver_access_control(self._kubernetes, self._settings)
 
-        await self._kubernetes.write_secret(
-            self._settings.catalog_secret_name, render_secret(self._desired)
-        )
-        logger.info("patched the catalog Secret")
-
-        await catalog_apply.execute(self._trino, self._desired.get(SECTION, {}), self._plan)
+        for section in REGISTERED:
+            await section.apply(
+                self._cluster, self._desired.get(section.name, {}), self._plans[section.name]
+            )
 
     async def verify(self) -> None:
         await verify(
-            self._trino,
-            self._kubernetes,
+            self._cluster,
             self._desired,
             self._settings.worker_deployment_name,
             self._settings.verification_catalog,
@@ -136,7 +133,7 @@ class Engine:
         """
         latest = await self._snapshots.latest()
         sections = await self._snapshots.sections_of(None if latest is None else latest.number)
-        await restore(sections, self._trino, self._kubernetes, self._settings)
+        await restore(sections, self._cluster)
 
     async def declare_incident(self, reason: str) -> None:
         await declare_incident(self._apply_id, reason, self._maintenance, self._settings)

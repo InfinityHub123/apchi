@@ -12,19 +12,15 @@ not something more DDL will fix. See section 10.
 """
 
 import logging
-from typing import Any
 
 import httpx
 
-from app.adapters.kubernetes import KubernetesAdapter
-from app.adapters.trino import Trino
 from app.config import Settings
 from app.pipeline.maintenance import EngagedBy, MaintenanceStore
 from app.pipeline.verification import verify
 from app.sections import SectionName
-from app.sections.catalogs import apply as catalog_apply
-from app.sections.catalogs.generator import render_secret
-from app.sections.catalogs.section import SECTION
+from app.sections.base import Cluster, Resources
+from app.sections.registry import REGISTERED
 
 logger = logging.getLogger(__name__)
 
@@ -42,43 +38,22 @@ class RollbackFailed(Exception):
 
 
 async def restore(
-    snapshot_sections: dict[SectionName, dict[str, Any]],
-    trino: Trino,
-    kubernetes: KubernetesAdapter,
-    settings: Settings,
+    snapshot_sections: dict[SectionName, Resources],
+    cluster: Cluster,
 ) -> None:
-    """Re-render the latest Snapshot's configuration, apply it, verify once.
+    """Put every Section back to the latest Snapshot, then verify once.
 
-    The plan is read before anything is written, because the Secret as the failed Apply
-    left it is half of the diff that decides what to undo.
-
-    The Secret is then restored as well as the live catalogs. Restoring only the live
-    ones would leave the durable copy holding a catalog the Snapshot never had, to be
-    seeded back in at the next pod restart -- the failure of section 10's divergence
-    table, arriving weeks later with nothing linking it to this Apply.
+    Each Section knows how to undo itself, including what it can and cannot assume about
+    how far a failed Apply got. The pipeline only decides that this happens once.
     """
-    catalogs = snapshot_sections.get(SECTION, {})
-    snapshot_copy = render_secret(snapshot_sections)
-
-    plan = catalog_apply.rollback_plan(
-        catalogs,
-        await trino.catalogs(),
-        await kubernetes.read_secret(settings.catalog_secret_name),
-        snapshot_copy,
-    )
-    logger.info("rollback planned", extra={"catalogs": plan.summary()})
-
-    await kubernetes.write_secret(settings.catalog_secret_name, snapshot_copy)
-    logger.info("restored the catalog Secret")
-
-    await catalog_apply.execute(trino, catalogs, plan)
+    for section in REGISTERED:
+        await section.restore(cluster, snapshot_sections.get(section.name, {}))
 
     await verify(
-        trino,
-        kubernetes,
+        cluster,
         snapshot_sections,
-        settings.worker_deployment_name,
-        settings.verification_catalog,
+        cluster.settings.worker_deployment_name,
+        cluster.settings.verification_catalog,
     )
     logger.info("auto rollback restored the latest Snapshot")
 

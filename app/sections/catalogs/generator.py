@@ -8,7 +8,7 @@ Secret, which is the copy that survives the pod.
 from typing import Any
 
 from app.sections import SectionName
-from app.sections.catalogs.section import SECTION
+from app.sections.catalogs import SECTION
 
 
 def render_properties(connector: str, properties: dict[str, str]) -> str:

@@ -20,13 +20,12 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
-from pydantic import BaseModel
-
 from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.config import Settings
 from app.sections import SectionName
-from app.sections.catalogs.section import SECTION as CATALOGS
+from app.sections.base import Cluster, Resources, SectionPlan, ValidationFailure
+from app.sections.registry import REGISTERED
 
 logger = logging.getLogger(__name__)
 
@@ -52,19 +51,6 @@ _STATIC_CATALOG_DIR = "/etc/trino/catalog"
 
 #: How often the probe is asked whether it is serving yet.
 _POLL_SECONDS = 2.0
-
-
-class ValidationFailure(BaseModel):
-    """One reason a Candidate should not be applied, named well enough for an
-    Operator to know what to fix."""
-
-    section: SectionName | None = None
-    resource: str | None = None
-    reason: str
-
-    def __str__(self) -> str:
-        where = "/".join(part for part in (self.section, self.resource) if part)
-        return f"{where}: {self.reason}" if where else self.reason
 
 
 class ValidationFailed(Exception):
@@ -183,83 +169,47 @@ async def _await_serving(kubernetes: KubernetesAdapter, name: str, timeout: floa
         await asyncio.sleep(_POLL_SECONDS)
 
 
-def collision_failures(created: Sequence[str], live: set[str]) -> list[ValidationFailure]:
-    """A Catalog the Candidate would create must not already exist on the Cluster.
-
-    This is the whole-Candidate check that has teeth in slice 1. It catches a name
-    that collides with a catalog nobody brought under management -- one seeded before
-    Apchi, say. The ephemeral probe cannot catch it, because the probe starts empty:
-    the collision exists only on the Cluster.
-
-    Without the check the DDL fails *after* Apply has written the Secret, which is
-    the divergence of section 10 for a reason an Operator could have been told about
-    before anything moved.
-    """
-    return [
-        ValidationFailure(
-            section=CATALOGS,
-            resource=name,
-            reason=(
-                f"A catalog named {name!r} already exists on the Cluster and is not "
-                "managed by Apchi. Adopt it or choose another name."
-            ),
-        )
-        for name in sorted(set(created) & live)
-    ]
-
-
-async def _catalog_failures(probe: Trino, catalogs: dict[str, Any]) -> list[ValidationFailure]:
-    from trino.exceptions import TrinoQueryError
-
-    failures: list[ValidationFailure] = []
-    for name in sorted(catalogs):
-        stored = catalogs[name]
-        try:
-            await probe.create_catalog(name, stored["connector"], stored.get("properties", {}))
-        except TrinoQueryError as exc:
-            failures.append(
-                ValidationFailure(section=CATALOGS, resource=name, reason=str(exc.message))
-            )
-        except ValueError as exc:
-            # A connector name Apchi will not put in a statement at all.
-            failures.append(ValidationFailure(section=CATALOGS, resource=name, reason=str(exc)))
-    return failures
-
-
 async def validate_candidate(
-    sections: dict[SectionName, dict[str, Any]],
-    created: Sequence[str],
-    cluster: Trino,
-    kubernetes: KubernetesAdapter,
-    settings: Settings,
+    sections: dict[SectionName, Resources],
+    plans: dict[SectionName, SectionPlan],
+    cluster: Cluster,
     validation_id: str,
 ) -> None:
     """Raises ValidationFailed if the Candidate should not be applied.
 
-    Checks that need no pod run first, so a Candidate that cannot possibly work is
-    rejected without paying for a coordinator.
+    Two phases, because one of them is expensive. Every Section's own checks run first,
+    against the Cluster and the Candidate alone; only if some Section has something an
+    ephemeral coordinator could reject is a pod created at all.
 
     References *between* Sections are checked here too, over the whole Candidate,
-    because request-time validation deliberately stops at the resource in front of it
-    -- adding a permission before the catalog it names has to be allowed, since the
-    Candidate is coherent once both exist. Slice 1 has one Section and a Catalog
-    references no other Apchi resource, so the first such reference arrives with
-    Client Certificates.
+    because request-time validation deliberately stops at the resource in front of it --
+    adding a permission before the catalog it names has to be allowed, since the
+    Candidate is coherent once both exist. With one Section registered and no Section
+    referencing another there is nothing of that kind to check yet.
     """
-    if created and (failures := collision_failures(created, await cluster.catalogs())):
+    failures: list[ValidationFailure] = []
+    for section in REGISTERED:
+        desired = sections.get(section.name, {})
+        failures.extend(await section.check(cluster, desired, plans[section.name]))
+    if failures:
         raise ValidationFailed(failures)
 
-    catalogs = sections.get(CATALOGS, {})
-    if not catalogs:
-        # No pod for a Candidate with nothing a coordinator could reject. The pod is
-        # the expensive part of Validation, and an empty Candidate is a real case:
-        # the first Apply of a fresh Cluster, and every Apply that only drops things.
+    probing = [
+        section for section in REGISTERED if section.needs_probe(sections.get(section.name, {}))
+    ]
+    if not probing:
+        # No pod for a Candidate with nothing a coordinator could reject. The pod is the
+        # expensive part of Validation, and an empty Candidate is a real case: the first
+        # Apply of a fresh Cluster, and every Apply that only drops things.
         logger.info("no Trino validation needed")
         return
 
-    async with ephemeral_trino(kubernetes, settings, validation_id) as probe:
-        failures = await _catalog_failures(probe, catalogs)
+    async with ephemeral_trino(cluster.kubernetes, cluster.settings, validation_id) as probe:
+        for section in probing:
+            failures.extend(
+                await section.check_against_probe(probe, sections.get(section.name, {}))
+            )
 
     if failures:
         raise ValidationFailed(failures)
-    logger.info("validation passed", extra={"catalogs": len(catalogs)})
+    logger.info("validation passed", extra={"sections": len(probing)})

@@ -10,10 +10,13 @@ against it.
 """
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from app.adapters.trino import Trino
+from app.sections.base import ValidationFailure
+from app.sections.catalogs import SECTION as CATALOGS
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +95,31 @@ def rollback_plan(
         ],
         dropped=[name for name in sorted(live - wanted) if rendered(name, durable) is not None],
     )
+
+
+def collision_failures(created: Sequence[str], live: set[str]) -> list[ValidationFailure]:
+    """A Catalog the Candidate would create must not already exist on the Cluster.
+
+    This is the whole-Candidate check that has teeth in slice 1. It catches a name
+    that collides with a catalog nobody brought under management -- one seeded before
+    Apchi, say. The ephemeral probe cannot catch it, because the probe starts empty:
+    the collision exists only on the Cluster.
+
+    Without the check the DDL fails *after* Apply has written the Secret, which is
+    the divergence of section 10 for a reason an Operator could have been told about
+    before anything moved.
+    """
+    return [
+        ValidationFailure(
+            section=CATALOGS,
+            resource=name,
+            reason=(
+                f"A catalog named {name!r} already exists on the Cluster and is not "
+                "managed by Apchi. Adopt it or choose another name."
+            ),
+        )
+        for name in sorted(set(created) & live)
+    ]
 
 
 async def execute(trino: Trino, desired: dict[str, Any], plan_: CatalogPlan) -> None:

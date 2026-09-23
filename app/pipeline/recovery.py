@@ -20,9 +20,10 @@ from pydantic import BaseModel, Field
 from app.api.errors import NotFound
 from app.pipeline.candidate import Candidate, CandidateStore
 from app.pipeline.snapshots import SnapshotStore
-from app.sections import SECTIONS, SectionName
+from app.sections import SectionName
+from app.sections.catalogs import SECTION as CATALOGS
 from app.sections.catalogs import apply as catalog_apply
-from app.sections.catalogs.section import SECTION as CATALOGS
+from app.sections.registry import SECTIONS
 
 logger = logging.getLogger(__name__)
 
