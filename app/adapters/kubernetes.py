@@ -49,6 +49,8 @@ class KubernetesAdapter(Protocol):
 
     async def deployment_image(self, deployment: str, container: str) -> str: ...
 
+    async def deployment_pod_spec(self, deployment: str) -> dict[str, Any]: ...
+
     async def create_pod(self, manifest: dict[str, Any]) -> None: ...
 
     async def pod_state(self, name: str) -> PodState: ...
@@ -134,6 +136,20 @@ class RealKubernetes:
             if spec.name == container:
                 return str(spec.image)
         raise LookupError(f"Deployment {deployment!r} has no container named {container!r}")
+
+    async def deployment_pod_spec(self, deployment: str) -> dict[str, Any]:
+        """The pod template's spec, as plain data.
+
+        Serialised rather than handed over as client objects: the preconditions that
+        read it live in `pipeline/`, which stays free of the Kubernetes client.
+        """
+        from kubernetes import client
+
+        dep = await run_in_threadpool(
+            self._apps.read_namespaced_deployment, deployment, self._namespace
+        )
+        serialised = client.ApiClient().sanitize_for_serialization(dep.spec.template.spec)
+        return dict(serialised)
 
     async def create_pod(self, manifest: dict[str, Any]) -> None:
         await run_in_threadpool(self._core.create_namespaced_pod, self._namespace, manifest)

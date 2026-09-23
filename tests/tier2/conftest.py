@@ -26,6 +26,7 @@ from app.main import create_app
 COORDINATOR = "deploy/trino-coordinator"
 TRINO_SERVICE = "svc/trino"
 CATALOG_SEED_SECRET = "trino-catalog-seed"
+ACCESS_CONTROL_SECRET = "trino-access-control"
 
 
 def _cluster_available() -> bool:
@@ -181,6 +182,9 @@ class ForwardedKubernetes:
     async def deployment_image(self, deployment: str, container: str) -> str:
         return await self._real.deployment_image(deployment, container)
 
+    async def deployment_pod_spec(self, deployment: str) -> dict[str, Any]:
+        return await self._real.deployment_pod_spec(deployment)
+
     async def create_pod(self, manifest: dict[str, Any]) -> None:
         self.created_pods.append(manifest["metadata"]["name"])
         await self._real.create_pod(manifest)
@@ -218,14 +222,44 @@ class ForwardedKubernetes:
 
 
 @pytest.fixture
-async def seed_secret(real_kubernetes: RealKubernetes) -> AsyncIterator[None]:
-    """Restores the catalog seed Secret, so a test that rewrites it cannot strand the
-    shared coordinator with a seed the next test does not expect."""
-    original = await real_kubernetes.read_secret(CATALOG_SEED_SECRET)
+async def cluster_state(
+    real_kubernetes: RealKubernetes, forward: PortForward, settings: Settings
+) -> AsyncIterator[None]:
+    """Puts the shared cluster back after each test: both Secrets Apchi writes, and any
+    catalog left behind.
+
+    One fixture owns the whole reset because the order matters. The access-control
+    Secret has to go back *before* stray catalogs are dropped: Apply delivers the rules
+    as its first step, generated from the Trino identity Apchi is configured with, so a
+    test that runs Apchi under a different identity to force a failure also revokes the
+    real one's `owner` -- and the cleanup would then be denied its own DROP CATALOG.
+    """
+    secrets = (CATALOG_SEED_SECRET, ACCESS_CONTROL_SECRET)
+    originals = {name: await real_kubernetes.read_secret(name) for name in secrets}
+
+    def cluster() -> Trino:
+        return Trino(host="127.0.0.1", port=forward.port, user=settings.trino_user)
+
+    baseline = await cluster().catalogs()
     try:
         yield
     finally:
-        await real_kubernetes.write_secret(CATALOG_SEED_SECRET, original)
+        changed_rules = (
+            await real_kubernetes.read_secret(ACCESS_CONTROL_SECRET)
+            != originals[ACCESS_CONTROL_SECRET]
+        )
+        for name, content in originals.items():
+            await real_kubernetes.write_secret(name, content)
+        if changed_rules:
+            # Writing the Secret back is not enough. Trino re-reads the rules on its own
+            # security.refresh-period, and the kubelet takes up to its syncFrequency to
+            # project the change -- the two delays of §7.5, adding up to longer than the
+            # next test waits. A restart is slower but certain, and the forward dies with
+            # the pod it was attached to.
+            restart_coordinator()
+            forward.restart()
+        for name in await cluster().catalogs() - baseline:
+            await cluster().drop_catalog(name)
 
 
 @pytest.fixture
@@ -270,7 +304,7 @@ async def e2e_client(
     settings: Settings,
     forwarded_kubernetes: ForwardedKubernetes,
     forward: PortForward,
-    seed_secret: None,
+    cluster_state: None,
 ) -> AsyncIterator[AsyncClient]:
     """The primary seam with nothing faked behind it.
 
@@ -281,7 +315,6 @@ async def e2e_client(
     app = create_app(settings)
     app.state.kubernetes = kubernetes
     app.state.trino = Trino(host="127.0.0.1", port=forward.port, user=settings.trino_user)
-    baseline = await app.state.trino.catalogs()
     try:
         async with (
             AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as http_client,
@@ -289,6 +322,6 @@ async def e2e_client(
         ):
             yield http_client
     finally:
+        # Catalogs are cleaned up by cluster_state, which tears down after this and can
+        # do it with the real identity's rules back in force.
         kubernetes.shutdown()
-        for name in await app.state.trino.catalogs() - baseline:
-            await app.state.trino.drop_catalog(name)
