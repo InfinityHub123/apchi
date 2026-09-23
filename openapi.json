@@ -48,6 +48,29 @@
             "title": "Id",
             "type": "string"
           },
+          "operator_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What to show an Operator. Set when an Apply ends in an incident.",
+            "title": "Operator Message"
+          },
+          "rollback": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Rollback"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The outcome of Auto Rollback. Absent when none was attempted, which means nothing reached the Cluster."
+          },
           "snapshot": {
             "anyOf": [
               {
@@ -170,6 +193,14 @@
         "title": "CatalogWrite",
         "type": "object"
       },
+      "EngagedBy": {
+        "enum": [
+          "admin",
+          "auto_rollback_failure"
+        ],
+        "title": "EngagedBy",
+        "type": "string"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -199,6 +230,50 @@
           "mongo"
         ],
         "title": "Health",
+        "type": "object"
+      },
+      "MaintenanceState": {
+        "properties": {
+          "engaged": {
+            "default": false,
+            "title": "Engaged",
+            "type": "boolean"
+          },
+          "engaged_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engaged At"
+          },
+          "engaged_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EngagedBy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "title": "MaintenanceState",
         "type": "object"
       },
       "Outcome": {
@@ -292,6 +367,14 @@
         "title": "Review",
         "type": "object"
       },
+      "Rollback": {
+        "enum": [
+          "succeeded",
+          "failed"
+        ],
+        "title": "Rollback",
+        "type": "string"
+      },
       "SectionDiff": {
         "properties": {
           "changes": {
@@ -371,8 +454,10 @@
           "applying",
           "verifying",
           "committing",
+          "rolling_back",
           "succeeded",
-          "failed"
+          "failed",
+          "incident"
         ],
         "title": "Stage",
         "type": "string"
@@ -553,6 +638,67 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/admin/maintenance-mode": {
+      "get": {
+        "operationId": "get_maintenance_mode_api_v1_admin_maintenance_mode_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Whether Operator changes are currently disabled",
+        "tags": [
+          "admin"
+        ]
+      },
+      "put": {
+        "description": "Releasing is how an incident is closed: an Admin has looked at the Cluster and\nis satisfied it is in a state Operators can safely edit again.",
+        "operationId": "set_maintenance_mode_api_v1_admin_maintenance_mode_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaintenanceState"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Disable or re-enable Operator changes",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/applies": {
       "get": {
         "operationId": "list_applies_api_v1_applies_get",

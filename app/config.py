@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     #: Validation; it must never hang the pipeline.
     validation_timeout_seconds: float = 300.0
 
+    #: Where a failed Auto Rollback is reported -- a Mattermost or Slack incoming
+    #: webhook. Unset means log only: an alert that cannot be delivered must never
+    #: stop Maintenance Mode engaging.
+    alert_webhook_url: str | None = None
+
     # None means "derive from environment"; an explicit value always wins, so the
     # level can be raised during a production incident without a rebuild.
     log_level: str | None = None

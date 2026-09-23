@@ -9,6 +9,8 @@ import asyncio
 
 from httpx import AsyncClient
 
+from app.pipeline.applies import TERMINAL
+
 MEMORY = {"name": "scratch", "connector": "memory", "properties": {}}
 SECRET = "trino-catalog-seed"
 
@@ -18,7 +20,7 @@ async def _settled(client: AsyncClient, apply_id: str, timeout: float = 30.0) ->
     record: dict = {}
     while asyncio.get_running_loop().time() < deadline:
         record = (await client.get(f"/api/v1/applies/{apply_id}")).json()
-        if record["stage"] in {"succeeded", "failed"}:
+        if record["stage"] in TERMINAL:
             return record
         await asyncio.sleep(0.05)
     raise AssertionError(f"Apply never settled; last={record.get('stage')}")

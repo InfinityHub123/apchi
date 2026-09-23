@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from pymongo.asynchronous.database import AsyncDatabase
 
 from app.logging import apply_id_var
+from app.pipeline.auto_rollback import INCIDENT_MESSAGE
 
 logger = logging.getLogger(__name__)
 
@@ -29,17 +30,39 @@ class Stage(StrEnum):
     APPLYING = "applying"
     VERIFYING = "verifying"
     COMMITTING = "committing"
+    #: Auto Rollback, on its way to one of the two failed terminals.
+    ROLLING_BACK = "rolling_back"
     SUCCEEDED = "succeeded"
+    #: The Apply did not go through and the Cluster is back on its latest Snapshot.
     FAILED = "failed"
+    #: The Apply did not go through and Auto Rollback could not put the Cluster back.
+    #: Apchi has stopped touching it and Maintenance Mode is engaged.
+    INCIDENT = "incident"
 
 
 #: An Apply in one of these is over. Anything else means it is in flight, and the
-#: Candidate is frozen.
-TERMINAL: frozenset[Stage] = frozenset({Stage.SUCCEEDED, Stage.FAILED})
+#: Candidate is frozen. An incident is over in this sense too: nothing further will
+#: happen to it, and what keeps Operators off the Cluster is Maintenance Mode, not a
+#: freeze that would also block the Admin action that clears it.
+TERMINAL: frozenset[Stage] = frozenset({Stage.SUCCEEDED, Stage.FAILED, Stage.INCIDENT})
 
 #: The order the pipeline walks. Stages stay separate internally even where the UI
 #: presents them as one action.
 PIPELINE: tuple[Stage, ...] = (Stage.VALIDATING, Stage.APPLYING, Stage.VERIFYING, Stage.COMMITTING)
+
+#: Failing in one of these means the Cluster was touched, so Auto Rollback runs.
+#:
+#: Validation is excluded because nothing reached the Cluster -- there is nothing to
+#: undo, and the Candidate is left for the Operator to fix. Commit is excluded for the
+#: opposite reason: the configuration was applied *and verified*, and what failed was
+#: MongoDB. Rolling back there would tear down a healthy Cluster to recover from a
+#: database error.
+ROLLED_BACK_FROM: frozenset[Stage] = frozenset({Stage.APPLYING, Stage.VERIFYING})
+
+
+class Rollback(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
 
 
 class StageEvent(BaseModel):
@@ -53,6 +76,17 @@ class ApplyRecord(BaseModel):
     stage: Stage
     history: list[StageEvent] = Field(default_factory=list)
     failure_reason: str | None = None
+    rollback: Rollback | None = Field(
+        default=None,
+        description=(
+            "The outcome of Auto Rollback. Absent when none was attempted, which "
+            "means nothing reached the Cluster."
+        ),
+    )
+    operator_message: str | None = Field(
+        default=None,
+        description="What to show an Operator. Set when an Apply ends in an incident.",
+    )
     base_snapshot: int | None = None
     snapshot: int | None = Field(
         default=None, description="The Snapshot this Apply committed, when it succeeded."
@@ -116,6 +150,19 @@ class ApplyStore:
         await self._collection.update_one({"_id": apply_id}, {"$set": {"failure_reason": reason}})
         await self.advance(apply_id, Stage.FAILED, detail=reason)
 
+    async def record_rollback(self, apply_id: str, outcome: Rollback) -> None:
+        await self._collection.update_one({"_id": apply_id}, {"$set": {"rollback": outcome.value}})
+
+    async def declare_incident(self, apply_id: str, reason: str, message: str) -> None:
+        """The other failed terminal. The failure reason stays the diagnostic one --
+        an Operator has to be able to diagnose without log access -- and the message
+        is what the UI shows."""
+        await self._collection.update_one(
+            {"_id": apply_id},
+            {"$set": {"failure_reason": reason, "operator_message": message}},
+        )
+        await self.advance(apply_id, Stage.INCIDENT, detail=message)
+
 
 class ApplyEngine(Protocol):
     """What the pipeline does at each stage."""
@@ -124,6 +171,14 @@ class ApplyEngine(Protocol):
     async def apply(self) -> None: ...
     async def verify(self) -> None: ...
     async def commit(self) -> int | None: ...
+
+    async def roll_back(self) -> None:
+        """Put the Cluster back on its latest Snapshot. Raises if it cannot."""
+        ...
+
+    async def declare_incident(self, reason: str) -> None:
+        """Stop touching the Cluster: engage Maintenance Mode and alert."""
+        ...
 
 
 class NoOpEngine:
@@ -134,6 +189,9 @@ class NoOpEngine:
     async def verify(self) -> None: ...
     async def commit(self) -> int | None:
         return None
+
+    async def roll_back(self) -> None: ...
+    async def declare_incident(self, reason: str) -> None: ...
 
 
 #: Builds the engine for one Apply. A factory rather than a single instance because
@@ -166,9 +224,11 @@ class ApplyRunner:
             (Stage.VERIFYING, engine.verify),
             (Stage.COMMITTING, engine.commit),
         )
+        reached = Stage.VALIDATING
         try:
             snapshot: int | None = None
             for index, (stage, step) in enumerate(steps):
+                reached = stage
                 if index:  # the first stage is recorded at creation
                     await self._store.advance(apply_id, stage)
                 logger.info("apply stage", extra={"stage": stage.value})
@@ -181,9 +241,35 @@ class ApplyRunner:
             logger.info("apply succeeded", extra={"snapshot": snapshot})
         except Exception as exc:
             logger.exception("apply failed")
-            await self._store.fail(apply_id, f"{type(exc).__name__}: {exc}")
+            reason = f"{type(exc).__name__}: {exc}"
+            if reached in ROLLED_BACK_FROM:
+                await self._roll_back(apply_id, engine, reason)
+            else:
+                await self._store.fail(apply_id, reason)
         finally:
             apply_id_var.reset(token)
+
+    async def _roll_back(self, apply_id: str, engine: ApplyEngine, reason: str) -> None:
+        """One attempt, and no retry whatever it does.
+
+        A failure to roll back is not a failure of this Apply to report and move on
+        from: the Cluster is in a state nobody has described, so the outcome is an
+        incident and Apchi stops touching it.
+        """
+        await self._store.advance(apply_id, Stage.ROLLING_BACK, detail=reason)
+        logger.warning("rolling back to the latest snapshot", extra={"why": reason})
+        try:
+            await engine.roll_back()
+        except Exception as rollback_exc:
+            logger.exception("auto rollback failed")
+            await self._store.record_rollback(apply_id, Rollback.FAILED)
+            combined = f"{reason}. Auto Rollback then failed: {rollback_exc}"
+            await engine.declare_incident(combined)
+            await self._store.declare_incident(apply_id, combined, INCIDENT_MESSAGE)
+            return
+        await self._store.record_rollback(apply_id, Rollback.SUCCEEDED)
+        await self._store.fail(apply_id, reason)
+        logger.info("cluster returned to its latest snapshot")
 
     async def shutdown(self) -> None:
         for task in list(self._tasks):

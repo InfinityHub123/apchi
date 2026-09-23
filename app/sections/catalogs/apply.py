@@ -53,6 +53,47 @@ def plan(desired: dict[str, Any], current: dict[str, Any]) -> CatalogPlan:
     return result
 
 
+def rollback_plan(
+    snapshot_catalogs: dict[str, Any],
+    live: set[str],
+    durable: dict[str, str],
+    snapshot_copy: dict[str, str],
+) -> CatalogPlan:
+    """What it takes to put the Cluster's catalogs back to a Snapshot.
+
+    A diff, and only a diff: the Snapshot says what should be there, `live` says what
+    is, and the difference is what the failed Apply did. Nothing here consults what the
+    Apply *intended*, so a partial DDL failure needs no guess about how far it got --
+    and neither does a rollback attempted by an Apchi that has restarted since.
+
+    Two records, both durable. The Snapshot is the desired state. `durable` is the
+    catalog Secret as it stands, which is Apchi's record of what it manages: Apply
+    writes it *before* issuing DDL (§10), so anything the DDL may have created is named
+    in it. That is what separates a catalog this Apply added from one Apchi never put
+    there -- Trino's own `system`, which cannot be dropped at all, or a catalog that
+    predates Apchi and has not been through Adoption. Neither appears in the Secret, so
+    neither is ever dropped.
+
+    Trino will not report a catalog's properties back, so a *changed* catalog is
+    invisible in `live`. It is found by comparing the two renderings instead: same name,
+    different .properties content, so drop and recreate -- there is no ALTER CATALOG.
+    """
+    wanted = set(snapshot_catalogs)
+
+    def rendered(name: str, source: dict[str, str]) -> str | None:
+        return source.get(f"{name}.properties")
+
+    return CatalogPlan(
+        created=[name for name in sorted(wanted) if name not in live],
+        replaced=[
+            name
+            for name in sorted(wanted)
+            if name in live and rendered(name, durable) != rendered(name, snapshot_copy)
+        ],
+        dropped=[name for name in sorted(live - wanted) if rendered(name, durable) is not None],
+    )
+
+
 async def execute(trino: Trino, desired: dict[str, Any], plan_: CatalogPlan) -> None:
     """Issues the plan against the running coordinator.
 

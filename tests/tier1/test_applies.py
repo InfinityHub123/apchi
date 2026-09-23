@@ -10,6 +10,8 @@ import json
 
 from httpx import AsyncClient
 
+from app.pipeline.applies import TERMINAL
+
 PG = {
     "name": "finance",
     "connector": "postgresql",
@@ -22,7 +24,7 @@ async def _settled(client: AsyncClient, apply_id: str, timeout: float = 5.0) -> 
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
         record = (await client.get(f"/api/v1/applies/{apply_id}")).json()
-        if record["stage"] in {"succeeded", "failed"}:
+        if record["stage"] in TERMINAL:
             return record
         await asyncio.sleep(0.02)
     raise AssertionError(f"Apply {apply_id} never settled; last stage {record['stage']!r}")
@@ -63,13 +65,15 @@ async def test_the_record_holds_the_full_history_not_just_the_current_stage(
     assert all(event["at"] for event in record["history"])
 
 
-async def test_applies_are_listed_newest_first(client: AsyncClient) -> None:
-    first = (await client.post("/api/v1/applies")).json()["id"]
-    await _settled(client, first)
-    second = (await client.post("/api/v1/applies")).json()["id"]
-    await _settled(client, second)
+async def test_applies_are_listed_newest_first(applying_client: AsyncClient) -> None:
+    """Takes the real coordinator: an Apply that cannot verify ends in an incident,
+    and an incident engages Maintenance Mode, which refuses the second Apply."""
+    first = (await applying_client.post("/api/v1/applies")).json()["id"]
+    await _settled(applying_client, first)
+    second = (await applying_client.post("/api/v1/applies")).json()["id"]
+    await _settled(applying_client, second)
 
-    listed = [record["id"] for record in (await client.get("/api/v1/applies")).json()]
+    listed = [record["id"] for record in (await applying_client.get("/api/v1/applies")).json()]
 
     assert listed[:2] == [second, first]
 

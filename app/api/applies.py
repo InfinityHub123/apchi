@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, Header, Request, status
 from fastapi.sse import EventSourceResponse, format_sse_event
 
-from app.api.deps import ApplyStoreDep, CandidateStoreDep
+from app.api.deps import ApplyStoreDep, CandidateStoreDep, MutationsEnabled
 from app.api.errors import Conflict, NotFound
 from app.pipeline.applies import ApplyRecord, ApplyRunner
 
@@ -29,6 +29,9 @@ POLL_SECONDS = 0.25
     response_model=ApplyRecord,
     status_code=status.HTTP_202_ACCEPTED,
     summary="Promote the Configuration Candidate",
+    # The freeze is checked in the handler rather than through the shared gate, so the
+    # refusal can name the Apply already in flight.
+    dependencies=[MutationsEnabled],
 )
 async def start_apply(
     request: Request, applies: ApplyStoreDep, candidate_store: CandidateStoreDep

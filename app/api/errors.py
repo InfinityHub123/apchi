@@ -50,6 +50,12 @@ class NameAlreadyTaken(Conflict):
     code = "name_already_taken"
 
 
+class MaintenanceModeEngaged(Conflict):
+    """Operator mutations are disabled. Reads are unaffected."""
+
+    code = "maintenance_mode"
+
+
 class NotFound(ApchiError):
     status_code = status.HTTP_404_NOT_FOUND
     code = "not_found"
