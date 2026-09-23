@@ -1,6 +1,112 @@
 {
   "components": {
     "schemas": {
+      "Catalog": {
+        "description": "A Catalog as it is stored and returned.",
+        "properties": {
+          "connector": {
+            "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+            "title": "Connector",
+            "type": "string"
+          },
+          "name": {
+            "pattern": "^[a-z][a-z0-9_]{0,62}$",
+            "title": "Name",
+            "type": "string"
+          },
+          "properties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Properties",
+            "type": "object"
+          },
+          "supported": {
+            "description": "False when the connector has no curated schema. Its properties passed through unvalidated and are checked only by Trino at Apply.",
+            "title": "Supported",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "connector",
+          "supported"
+        ],
+        "title": "Catalog",
+        "type": "object"
+      },
+      "CatalogUpdate": {
+        "additionalProperties": false,
+        "description": "A partial update. The name is immutable; renaming is a drop and a create,\nwhich is a different and more destructive operation.",
+        "properties": {
+          "connector": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connector"
+          },
+          "properties": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Properties"
+          }
+        },
+        "title": "CatalogUpdate",
+        "type": "object"
+      },
+      "CatalogWrite": {
+        "additionalProperties": false,
+        "description": "What an Operator sends.",
+        "properties": {
+          "connector": {
+            "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+            "title": "Connector",
+            "type": "string"
+          },
+          "name": {
+            "pattern": "^[a-z][a-z0-9_]{0,62}$",
+            "title": "Name",
+            "type": "string"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "title": "Properties",
+            "type": "object"
+          }
+        },
+        "required": [
+          "name",
+          "connector"
+        ],
+        "title": "CatalogWrite",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
       "Health": {
         "properties": {
           "mongo": {
@@ -18,6 +124,156 @@
         ],
         "title": "Health",
         "type": "object"
+      },
+      "ResourceChange": {
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After"
+          },
+          "before": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before"
+          },
+          "change": {
+            "enum": [
+              "added",
+              "changed",
+              "removed"
+            ],
+            "title": "Change",
+            "type": "string"
+          },
+          "resource": {
+            "title": "Resource",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource",
+          "change"
+        ],
+        "title": "ResourceChange",
+        "type": "object"
+      },
+      "Review": {
+        "description": "The diff between the Configuration Candidate and the latest Snapshot.\n\nEvery Section is reported, not only the caller's changes: the Candidate is\nshared, and an Apply promotes everything in it.",
+        "properties": {
+          "base_snapshot": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Snapshot this Candidate was derived from; null before the first.",
+            "title": "Base Snapshot"
+          },
+          "has_changes": {
+            "title": "Has Changes",
+            "type": "boolean"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/SectionDiff"
+            },
+            "title": "Sections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "base_snapshot",
+          "has_changes",
+          "sections"
+        ],
+        "title": "Review",
+        "type": "object"
+      },
+      "SectionDiff": {
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/ResourceChange"
+            },
+            "title": "Changes",
+            "type": "array"
+          },
+          "section": {
+            "enum": [
+              "catalogs",
+              "client_certificates",
+              "certificate_mapping",
+              "permissions",
+              "resource_groups",
+              "event_listeners"
+            ],
+            "title": "Section",
+            "type": "string"
+          }
+        },
+        "required": [
+          "section"
+        ],
+        "title": "SectionDiff",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
       }
     }
   },
@@ -28,6 +284,210 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/candidate/reset": {
+      "post": {
+        "description": "Re-derives the Candidate from the latest Snapshot.\n\nBecause nothing reaches the Cluster before Apply, this cannot affect production.",
+        "operationId": "reset_api_v1_candidate_reset_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Discard everything staged",
+        "tags": [
+          "candidate"
+        ]
+      }
+    },
+    "/api/v1/catalogs": {
+      "get": {
+        "operationId": "list_catalogs_api_v1_catalogs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Catalog"
+                  },
+                  "title": "Response List Catalogs Api V1 Catalogs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List staged Catalogs",
+        "tags": [
+          "catalogs"
+        ]
+      },
+      "post": {
+        "operationId": "create_catalog_api_v1_catalogs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Catalog"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stage a new Catalog",
+        "tags": [
+          "catalogs"
+        ]
+      }
+    },
+    "/api/v1/catalogs/{name}": {
+      "delete": {
+        "operationId": "delete_catalog_api_v1_catalogs__name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove a staged Catalog",
+        "tags": [
+          "catalogs"
+        ]
+      },
+      "get": {
+        "operationId": "get_catalog_api_v1_catalogs__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Catalog"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fetch a staged Catalog",
+        "tags": [
+          "catalogs"
+        ]
+      },
+      "patch": {
+        "operationId": "update_catalog_api_v1_catalogs__name__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Catalog"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Edit a staged Catalog",
+        "tags": [
+          "catalogs"
+        ]
+      }
+    },
     "/api/v1/health": {
       "get": {
         "operationId": "health_api_v1_health_get",
@@ -46,6 +506,27 @@
         "summary": "Apchi's own liveness",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/api/v1/review": {
+      "get": {
+        "operationId": "review_api_v1_review_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Review"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "What an Apply would change",
+        "tags": [
+          "candidate"
         ]
       }
     }

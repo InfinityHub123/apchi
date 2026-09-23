@@ -7,9 +7,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.adapters.mongo import Mongo
+from app.api import errors
+from app.api.candidate import router as candidate_router
+from app.api.catalogs import router as catalogs_router
 from app.api.health import router as health_router
 from app.config import Settings, get_settings
 from app.logging import configure_logging
+from app.pipeline.candidate import CandidateStore
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +22,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     app.state.mongo = Mongo(settings)
+    app.state.candidate_store = CandidateStore(app.state.mongo.database)
     logger.info("apchi starting", extra={"environment": settings.environment})
     yield
     await app.state.mongo.close()
@@ -34,7 +39,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = settings
+    errors.install(app)
     app.include_router(health_router, prefix="/api/v1")
+    app.include_router(catalogs_router, prefix="/api/v1")
+    app.include_router(candidate_router, prefix="/api/v1")
     return app
 
 
