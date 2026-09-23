@@ -11,11 +11,11 @@ def test_fake_kubernetes_satisfies_the_adapter_interface() -> None:
 
 def test_real_kubernetes_satisfies_the_adapter_interface() -> None:
     """Checked structurally, without constructing it -- that would need a cluster."""
-    for method in ("read_secret", "patch_secret", "ready_replicas"):
+    for method in ("read_secret", "write_secret", "ready_replicas"):
         assert hasattr(RealKubernetes, method)
 
 
 async def test_fake_kubernetes_records_patches(fake_kubernetes: FakeKubernetes) -> None:
-    await fake_kubernetes.patch_secret("trino-catalog-seed", {"finance.properties": "x"})
+    await fake_kubernetes.write_secret("trino-catalog-seed", {"finance.properties": "x"})
 
     assert await fake_kubernetes.read_secret("trino-catalog-seed") == {"finance.properties": "x"}

@@ -15,6 +15,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 from pymongo.asynchronous.database import AsyncDatabase
 
+from app.pipeline.snapshots import SnapshotStore
 from app.sections import SECTIONS, SectionName
 
 # One Cluster per Apchi deployment, so the Candidate is a singleton document.
@@ -36,20 +37,35 @@ class Candidate(BaseModel):
 
 
 class CandidateStore:
-    """Persistence for the Candidate. Nothing here touches Trino or Kubernetes."""
+    """Persistence for the Candidate. Nothing here touches Trino or Kubernetes.
 
-    def __init__(self, database: AsyncDatabase[dict[str, Any]]) -> None:
+    A Candidate is by definition *derived from* the latest Snapshot, so this needs
+    the Snapshot store: a fresh or reset Candidate carries that Snapshot's
+    configuration rather than being empty. An empty Candidate derived from a
+    non-empty Snapshot would read as "remove everything".
+    """
+
+    def __init__(self, database: AsyncDatabase[dict[str, Any]], snapshots: SnapshotStore) -> None:
         self._collection = database["candidate"]
+        self._snapshots = snapshots
 
     async def load(self) -> Candidate:
         document = await self._collection.find_one({"_id": CANDIDATE_ID})
         if document is None:
-            return Candidate(sections={name: {} for name in SECTIONS})
+            return await self._derive_from_latest()
         document.pop("_id", None)
         candidate = Candidate.model_validate(document)
         for name in SECTIONS:
             candidate.sections.setdefault(name, {})
         return candidate
+
+    async def _derive_from_latest(self) -> Candidate:
+        latest = await self._snapshots.latest()
+        number = None if latest is None else latest.number
+        return Candidate(
+            base_snapshot=number,
+            sections=await self._snapshots.sections_of(number),
+        )
 
     async def save(self, candidate: Candidate) -> None:
         candidate.updated_at = datetime.now(UTC)
@@ -60,14 +76,18 @@ class CandidateStore:
         )
 
     async def reset(self, base_snapshot: int | None = None) -> Candidate:
-        """Discard the Candidate's changes and re-derive from the latest Snapshot.
+        """Discard the Candidate's changes and re-derive it from a Snapshot.
 
-        Because nothing reaches the Cluster before Apply, this leaves the Effective
-        Cluster State untouched.
+        Re-derived means it carries that Snapshot's configuration, so its diff is
+        empty -- not that it is emptied. Because nothing reaches the Cluster before
+        Apply, this leaves the Effective Cluster State untouched.
         """
-        fresh = Candidate(
-            base_snapshot=base_snapshot,
-            sections={name: {} for name in SECTIONS},
-        )
+        if base_snapshot is None:
+            fresh = await self._derive_from_latest()
+        else:
+            fresh = Candidate(
+                base_snapshot=base_snapshot,
+                sections=await self._snapshots.sections_of(base_snapshot),
+            )
         await self.save(fresh)
         return fresh

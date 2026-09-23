@@ -1,7 +1,8 @@
 """Apply as a resource: the state machine, the stream, and surviving a crash.
 
-The engine is a no-op in this ticket -- nothing reaches Trino. What is under test
-is the machinery that drives it.
+What is under test is the machinery driving an Apply, not what an Apply does. The
+tests that need one to reach `succeeded` take the real coordinator, because
+Verification queries it.
 """
 
 import asyncio
@@ -35,10 +36,10 @@ async def test_apply_returns_immediately_with_an_identifier(client: AsyncClient)
     assert started.json()["stage"] == "validating"
 
 
-async def test_an_apply_walks_every_stage_in_order(client: AsyncClient) -> None:
-    apply_id = (await client.post("/api/v1/applies")).json()["id"]
+async def test_an_apply_walks_every_stage_in_order(applying_client: AsyncClient) -> None:
+    apply_id = (await applying_client.post("/api/v1/applies")).json()["id"]
 
-    record = await _settled(client, apply_id)
+    record = await _settled(applying_client, apply_id)
 
     assert record["stage"] == "succeeded"
     assert [event["stage"] for event in record["history"]] == [
@@ -51,12 +52,12 @@ async def test_an_apply_walks_every_stage_in_order(client: AsyncClient) -> None:
 
 
 async def test_the_record_holds_the_full_history_not_just_the_current_stage(
-    client: AsyncClient,
+    applying_client: AsyncClient,
 ) -> None:
     """So a client reconnecting mid-Apply can replay rather than see a blank timeline."""
-    apply_id = (await client.post("/api/v1/applies")).json()["id"]
+    apply_id = (await applying_client.post("/api/v1/applies")).json()["id"]
 
-    record = await _settled(client, apply_id)
+    record = await _settled(applying_client, apply_id)
 
     assert len(record["history"]) == 5
     assert all(event["at"] for event in record["history"])
@@ -80,12 +81,12 @@ async def test_an_unknown_apply_is_not_found(client: AsyncClient) -> None:
     assert missing.json()["code"] == "not_found"
 
 
-async def test_the_stream_replays_stages_already_past(client: AsyncClient) -> None:
+async def test_the_stream_replays_stages_already_past(applying_client: AsyncClient) -> None:
     """Connecting after the Apply finished still yields every stage."""
-    apply_id = (await client.post("/api/v1/applies")).json()["id"]
-    await _settled(client, apply_id)
+    apply_id = (await applying_client.post("/api/v1/applies")).json()["id"]
+    await _settled(applying_client, apply_id)
 
-    async with client.stream("GET", f"/api/v1/applies/{apply_id}/events") as response:
+    async with applying_client.stream("GET", f"/api/v1/applies/{apply_id}/events") as response:
         body = "".join([chunk async for chunk in response.aiter_text()])
 
     stages = [
@@ -94,12 +95,12 @@ async def test_the_stream_replays_stages_already_past(client: AsyncClient) -> No
     assert stages == ["validating", "applying", "verifying", "committing", "succeeded"]
 
 
-async def test_a_reconnect_replays_only_what_was_missed(client: AsyncClient) -> None:
+async def test_a_reconnect_replays_only_what_was_missed(applying_client: AsyncClient) -> None:
     """Last-Event-ID is what makes a dropped connection cheap."""
-    apply_id = (await client.post("/api/v1/applies")).json()["id"]
-    await _settled(client, apply_id)
+    apply_id = (await applying_client.post("/api/v1/applies")).json()["id"]
+    await _settled(applying_client, apply_id)
 
-    async with client.stream(
+    async with applying_client.stream(
         "GET", f"/api/v1/applies/{apply_id}/events", headers={"Last-Event-ID": "2"}
     ) as response:
         body = "".join([chunk async for chunk in response.aiter_text()])
@@ -110,11 +111,11 @@ async def test_a_reconnect_replays_only_what_was_missed(client: AsyncClient) -> 
     assert stages == ["committing", "succeeded"]
 
 
-async def test_events_carry_ids_so_a_client_can_resume(client: AsyncClient) -> None:
-    apply_id = (await client.post("/api/v1/applies")).json()["id"]
-    await _settled(client, apply_id)
+async def test_events_carry_ids_so_a_client_can_resume(applying_client: AsyncClient) -> None:
+    apply_id = (await applying_client.post("/api/v1/applies")).json()["id"]
+    await _settled(applying_client, apply_id)
 
-    async with client.stream("GET", f"/api/v1/applies/{apply_id}/events") as response:
+    async with applying_client.stream("GET", f"/api/v1/applies/{apply_id}/events") as response:
         body = "".join([chunk async for chunk in response.aiter_text()])
 
     assert [line for line in body.splitlines() if line.startswith("id: ")] == [

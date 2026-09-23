@@ -22,16 +22,35 @@ async def test_reads_the_catalog_seed_secret(real_kubernetes: RealKubernetes) ->
     assert "tpch.properties" in seed
 
 
-async def test_patches_and_reads_back(real_kubernetes: RealKubernetes) -> None:
-    """The durable half of the double-write: Apchi patches the Secret, and the
-    catalog survives a pod restart because of it."""
-    await real_kubernetes.patch_secret(
+async def test_writes_and_reads_back(real_kubernetes: RealKubernetes, seed_secret: None) -> None:
+    """The durable half of the double-write: Apchi writes the Secret, and the catalog
+    survives a pod restart because of it."""
+    await real_kubernetes.write_secret(
         CATALOG_SEED_SECRET, {"probe.properties": "connector.name=tpch\n"}
     )
 
     assert (await real_kubernetes.read_secret(CATALOG_SEED_SECRET))["probe.properties"].startswith(
         "connector.name=tpch"
     )
+
+
+async def test_a_write_removes_keys_it_leaves_out(
+    real_kubernetes: RealKubernetes, seed_secret: None
+) -> None:
+    """The contract the fake cannot prove. A Kubernetes merge patch merges the map
+    key by key, so removal needs an explicit null -- and without removal a dropped
+    Catalog would be seeded straight back in at the next restart."""
+    await real_kubernetes.write_secret(
+        CATALOG_SEED_SECRET, {"a.properties": "connector.name=tpch\n"}
+    )
+
+    await real_kubernetes.write_secret(
+        CATALOG_SEED_SECRET, {"b.properties": "connector.name=tpch\n"}
+    )
+
+    assert await real_kubernetes.read_secret(CATALOG_SEED_SECRET) == {
+        "b.properties": "connector.name=tpch\n"
+    }
 
 
 async def test_reports_ready_worker_replicas(real_kubernetes: RealKubernetes) -> None:

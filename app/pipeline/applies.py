@@ -109,17 +109,16 @@ class ApplyStore:
             update["$set"]["finished_at"] = event.at.isoformat()
         await self._collection.update_one({"_id": apply_id}, update)
 
+    async def record_snapshot(self, apply_id: str, number: int) -> None:
+        await self._collection.update_one({"_id": apply_id}, {"$set": {"snapshot": number}})
+
     async def fail(self, apply_id: str, reason: str) -> None:
         await self._collection.update_one({"_id": apply_id}, {"$set": {"failure_reason": reason}})
         await self.advance(apply_id, Stage.FAILED, detail=reason)
 
 
 class ApplyEngine(Protocol):
-    """What the pipeline does at each stage.
-
-    Slice 1 fills these in ticket by ticket; this ticket builds the machinery that
-    drives them and proves it survives a crash.
-    """
+    """What the pipeline does at each stage."""
 
     async def validate(self) -> None: ...
     async def apply(self) -> None: ...
@@ -128,7 +127,7 @@ class ApplyEngine(Protocol):
 
 
 class NoOpEngine:
-    """Does nothing. The stages are real, the work is not yet."""
+    """Does nothing. Used where the stages matter but the work does not."""
 
     async def validate(self) -> None: ...
     async def apply(self) -> None: ...
@@ -137,12 +136,17 @@ class NoOpEngine:
         return None
 
 
+#: Builds the engine for one Apply. A factory rather than a single instance because
+#: an engine carries the state its stages share.
+EngineFactory = Callable[[str], ApplyEngine]
+
+
 class ApplyRunner:
     """Drives an Apply through its stages, in the background."""
 
-    def __init__(self, store: ApplyStore, engine: ApplyEngine) -> None:
+    def __init__(self, store: ApplyStore, engine_factory: EngineFactory) -> None:
         self._store = store
-        self._engine = engine
+        self._engine_factory = engine_factory
         self._tasks: set[asyncio.Task[None]] = set()
 
     def start(self, record: ApplyRecord) -> None:
@@ -155,20 +159,26 @@ class ApplyRunner:
         # Every record emitted from here carries the identifier, so one id yields
         # the whole story of a failure.
         token = apply_id_var.set(apply_id)
+        engine = self._engine_factory(apply_id)
         steps: tuple[tuple[Stage, Callable[[], Awaitable[Any]]], ...] = (
-            (Stage.VALIDATING, self._engine.validate),
-            (Stage.APPLYING, self._engine.apply),
-            (Stage.VERIFYING, self._engine.verify),
-            (Stage.COMMITTING, self._engine.commit),
+            (Stage.VALIDATING, engine.validate),
+            (Stage.APPLYING, engine.apply),
+            (Stage.VERIFYING, engine.verify),
+            (Stage.COMMITTING, engine.commit),
         )
         try:
+            snapshot: int | None = None
             for index, (stage, step) in enumerate(steps):
                 if index:  # the first stage is recorded at creation
                     await self._store.advance(apply_id, stage)
                 logger.info("apply stage", extra={"stage": stage.value})
-                await step()
+                result = await step()
+                if stage is Stage.COMMITTING and isinstance(result, int):
+                    snapshot = result
+            if snapshot is not None:
+                await self._store.record_snapshot(apply_id, snapshot)
             await self._store.advance(apply_id, Stage.SUCCEEDED)
-            logger.info("apply succeeded")
+            logger.info("apply succeeded", extra={"snapshot": snapshot})
         except Exception as exc:
             logger.exception("apply failed")
             await self._store.fail(apply_id, f"{type(exc).__name__}: {exc}")

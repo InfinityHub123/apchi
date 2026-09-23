@@ -7,6 +7,7 @@ from fastapi import Depends, Request
 from app.api.errors import Conflict
 from app.pipeline.applies import ApplyStore
 from app.pipeline.candidate import CandidateStore
+from app.pipeline.snapshots import SnapshotStore
 
 
 def candidate_store(request: Request) -> CandidateStore:
@@ -15,6 +16,14 @@ def candidate_store(request: Request) -> CandidateStore:
 
 
 CandidateStoreDep = Annotated[CandidateStore, Depends(candidate_store)]
+
+
+def snapshot_store(request: Request) -> SnapshotStore:
+    store: SnapshotStore = request.app.state.snapshot_store
+    return store
+
+
+SnapshotStoreDep = Annotated[SnapshotStore, Depends(snapshot_store)]
 
 
 def apply_store(request: Request) -> ApplyStore:
