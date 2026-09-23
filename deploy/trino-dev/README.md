@@ -9,6 +9,11 @@ kubectl apply -f deploy/trino-dev/
 kubectl wait --for=condition=ready pod -l app=trino --timeout=300s
 ```
 
+`05-access-control.yaml` is **generated** — `scripts/export_access_control.py` writes it from
+Apchi's own generator, and CI fails if the two disagree. Do not edit it by hand. It is committed
+only because Trino refuses to boot without the file, so the coordinator has to be able to start
+before Apchi has ever run; Apchi rewrites the Secret on every Apply.
+
 ## The mechanism
 
 ```

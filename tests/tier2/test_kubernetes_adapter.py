@@ -8,7 +8,8 @@ a real cluster.
 
 import pytest
 
-from app.adapters.kubernetes import RealKubernetes
+from app.adapters.kubernetes import KubernetesAdapter, RealKubernetes
+from tests.tier2.conftest import ForwardedKubernetes
 
 pytestmark = pytest.mark.tier2
 
@@ -22,7 +23,7 @@ async def test_reads_the_catalog_seed_secret(real_kubernetes: RealKubernetes) ->
     assert "tpch.properties" in seed
 
 
-async def test_writes_and_reads_back(real_kubernetes: RealKubernetes, seed_secret: None) -> None:
+async def test_writes_and_reads_back(real_kubernetes: RealKubernetes, cluster_state: None) -> None:
     """The durable half of the double-write: Apchi writes the Secret, and the catalog
     survives a pod restart because of it."""
     await real_kubernetes.write_secret(
@@ -35,7 +36,7 @@ async def test_writes_and_reads_back(real_kubernetes: RealKubernetes, seed_secre
 
 
 async def test_a_write_removes_keys_it_leaves_out(
-    real_kubernetes: RealKubernetes, seed_secret: None
+    real_kubernetes: RealKubernetes, cluster_state: None
 ) -> None:
     """The contract the fake cannot prove. A Kubernetes merge patch merges the map
     key by key, so removal needs an explicit null -- and without removal a dropped
@@ -56,3 +57,12 @@ async def test_a_write_removes_keys_it_leaves_out(
 async def test_reports_ready_worker_replicas(real_kubernetes: RealKubernetes) -> None:
     """Verification compares this against the count from system.runtime.nodes."""
     assert await real_kubernetes.ready_replicas(WORKER_DEPLOYMENT) >= 1
+
+
+def test_the_forwarding_wrapper_satisfies_the_adapter_interface(
+    real_kubernetes: RealKubernetes,
+) -> None:
+    """The wrapper delegates method by method, so it is the thing most likely to fall
+    behind the adapter. Nothing else catches it: app.state.kubernetes is untyped, so a
+    missing method surfaces only as an AttributeError inside a running Apply."""
+    assert isinstance(ForwardedKubernetes(real_kubernetes), KubernetesAdapter)

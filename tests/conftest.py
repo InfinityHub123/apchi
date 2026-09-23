@@ -72,6 +72,46 @@ def _trino_container() -> DockerContainer:
     )
 
 
+def healthy_pod_spec() -> dict[str, Any]:
+    """A coordinator spec that meets §16's preconditions.
+
+    Mirrors deploy/trino-dev: Apchi-managed Secrets mounted as whole volumes, the seed
+    initContainer present, and an emptyDir -- writable, unlike a Secret -- over the
+    catalog store.
+    """
+    return {
+        "initContainers": [
+            {
+                "name": "seed-catalogs",
+                "volumeMounts": [
+                    {"name": "catalog-seed", "mountPath": "/data/trino/catalog-seed"},
+                    {"name": "catalog-store", "mountPath": "/data/trino/catalogs"},
+                ],
+            }
+        ],
+        "containers": [
+            {
+                "name": "trino",
+                "volumeMounts": [
+                    {
+                        "name": "config",
+                        "mountPath": "/etc/trino/config.properties",
+                        "subPath": "coordinator-config.properties",
+                    },
+                    {"name": "access-control", "mountPath": "/etc/trino/access-control"},
+                    {"name": "catalog-store", "mountPath": "/data/trino/catalogs"},
+                ],
+            }
+        ],
+        "volumes": [
+            {"name": "config", "configMap": {"name": "trino-config"}},
+            {"name": "access-control", "secret": {"secretName": "trino-access-control"}},
+            {"name": "catalog-seed", "secret": {"secretName": "trino-catalog-seed"}},
+            {"name": "catalog-store", "emptyDir": {}},
+        ],
+    }
+
+
 class FakeKubernetes:
     """Stands in for the Kubernetes adapter in tier 1.
 
@@ -88,6 +128,9 @@ class FakeKubernetes:
         self.secrets: dict[str, dict[str, str]] = {}
         self.replicas: dict[str, int] = {}
         self.image = TRINO_IMAGE
+        #: What the coordinator Deployment looks like. Defaults to a spec that satisfies
+        #: every precondition, so a test only describes the violation it cares about.
+        self.pod_spec: dict[str, Any] = healthy_pod_spec()
         self.pods: dict[str, dict[str, Any]] = {}
         #: Every pod ever created, so a test can prove one was and that it went away.
         self.pod_history: list[str] = []
@@ -120,6 +163,9 @@ class FakeKubernetes:
 
     async def deployment_image(self, deployment: str, container: str) -> str:
         return self.image
+
+    async def deployment_pod_spec(self, deployment: str) -> dict[str, Any]:
+        return self.pod_spec
 
     def attach_validation(self, container: DockerContainer) -> None:
         """Point the stand-in validation pod at a container. Until this is called a

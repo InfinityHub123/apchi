@@ -16,6 +16,8 @@ from typing import Any
 from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.config import Settings
+from app.pipeline import preconditions
+from app.pipeline.access_control import deliver as deliver_access_control
 from app.pipeline.auto_rollback import declare_incident, restore
 from app.pipeline.candidate import CandidateStore
 from app.pipeline.maintenance import MaintenanceStore
@@ -60,6 +62,8 @@ class Engine:
         static checks cannot answer: will Trino accept this? Nothing here reaches the
         Cluster, so a failure leaves it exactly as it was.
         """
+        await self._assert_preconditions()
+
         candidate = await self._candidates.load()
         self._desired = dict(candidate.sections)
 
@@ -76,6 +80,14 @@ class Engine:
             self._apply_id,
         )
 
+    async def _assert_preconditions(self) -> None:
+        """Before every Apply, not once at startup: a chart change can reintroduce a
+        violation silently, and the resulting failure never looks like its cause."""
+        spec = preconditions.pod_spec(
+            await self._kubernetes.deployment_pod_spec(self._settings.coordinator_deployment_name)
+        )
+        preconditions.check(spec, self._settings)
+
     async def apply(self) -> None:
         """Patch the Secret, then issue the DDL.
 
@@ -88,6 +100,12 @@ class Engine:
         There is no propagation race: nothing reads the seed mount until the next pod
         start, so the Secret write needs no wait before the DDL.
         """
+        # Re-asserted every Apply rather than written once. It is generated, not
+        # Operator-editable, so this is idempotent -- and it means a Cluster whose
+        # access-control Secret was changed outside Apchi is corrected by the next Apply
+        # instead of quietly keeping catalog DDL open to everyone.
+        await deliver_access_control(self._kubernetes, self._settings)
+
         await self._kubernetes.write_secret(
             self._settings.catalog_secret_name, render_secret(self._desired)
         )

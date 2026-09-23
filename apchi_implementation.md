@@ -309,6 +309,26 @@ access to every catalog, the same trap as the `queries` block in §13.4. Note Tr
 only `all`, `read-only` and `none`; `owner` exists in the source (`AccessMode`, where `owner`
 implies `all` implies `read-only`) and is what this depends on.
 
+The identity is written as an **anchored** pattern. Trino matches these against the whole
+username, so a bare `apchi` already cannot match `notapchi`, but the cost of being wrong is
+handing catalog DDL to anyone whose username contains Apchi's, which is worth a cheap anchor.
+
+Apchi generates the whole file and **re-delivers it on every Apply** rather than writing it once,
+so a Cluster whose rules were changed outside Apchi is corrected rather than quietly left with
+catalog DDL open to everyone.
+
+**The file cannot be absent at startup.** Trino reads `security.config-file` while loading the
+system access control and refuses to boot without it — "Configuration is invalid", with the pod
+going to `Failed`. A Cluster therefore cannot wait for Apchi to write the file before starting, so
+the bootstrap copy is **committed as generated output** with a CI drift check, the same pattern
+`openapi.json` uses: nothing is hand-maintained, nothing can drift from what Apchi produces, and
+the Cluster still comes up on its own. Adoption (§15) is where a Cluster's first real contact with
+Apchi belongs; until it exists, that committed copy is the stand-in.
+
+`security.refresh-period` must be set for the whole-volume mount to be worth anything. Without it
+Trino reads the rules once at startup, and a Secret the kubelet faithfully keeps current is never
+re-read. The two delays add, as in §7.5.
+
 Durability lives in **etcd**, not in a volume. The Secret is the record that survives the pod;
 the store directory is the live working copy, rebuilt from the Secret at every start. That is
 why Trino needs no persistent storage and why the Cluster comes up with its full catalog set
@@ -955,10 +975,18 @@ see the change.
 Checked at Adoption **and before every Apply**, because a later chart change can reintroduce
 it silently.
 
-**The second precondition: the catalog seed initContainer is present**, and
-`catalog.config-dir` is a plain container path rather than a mounted volume (§7.1). Without
-the initContainer the Cluster comes up with no catalogs; with a volume mounted there, Trino
-cannot write and every `CREATE CATALOG` fails.
+**The second precondition: the catalog seed initContainer is present**, and nothing
+**read-only** is mounted over `catalog.config-dir` or any directory above it (§7.1). Without the
+initContainer the Cluster comes up with no catalogs.
+
+An `emptyDir` there is correct and is exactly what the seed design asks for — it is writable, and
+it is what the initContainer copies into. What breaks the Cluster is a **Secret or ConfigMap**
+volume over that path, because those are always mounted read-only, which is the finding the whole
+seed design rests on. Apchi therefore checks the volume's *kind*, not whether a volume is present
+at all.
+
+All three checks report every problem they find rather than the first, because an Admin fixing a
+manifest should see the whole list.
 
 ## Rollout mechanics
 

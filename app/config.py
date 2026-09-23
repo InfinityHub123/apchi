@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     #: Holds the durable copy of every catalog. Apchi patches it; an initContainer
     #: seeds the coordinator's store directory from it at pod start.
     catalog_secret_name: str = "trino-catalog-seed"
+    #: Holds the generated system access-control file. Mounted as a whole volume so the
+    #: kubelet keeps it current; never with subPath (§16).
+    access_control_secret_name: str = "trino-access-control"
+    #: Where Trino keeps its dynamic catalog store. Nothing read-only may be mounted
+    #: here or above it, or every CREATE CATALOG fails.
+    catalog_store_dir: str = "/data/trino/catalogs"
+
     #: Compared against the worker count Trino reports, so the expectation adjusts
     #: when an Admin scales the Cluster.
     worker_deployment_name: str = "trino-worker"

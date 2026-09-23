@@ -28,6 +28,9 @@ jobs:
       - name: OpenAPI contract unchanged
         run: uv run python scripts/export_openapi.py --check
 
+      - name: Access-control manifest matches what Apchi generates
+        run: uv run python scripts/export_access_control.py --check
+
       # Real MongoDB and real Trino via Testcontainers; only Kubernetes is faked.
       - name: Tier 1 -- behavioural
         run: uv run pytest tests/tier1 -q

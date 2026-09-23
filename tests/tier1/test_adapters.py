@@ -10,9 +10,13 @@ def test_fake_kubernetes_satisfies_the_adapter_interface() -> None:
 
 
 def test_real_kubernetes_satisfies_the_adapter_interface() -> None:
-    """Checked structurally, without constructing it -- that would need a cluster."""
-    for method in ("read_secret", "write_secret", "ready_replicas"):
-        assert hasattr(RealKubernetes, method)
+    """Constructing it is safe with no cluster: it builds its clients on first use.
+
+    Checked against the Protocol rather than a list of method names, so adding a method
+    to the adapter cannot leave a stand-in behind without failing here. A hand-written
+    list is how the tier 2 wrapper came to be missing one.
+    """
+    assert isinstance(RealKubernetes(), KubernetesAdapter)
 
 
 async def test_fake_kubernetes_records_patches(fake_kubernetes: FakeKubernetes) -> None:
