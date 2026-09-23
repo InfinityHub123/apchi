@@ -201,6 +201,15 @@
         "title": "Health",
         "type": "object"
       },
+      "Outcome": {
+        "enum": [
+          "running",
+          "passed",
+          "failed"
+        ],
+        "title": "Outcome",
+        "type": "string"
+      },
       "ResourceChange": {
         "properties": {
           "after": {
@@ -435,6 +444,104 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "ValidationFailure": {
+        "description": "One reason a Candidate should not be applied, named well enough for an\nOperator to know what to fix.",
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource"
+          },
+          "section": {
+            "anyOf": [
+              {
+                "enum": [
+                  "catalogs",
+                  "client_certificates",
+                  "certificate_mapping",
+                  "permissions",
+                  "resource_groups",
+                  "event_listeners"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Section"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "ValidationFailure",
+        "type": "object"
+      },
+      "ValidationRecord": {
+        "properties": {
+          "base_snapshot": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Snapshot"
+          },
+          "failures": {
+            "description": "Every reason the Candidate should not be applied, not just the first.",
+            "items": {
+              "$ref": "#/components/schemas/ValidationFailure"
+            },
+            "title": "Failures",
+            "type": "array"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/Outcome"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "outcome",
+          "started_at"
+        ],
+        "title": "ValidationRecord",
         "type": "object"
       }
     }
@@ -899,6 +1006,92 @@
         "summary": "One Snapshot's configuration",
         "tags": [
           "snapshots"
+        ]
+      }
+    },
+    "/api/v1/validations": {
+      "get": {
+        "operationId": "list_validations_api_v1_validations_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ValidationRecord"
+                  },
+                  "title": "Response List Validations Api V1 Validations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Past and current Validations",
+        "tags": [
+          "validations"
+        ]
+      },
+      "post": {
+        "operationId": "start_validation_api_v1_validations_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Validate the Configuration Candidate without applying it",
+        "tags": [
+          "validations"
+        ]
+      }
+    },
+    "/api/v1/validations/{validation_id}": {
+      "get": {
+        "operationId": "get_validation_api_v1_validations__validation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "validation_id",
+            "required": true,
+            "schema": {
+              "title": "Validation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "One Validation's verdict",
+        "tags": [
+          "validations"
         ]
       }
     }

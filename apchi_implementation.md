@@ -183,6 +183,19 @@ No workers are needed; this tests whether configuration *loads*, not whether que
 The signal is `/v1/info` reporting `"starting": false`, the same check the standard
 readiness probe uses.
 
+Two things about the pod come from the Trino image rather than from Apchi, and both are easy to
+get wrong:
+
+- Dynamic catalogs are switched on through the `CATALOG_MANAGEMENT` environment variable, which
+  the image's own `config.properties` reads. Apchi therefore mounts no config file and overrides
+  no command.
+- The image ships **example catalogs** — `jmx`, `memory`, `tpch`, `tpcds` — in
+  `/etc/trino/catalog`. The validation pod hides them behind an empty volume, so the probe holds
+  exactly what the Candidate declares. Without that, a Catalog an Operator quite reasonably named
+  `memory` fails Validation as already existing, for a reason having nothing to do with it. The
+  Cluster needs no such mount: pointing `catalog.config-dir` elsewhere already stops Trino
+  reading that directory.
+
 **Validation has two modes**, because Apply does:
 
 - **File-based Sections** (permissions, resource groups, event listeners, certificate
@@ -195,9 +208,27 @@ Requirements:
 
 - A **hard timeout**. A pod that never becomes ready fails Validation; it must not hang the
   pipeline.
-- **Network reachability.** The validation pod must reach the data sources a catalog
-  references, or catalog validation fails for reasons unrelated to the configuration.
+- **Network reachability**, in both directions. The validation pod must reach the data sources a
+  catalog references, or catalog validation fails for reasons unrelated to the configuration.
+  Apchi must reach the pod: it connects to the pod's own address on 8080, which assumes Apchi
+  runs in the Cluster and that no default-deny NetworkPolicy stands between them. In a
+  namespace with default-deny ingress, Validation needs a policy allowing Apchi to reach pods
+  labelled as validation pods, or every Validation fails as a coordinator that never served.
 - **Cleanup on Apchi crash**, or orphaned pods accumulate.
+
+### The checks that need no pod run first
+
+The ephemeral coordinator starts **empty**, which means it cannot see a collision with a
+catalog that exists on the Cluster but is not managed by Apchi — one seeded before Apchi
+arrived, say. That check is therefore made against the Cluster before the pod is created: a
+Catalog the Candidate would create must not already exist there. Without it the DDL fails
+*after* Apply has written the Secret, which is the divergence of §10 for a reason the Operator
+could have been told about before anything moved. Adoption (§15) is how such a catalog comes
+under management.
+
+A Candidate with no catalogs gets no pod at all. The pod is the expensive part of Validation,
+and an empty Candidate is a real case: the first Apply of a fresh Cluster, and every Apply
+that only drops things.
 
 Note the limit honestly: some connectors initialise lazily, so a wrong JDBC URL can pass
 startup validation and only fail at query time.
@@ -913,6 +944,7 @@ The contract must be stable, because Operators automate against it.
 /api/v1/event-listeners
 /api/v1/review
 /api/v1/applies
+/api/v1/validations
 /api/v1/snapshots
 ```
 
@@ -935,6 +967,22 @@ GET  /api/v1/applies/{id}         → current stage, full stage history, failure
 GET  /api/v1/applies/{id}/events  → SSE stream of stage transitions
 GET  /api/v1/applies              → history
 ```
+
+## Validations
+
+The Validate action of §9 is a resource for the same reason: bringing up the ephemeral
+coordinator takes as long as it takes.
+
+```
+POST /api/v1/validations          → 202 { "id": "val_...", "outcome": "running" }
+GET  /api/v1/validations/{id}     → outcome, and every failure with its resource and reason
+GET  /api/v1/validations          → history
+```
+
+It runs the Apply pipeline's Validation stage and stops there, so the Validate action cannot
+drift from the Validation an Apply performs — it is the same code path. A Validation does
+**not** freeze the Candidate: it changes nothing, so there is nothing for a concurrent edit to
+corrupt.
 
 Two properties matter more than the transport. The Apply record lives in **MongoDB**, so the
 stream is a view over durable state rather than in-memory progress. And the record holds the

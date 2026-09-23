@@ -8,6 +8,7 @@ from app.api.errors import Conflict
 from app.pipeline.applies import ApplyStore
 from app.pipeline.candidate import CandidateStore
 from app.pipeline.snapshots import SnapshotStore
+from app.pipeline.validations import ValidationStore
 
 
 def candidate_store(request: Request) -> CandidateStore:
@@ -32,6 +33,14 @@ def apply_store(request: Request) -> ApplyStore:
 
 
 ApplyStoreDep = Annotated[ApplyStore, Depends(apply_store)]
+
+
+def validation_store(request: Request) -> ValidationStore:
+    store: ValidationStore = request.app.state.validation_store
+    return store
+
+
+ValidationStoreDep = Annotated[ValidationStore, Depends(validation_store)]
 
 
 async def candidate_not_frozen(applies: ApplyStoreDep) -> None:

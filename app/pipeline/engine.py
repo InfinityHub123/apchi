@@ -1,9 +1,12 @@
 """The real Apply engine.
 
-Walks the Candidate through Apply, Verification and Commit against the actual
-Cluster. Validation is still a stub: it arrives with the ephemeral Trino.
+Walks the Candidate through Validation, Apply, Verification and Commit.
 
-The ordering that matters most is in `apply`: the Secret is patched *before* the DDL
+Validation touches nothing but an ephemeral coordinator of its own, which is what
+makes it safe to run on its own: the Validate action is this engine's `validate` and
+nothing after it.
+
+The ordering that matters most is in `apply`: the Secret is written *before* the DDL
 is issued.
 """
 
@@ -15,6 +18,7 @@ from app.adapters.trino import Trino
 from app.config import Settings
 from app.pipeline.candidate import CandidateStore
 from app.pipeline.snapshots import SnapshotStore
+from app.pipeline.validation import validate_candidate
 from app.pipeline.verification import verify
 from app.sections import SectionName
 from app.sections.catalogs import apply as catalog_apply
@@ -46,15 +50,27 @@ class Engine:
         self._plan = catalog_apply.CatalogPlan()
 
     async def validate(self) -> None:
-        """Static validation already happened on every request. Trino validation --
-        the ephemeral coordinator -- is a later ticket, so this stage only captures
-        the Candidate the rest of the Apply will work from."""
+        """Capture the Candidate, plan the change, then prove it against a real Trino.
+
+        Static validation already ran on every request. What is left is the question
+        static checks cannot answer: will Trino accept this? Nothing here reaches the
+        Cluster, so a failure leaves it exactly as it was.
+        """
         candidate = await self._candidates.load()
         self._desired = dict(candidate.sections)
 
         current = await self._snapshots.sections_of(candidate.base_snapshot)
         self._plan = catalog_apply.plan(self._desired.get(SECTION, {}), current.get(SECTION, {}))
         logger.info("planned", extra={"catalogs": self._plan.summary()})
+
+        await validate_candidate(
+            self._desired,
+            self._plan.created,
+            self._trino,
+            self._kubernetes,
+            self._settings,
+            self._apply_id,
+        )
 
     async def apply(self) -> None:
         """Patch the Secret, then issue the DDL.
