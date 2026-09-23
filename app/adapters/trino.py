@@ -6,6 +6,7 @@ Cluster membership comes from the system.runtime.nodes system table rather than
 /v1/node, which returns 404 on Trino 483.
 """
 
+import re
 from typing import Any
 
 import httpx
@@ -51,3 +52,46 @@ class Trino:
 
     async def catalogs(self) -> set[str]:
         return {row[0] for row in await self.query("SHOW CATALOGS")}
+
+    async def create_catalog(self, name: str, connector: str, properties: dict[str, str]) -> None:
+        """Issues CREATE CATALOG. Trino writes the .properties file itself as a side
+        effect, so Apchi never touches the coordinator's store directory."""
+        rendered = ", ".join(
+            f"{_identifier(key)} = {_literal(value)}" for key, value in sorted(properties.items())
+        )
+        clause = f" WITH ({rendered})" if rendered else ""
+        await self.query(
+            f"CREATE CATALOG {_identifier(name)} USING {_connector_name(connector)}{clause}"
+        )
+
+    async def drop_catalog(self, name: str) -> None:
+        """Issues DROP CATALOG. This permanently deletes the backing .properties
+        file, and the Hive, Iceberg, Delta Lake and Hudi connectors are documented
+        as not releasing all resources when a catalog is dropped."""
+        await self.query(f"DROP CATALOG {_identifier(name)}")
+
+
+_CONNECTOR_NAME = re.compile(r"\A[a-z0-9_-]+\Z")
+
+
+def _connector_name(value: str) -> str:
+    """Bare, never delimited. Trino rejects a quoted identifier after USING: the
+    quotes land inside the name it validates, so "memory" is not the memory
+    connector."""
+    if not _CONNECTOR_NAME.match(value):
+        raise ValueError(f"unusable connector name: {value!r}")
+    return value
+
+
+def _identifier(value: str) -> str:
+    """A quoted SQL identifier. Catalog names are constrained by their model, but
+    pass-through property keys are arbitrary strings and often contain hyphens."""
+    escaped = value.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _literal(value: str) -> str:
+    """A SQL string literal. Property values are Operator-supplied, so they are
+    escaped rather than interpolated."""
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"

@@ -311,6 +311,51 @@
         "title": "SectionDiff",
         "type": "object"
       },
+      "Snapshot": {
+        "properties": {
+          "apply_id": {
+            "description": "The Apply that produced this Snapshot.",
+            "title": "Apply Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "number": {
+            "description": "Sequential within this Cluster.",
+            "title": "Number",
+            "type": "integer"
+          },
+          "sections": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "propertyNames": {
+              "enum": [
+                "catalogs",
+                "client_certificates",
+                "certificate_mapping",
+                "permissions",
+                "resource_groups",
+                "event_listeners"
+              ]
+            },
+            "title": "Sections",
+            "type": "object"
+          }
+        },
+        "required": [
+          "number",
+          "sections",
+          "created_at",
+          "apply_id"
+        ],
+        "title": "Snapshot",
+        "type": "object"
+      },
       "Stage": {
         "enum": [
           "validating",
@@ -787,6 +832,73 @@
         "summary": "What an Apply would change",
         "tags": [
           "candidate"
+        ]
+      }
+    },
+    "/api/v1/snapshots": {
+      "get": {
+        "operationId": "list_snapshots_api_v1_snapshots_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Snapshot"
+                  },
+                  "title": "Response List Snapshots Api V1 Snapshots Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Committed Snapshots, newest first",
+        "tags": [
+          "snapshots"
+        ]
+      }
+    },
+    "/api/v1/snapshots/{number}": {
+      "get": {
+        "operationId": "get_snapshot_api_v1_snapshots__number__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Snapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "One Snapshot's configuration",
+        "tags": [
+          "snapshots"
         ]
       }
     }

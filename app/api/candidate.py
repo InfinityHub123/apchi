@@ -5,7 +5,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, status
 from pydantic import BaseModel, Field
 
-from app.api.deps import CandidateStoreDep, CandidateUnfrozen
+from app.api.deps import CandidateStoreDep, CandidateUnfrozen, SnapshotStoreDep
 from app.sections import SECTIONS, SectionName
 
 router = APIRouter(tags=["candidate"])
@@ -55,11 +55,12 @@ def _diff(before: dict[str, Any], after: dict[str, Any]) -> list[ResourceChange]
 
 
 @router.get("/review", response_model=Review, summary="What an Apply would change")
-async def review(store: CandidateStoreDep) -> Review:
+async def review(store: CandidateStoreDep, snapshots: SnapshotStoreDep) -> Review:
     candidate = await store.load()
-    # Until Commit exists there is no Snapshot, so the Candidate is diffed against
-    # an empty baseline: everything staged reads as added.
-    baseline: dict[SectionName, dict[str, Any]] = {name: {} for name in SECTIONS}
+    # Diffed against the Snapshot the Candidate was derived from, so Review answers
+    # "what would this Apply change" rather than "what is staged". Before the first
+    # Snapshot the baseline is empty and everything staged reads as added.
+    baseline = await snapshots.sections_of(candidate.base_snapshot)
 
     sections = [
         SectionDiff(section=name, changes=_diff(baseline[name], candidate.sections.get(name, {})))

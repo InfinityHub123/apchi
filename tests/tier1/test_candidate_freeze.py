@@ -45,7 +45,7 @@ async def frozen(settings: Settings):
         AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as client,
         app.router.lifespan_context(app),
     ):
-        app.state.apply_runner._engine = engine
+        app.state.apply_runner._engine_factory = lambda _apply_id: engine
         started = await client.post("/api/v1/applies")
         yield client, started.json()["id"], engine
         engine.release.set()

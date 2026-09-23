@@ -358,6 +358,14 @@ silently disappears at the next pod restart, possibly weeks later, with nothing 
 two events. There is no propagation race here: nothing reads the seed mount until the next pod
 start, so the Secret write needs no wait before the DDL.
 
+The Secret's contents are **replaced**, not merged: Apchi renders the whole catalog Secret from
+the Candidate on every Apply, so a Catalog the Operator removed disappears from the durable copy
+too. A Kubernetes merge patch merges the data map key by key, so removing a key takes an
+explicit null — without it a dropped Catalog is seeded straight back in at the next pod restart,
+which is the same silent, weeks-later failure in reverse. A consequence worth stating: a catalog
+that exists on the Cluster but not in the Candidate is removed from the seed by the next Apply.
+Bringing pre-existing catalogs under management is Adoption's job (§12), not Apply's.
+
 # 8. Verification
 
 Verification answers a different question from Validation: *did the Cluster adopt the
