@@ -161,6 +161,22 @@ class PortForward:
         raise AssertionError(f"coordinator not serving through the forward on {self.port}")
 
 
+def _listener_volume_present() -> bool:
+    """Whether Apchi's volume is on the coordinator right now.
+
+    Checked before patching it away, because a patch that changes nothing still bumps the
+    Deployment's generation and starts a rollout nobody needed.
+    """
+    volumes = kubectl(
+        "get",
+        "deployment",
+        "trino-coordinator",
+        "-o",
+        "jsonpath={.spec.template.spec.volumes[*].name}",
+    )
+    return "apchi-event-listener" in volumes.split()
+
+
 def _coordinator_pods() -> int:
     """How many coordinator pods exist, Terminating included."""
     listed = kubectl("get", "pods", "-l", "app=trino,component=coordinator", "--no-headers")
@@ -362,16 +378,25 @@ async def cluster_state(
             await real_kubernetes.write_secret(name, content)
         # Apchi mounts its own volume on the coordinator when a listener is configured.
         # Left behind, the next test inherits a listener it never asked for.
-        kubectl(
-            "patch",
-            "deployment",
-            "trino-coordinator",
-            "--type=strategic",
-            "-p",
-            '{"spec":{"template":{"spec":{"volumes":[{"name":"apchi-event-listener",'
-            '"$patch":"delete"}],"containers":[{"name":"trino","volumeMounts":'
-            '[{"mountPath":"/etc/trino/event-listener.properties","$patch":"delete"}]}]}}}}',
-        )
+        #
+        # Removing it changes the pod template, which starts a rollout -- so this waits for
+        # it. Leaving a rollout in flight was the whole bug: the next test began while the
+        # coordinator was being replaced, its port-forward attached to a pod on its way out,
+        # and its very first Trino call was refused long before it reached a rollout of its
+        # own.
+        if _listener_volume_present():
+            kubectl(
+                "patch",
+                "deployment",
+                "trino-coordinator",
+                "--type=strategic",
+                "-p",
+                '{"spec":{"template":{"spec":{"volumes":[{"name":"apchi-event-listener",'
+                '"$patch":"delete"}],"containers":[{"name":"trino","volumeMounts":'
+                '[{"mountPath":"/etc/trino/event-listener.properties","$patch":"delete"}]}]}}}}',
+            )
+            kubectl("rollout", "status", COORDINATOR, "--timeout=600s")
+            forward.restart()
 
         if changed_rules:
             # Writing the Secret back is not enough. Trino re-reads the rules on its own
