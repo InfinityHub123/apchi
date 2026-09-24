@@ -153,6 +153,12 @@ class PortForward:
         raise AssertionError(f"coordinator not serving through the forward on {self.port}")
 
 
+def _coordinator_pods() -> int:
+    """How many coordinator pods exist, Terminating included."""
+    listed = kubectl("get", "pods", "-l", "app=trino,component=coordinator", "--no-headers")
+    return len([line for line in listed.splitlines() if line.strip()])
+
+
 def coordinator_log(lines: int = 400) -> str:
     """The coordinator's own log.
 
@@ -245,14 +251,24 @@ class ForwardedKubernetes:
         state = await self._real.rollout_state(deployment)
         if self._cluster is None or not state.complete:
             return state
-        if self._cluster.serving():
-            return state
-        # Kubernetes is satisfied but this tunnel is not usable, so the harness is not
-        # ready even though the Cluster is. Report it as unavailable and re-establish:
-        # Verification talks to Trino before it talks to Kubernetes, so there is no later
-        # chance to fix it.
-        self._cluster.restart(await_trino=False)
-        return state.model_copy(update={"ready": 0, "unavailable": state.replicas})
+
+        unready = state.model_copy(update={"ready": 0, "unavailable": state.replicas})
+
+        # Kubernetes calls the rollout complete while the previous pod is still
+        # Terminating, and a Terminating pod still matches the Service selector -- so a
+        # port-forward can be attached to one that is about to vanish. Waiting for exactly
+        # one coordinator pod is what makes the tunnel's target unambiguous.
+        if _coordinator_pods() != 1:
+            return unready
+
+        # Rebuilt rather than reused, so the tunnel is established *after* the rollout
+        # finished and cannot be holding the pod that was replaced. Verification talks to
+        # Trino before it talks to Kubernetes, so there is no later chance to fix this.
+        try:
+            self._cluster.restart(await_trino=True)
+        except AssertionError:
+            return unready
+        return state
 
     async def mount_secret_file(
         self, deployment: str, container: str, volume: str, secret: str, path: str, key: str
