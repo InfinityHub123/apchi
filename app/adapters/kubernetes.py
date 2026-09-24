@@ -87,6 +87,16 @@ class KubernetesAdapter(Protocol):
 
     async def create_pod(self, manifest: dict[str, Any]) -> None: ...
 
+    async def create_secret(
+        self, name: str, data: dict[str, str], labels: dict[str, str]
+    ) -> None: ...
+
+    async def delete_secret(self, name: str) -> None: ...
+
+    async def delete_secrets(self, label_selector: str) -> list[str]: ...
+
+    async def pod_logs(self, name: str, tail: int) -> str: ...
+
     async def pod_state(self, name: str) -> PodState: ...
 
     async def delete_pod(self, name: str) -> None: ...
@@ -294,6 +304,55 @@ class RealKubernetes:
 
     async def create_pod(self, manifest: dict[str, Any]) -> None:
         await run_in_threadpool(self._core.create_namespaced_pod, self._namespace, manifest)
+
+    async def create_secret(self, name: str, data: dict[str, str], labels: dict[str, str]) -> None:
+        """Created rather than patched, because this one is born and dies with a pod."""
+        await run_in_threadpool(
+            self._core.create_namespaced_secret,
+            self._namespace,
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {"name": name, "labels": labels},
+                "stringData": data,
+            },
+        )
+
+    async def delete_secret(self, name: str) -> None:
+        """Idempotent: one already gone is the outcome the caller wanted."""
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            await run_in_threadpool(self._core.delete_namespaced_secret, name, self._namespace)
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+
+    async def delete_secrets(self, label_selector: str) -> list[str]:
+        secrets = await run_in_threadpool(
+            self._core.list_namespaced_secret, self._namespace, label_selector=label_selector
+        )
+        names = [secret.metadata.name for secret in secrets.items]
+        for name in names:
+            await self.delete_secret(name)
+        return names
+
+    async def pod_logs(self, name: str, tail: int) -> str:
+        """The pod's own account of why it stopped.
+
+        Read for one reason: when a probe refuses to start, its log is the only place the
+        reason exists. Trino writes nothing to the termination-log file Kubernetes would
+        otherwise surface.
+        """
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            logs = await run_in_threadpool(
+                self._core.read_namespaced_pod_log, name, self._namespace, tail_lines=tail
+            )
+            return str(logs)
+        except ApiException:
+            return ""
 
     async def pod_state(self, name: str) -> PodState:
         from kubernetes.client.exceptions import ApiException

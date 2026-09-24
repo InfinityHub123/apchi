@@ -219,6 +219,18 @@ class ForwardedKubernetes:
         self.created_pods.append(manifest["metadata"]["name"])
         await self._real.create_pod(manifest)
 
+    async def create_secret(self, name: str, data: dict[str, str], labels: dict[str, str]) -> None:
+        await self._real.create_secret(name, data, labels)
+
+    async def delete_secret(self, name: str) -> None:
+        await self._real.delete_secret(name)
+
+    async def delete_secrets(self, label_selector: str) -> list[str]:
+        return await self._real.delete_secrets(label_selector)
+
+    async def pod_logs(self, name: str, tail: int) -> str:
+        return await self._real.pod_logs(name, tail)
+
     async def restart_deployment(self, deployment: str, reason: str) -> None:
         await self._real.restart_deployment(deployment, reason)
 
@@ -254,13 +266,24 @@ class ForwardedKubernetes:
 
     async def pod_state(self, name: str) -> PodState:
         state = await self._real.pod_state(name)
-        if state.host is None:
+        if state.host is None or state.problem is not None:
+            # No point tunnelling to a pod that is already failing -- and a probe that is
+            # *meant* to fail, like a listener whose brokers cannot be reached, would take
+            # the forward down with it and turn a clean Validation failure into a harness
+            # error.
             return state
         if name not in self._forwards:
             forward = PortForward(f"pod/{name}", state.port)
-            # The pod has an address but Trino may still be starting, which the
-            # caller is already polling for; wait only for the tunnel.
-            forward.start(await_trino=False)
+            try:
+                # The pod has an address but Trino may still be starting, which the caller
+                # is already polling for; wait only for the tunnel.
+                forward.start(await_trino=False)
+            except AssertionError:
+                # The pod went away while the tunnel was being built. Report what Kubernetes
+                # said and let the caller poll again; the harness failing to connect is not
+                # a verdict about the Candidate.
+                forward.stop()
+                return state
             self._forwards[name] = forward
         else:
             self._forwards[name].ensure_alive()
