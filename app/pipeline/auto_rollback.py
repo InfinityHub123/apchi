@@ -17,6 +17,7 @@ import httpx
 
 from app.config import Settings
 from app.pipeline.maintenance import EngagedBy, MaintenanceStore
+from app.pipeline.rollout import roll_out
 from app.pipeline.verification import verify
 from app.sections import SectionName
 from app.sections.base import Cluster, Resources
@@ -46,8 +47,21 @@ async def restore(
     Each Section knows how to undo itself, including what it can and cannot assume about
     how far a failed Apply got. The pipeline only decides that this happens once.
     """
-    for section in REGISTERED:
-        await section.restore(cluster, snapshot_sections.get(section.name, {}))
+    changed = {
+        section.name
+        for section in REGISTERED
+        if await section.restore(cluster, snapshot_sections.get(section.name, {}))
+    }
+
+    # A Section Trino adopts only by restarting has to be restarted to be *un*done too,
+    # and that restart is part of the single bounded attempt rather than a retry.
+    if any(section.requires_rollout and section.name in changed for section in REGISTERED):
+        await roll_out(
+            cluster.kubernetes,
+            cluster.settings.coordinator_deployment_name,
+            "auto rollback to the latest Snapshot",
+            cluster.settings.rollout_timeout_seconds,
+        )
 
     await verify(
         cluster,

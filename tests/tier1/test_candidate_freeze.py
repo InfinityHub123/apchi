@@ -12,13 +12,21 @@ from httpx import ASGITransport, AsyncClient
 
 from app.config import Settings
 from app.main import create_app
-from app.pipeline.applies import ApplyStore, Stage
+from app.pipeline.applies import ApplyEngine, ApplyStore, Stage
 
 PG = {
     "name": "finance",
     "connector": "postgresql",
     "properties": {"connection-url": "jdbc:postgresql://db:5432/f"},
 }
+
+
+def test_the_slow_engine_satisfies_the_pipeline_interface() -> None:
+    """A double that has fallen behind the protocol fails inside a running Apply, as an
+    AttributeError at whichever stage first calls the method it is missing -- which then
+    looks like a rollback failure and engages Maintenance Mode. Checked structurally so
+    adding a stage cannot leave this behind silently."""
+    assert isinstance(SlowEngine(), ApplyEngine)
 
 
 class SlowEngine:
@@ -34,6 +42,13 @@ class SlowEngine:
     async def verify(self) -> None: ...
     async def commit(self) -> int | None:
         return None
+
+    def rollout_needed(self) -> bool:
+        return False
+
+    async def roll_out(self) -> None: ...
+    async def roll_back(self) -> None: ...
+    async def declare_incident(self, reason: str) -> None: ...
 
 
 @pytest.fixture

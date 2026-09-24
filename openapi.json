@@ -650,6 +650,7 @@
         "enum": [
           "validating",
           "applying",
+          "rolling_out",
           "verifying",
           "committing",
           "rolling_back",

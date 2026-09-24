@@ -20,11 +20,12 @@ from app.pipeline.access_control import deliver as deliver_access_control
 from app.pipeline.auto_rollback import declare_incident, restore
 from app.pipeline.candidate import CandidateStore
 from app.pipeline.maintenance import MaintenanceStore
+from app.pipeline.rollout import roll_out
 from app.pipeline.snapshots import SnapshotStore
 from app.pipeline.validation import validate_candidate
 from app.pipeline.verification import verify
 from app.sections import SectionName
-from app.sections.base import Cluster, Resources, SectionPlan
+from app.sections.base import Cluster, Resources, Section, SectionPlan
 from app.sections.registry import REGISTERED
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,29 @@ class Engine:
             await section.apply(
                 self._cluster, self._desired.get(section.name, {}), self._plans[section.name]
             )
+
+    def rollout_needed(self) -> bool:
+        """True when a Section Trino adopts only by restarting actually changed.
+
+        Both halves matter. A Section that needs no restart never causes one, and a
+        rollout-required Section that did not change does not either -- otherwise every
+        Apply on a Cluster with an Event Listener configured would terminate every running
+        query for nothing.
+        """
+        return any(self._rollout_changed(section) for section in REGISTERED)
+
+    def _rollout_changed(self, section: Section) -> bool:
+        plan = self._plans.get(section.name)
+        return section.requires_rollout and plan is not None and not plan.empty
+
+    async def roll_out(self) -> None:
+        changed = sorted(section.name for section in REGISTERED if self._rollout_changed(section))
+        await roll_out(
+            self._kubernetes,
+            self._settings.coordinator_deployment_name,
+            f"apply {self._apply_id} changed {', '.join(changed)}",
+            self._settings.rollout_timeout_seconds,
+        )
 
     async def verify(self) -> None:
         await verify(

@@ -370,11 +370,18 @@ Apchi restarts only what the Candidate's changes require:
 | Permissions | no restart (timed reload) | no |
 | Certificate Mapping | restart | no |
 | Resource Groups | restart | no |
-| Event Listeners | restart | treat as required |
+| Event Listeners | restart | none — see below |
 
 Resource groups: "The JSON file only needs to be present on the coordinator." Access
-control: "Access control must be configured on the coordinator." Event listener scope is
-genuinely unresolved in Trino's documentation — restart both.
+control: "Access control must be configured on the coordinator."
+
+Event listener scope was recorded here as unresolved, with "restart both" as the conservative
+answer. Trino's documentation does in fact settle it — the plugin is installed *on the
+coordinator*, and the events a listener receives are query-created and query-completed, which the
+coordinator produces — so **the implementation restarts the coordinator only**. That divergence
+from the table above is deliberate and is not yet proven: the cost of being wrong is silently
+losing events rather than a visible failure, so the table is corrected only once a test has
+watched events arrive while the worker pods were never restarted.
 
 This saves rollout time, not queries. The coordinator restart is what kills queries.
 
@@ -908,6 +915,28 @@ lifting the limit later changes the limit and not the model. Whoever owns
 
 **Rollout-required.** `EventListenerManager.loadEventListeners()` is guarded by a
 `compareAndSet` that permits exactly one call per process lifetime. There is no reload path.
+Confirmed against the 483 source, not taken from this document.
+
+**Apchi owns one volume on the coordinator's pod template**, and this is the one place it does.
+Event Listeners must be optional, and neither delivery mechanism can express that on its own:
+
+- `event-listener.config-files` makes Trino **refuse to start** when the file it names is missing
+  — verified: *"Invalid configuration property with prefix '': file does not exist"*.
+- A `subPath` mount of an absent Secret key makes Kubernetes create an empty **directory** at that
+  path, and Trino dies reading it — verified: *"FileNotFoundException: etc/event-listener.properties
+  (Is a directory)"*.
+
+So "no Event Listener" has to mean no mount at all, which only something that edits the pod
+template can arrange. Apchi adds a distinctively named volume and its `subPath` mount at
+`/etc/trino/event-listener.properties` when a listener is configured and removes both when none is;
+everything else on that template belongs to the Admin, and a precondition rejects anything else
+mounted at that path so the two never fight over one file.
+
+`subPath` is safe here, and only here. §16's rule exists because a `subPath` mount never receives
+updates, so Apchi would write a file and Trino would never see the change. That cannot happen for a
+Section adopted *only* by a new pod, which Apchi itself creates. The rule to state is therefore
+sharper than the one originally written: no Section adopted **without** a restart may be
+`subPath`-mounted.
 
 During editing the UI should say: *Event Listener changed — does not apply immediately, will
 apply during Apply, and will restart the cluster.*

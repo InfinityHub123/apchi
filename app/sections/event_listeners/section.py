@@ -14,6 +14,7 @@ from app.api.errors import Conflict, NameAlreadyTaken, NotFound, UnprocessablePa
 from app.sections import SectionName
 from app.sections.base import Cluster, Resources, SectionPlan, ValidationFailure
 from app.sections.event_listeners import SECTION
+from app.sections.event_listeners.generator import FILE_KEY, MOUNT_PATH, render_secret
 from app.sections.event_listeners.model import (
     EventListener,
     EventListenerUpdate,
@@ -121,11 +122,8 @@ class ListenerPlan:
 class EventListenersSection:
     """The Event Listeners Section as the pipeline sees it.
 
-    Registered so that Review reports on it and Reset discards it. Delivering it to the
-    Cluster and restarting the coordinator is the next ticket, and until that exists an
-    Apply with an Event Listener staged is **refused at Validation** rather than allowed
-    to succeed: a Snapshot records configuration that was applied to the Cluster and
-    verified, and committing one for a listener that reached nothing would be a lie.
+    Rollout-required, and the first Section that is: Trino loads event listeners exactly
+    once per process lifetime, so a change is adopted only by a new pod.
     """
 
     name: SectionName = SECTION
@@ -144,33 +142,61 @@ class EventListenersSection:
         )
 
     async def apply(self, cluster: Cluster, desired: Resources, plan: SectionPlan) -> None:
-        if desired:
-            raise NotImplementedError(
-                "Event Listener delivery is not built yet; check() refuses this first."
-            )
+        """Write the file, then make sure it is mounted -- or unmounted.
 
-    async def restore(self, cluster: Cluster, snapshot: Resources) -> None:
-        if snapshot:
-            raise NotImplementedError(
-                "Event Listener delivery is not built yet, so no Snapshot can hold one."
+        The mount is the part that carries the meaning. Trino reads
+        `etc/event-listener.properties` if it is there and ignores its absence, but it
+        refuses to start if a file it was told to read is missing, and Kubernetes turns a
+        subPath mount of an absent Secret key into a *directory*, which Trino chokes on
+        with "Is a directory". So "no Event Listener" has to be expressed by there being no
+        mount at all, which means Apchi owns this one volume on the coordinator's pod
+        template. Everything else there belongs to the Admin.
+
+        Nothing is adopted here. The Rollout is what makes it live, and the pipeline runs
+        it because this Section declares `requires_rollout`.
+        """
+        await cluster.kubernetes.write_secret(
+            cluster.settings.event_listener_secret_name, render_secret(desired)
+        )
+        await self._mount(cluster, present=bool(desired))
+        logger.info("delivered the event listener configuration", extra={"listeners": len(desired)})
+
+    async def restore(self, cluster: Cluster, snapshot: Resources) -> bool:
+        """Rewriting the file is the whole undo.
+
+        Unlike Catalogs there is no compensating statement to work out: the file engines
+        are declarative, so the previous content is simply written again. The restart that
+        makes it live is the pipeline's, and it happens within Auto Rollback's single
+        bounded attempt.
+        """
+        current = await cluster.kubernetes.read_secret(cluster.settings.event_listener_secret_name)
+        changed = current != render_secret(snapshot)
+        await self.apply(cluster, snapshot, self.plan(snapshot, {}))
+        return changed
+
+    async def _mount(self, cluster: Cluster, present: bool) -> None:
+        settings = cluster.settings
+        if present:
+            await cluster.kubernetes.mount_secret_file(
+                settings.coordinator_deployment_name,
+                settings.trino_container_name,
+                settings.event_listener_volume_name,
+                settings.event_listener_secret_name,
+                MOUNT_PATH,
+                FILE_KEY,
+            )
+        else:
+            await cluster.kubernetes.unmount_secret_file(
+                settings.coordinator_deployment_name,
+                settings.trino_container_name,
+                settings.event_listener_volume_name,
+                MOUNT_PATH,
             )
 
     async def check(
         self, cluster: Cluster, desired: Resources, plan: SectionPlan
     ) -> list[ValidationFailure]:
-        if not desired:
-            return []
-        return [
-            ValidationFailure(
-                section=SECTION,
-                resource=sorted(desired)[0],
-                reason=(
-                    "Event Listeners cannot be applied yet: delivering the configuration "
-                    "and restarting the coordinator arrive in the next ticket. Remove it "
-                    "from the Candidate, or Reset, to apply the rest."
-                ),
-            )
-        ]
+        return []
 
     def needs_probe(self, desired: Resources) -> bool:
         return False
@@ -181,4 +207,12 @@ class EventListenersSection:
         return []
 
     async def verify(self, cluster: Cluster, desired: Resources) -> list[str]:
+        """Nothing to assert.
+
+        An event listener's output goes to an external sink rather than back to Apchi, so
+        there is no functional probe for whether it loaded, and section 8 is explicit that
+        Verification is functional rather than introspective. What Verification does prove
+        is that the Cluster came back from the Rollout at all, which is the failure that
+        actually matters here.
+        """
         return []

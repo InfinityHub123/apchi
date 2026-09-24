@@ -5,11 +5,7 @@ is safe -- and this Section restarts the coordinator when it is applied, so that
 more here than it did for Catalogs.
 """
 
-import asyncio
-
 from httpx import AsyncClient
-
-from app.pipeline.applies import TERMINAL
 
 HTTP = {
     "name": "audit",
@@ -212,26 +208,3 @@ async def test_reads_are_unaffected_by_maintenance_mode(client: AsyncClient) -> 
     await client.put("/api/v1/admin/maintenance-mode", json={"engaged": True})
 
     assert (await client.get("/api/v1/event-listeners")).status_code == 200
-
-
-async def test_an_apply_with_a_listener_staged_is_refused_until_delivery_exists(
-    applying_client: AsyncClient,
-) -> None:
-    """A Snapshot records configuration that was applied to the Cluster and verified.
-    Committing one for a listener that reached nothing would be a lie, so Validation
-    refuses it until the next ticket delivers it."""
-    await applying_client.post("/api/v1/event-listeners", json=HTTP)
-
-    started = await applying_client.post("/api/v1/applies")
-    deadline = asyncio.get_running_loop().time() + 60
-    record: dict = {}
-    while asyncio.get_running_loop().time() < deadline:
-        record = (await applying_client.get(f"/api/v1/applies/{started.json()['id']}")).json()
-        if record["stage"] in TERMINAL:
-            break
-        await asyncio.sleep(0.05)
-
-    assert record["stage"] == "failed"
-    assert "event_listeners/audit" in record["failure_reason"]
-    assert record["rollback"] is None, "nothing was touched, so there is nothing to undo"
-    assert (await applying_client.get("/api/v1/snapshots")).json() == []
