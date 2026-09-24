@@ -67,15 +67,18 @@ class PortForward:
         self.port = _free_port()
         self._process: subprocess.Popen[bytes] | None = None
 
-    def start(self, timeout: float = 120, await_trino: bool = True) -> None:
-        """With await_trino, returns only once Trino is serving through the tunnel.
-        Without it, returns as soon as the tunnel accepts a connection -- for a pod
-        whose Trino is still starting and whose readiness the caller polls itself."""
+    def _spawn(self) -> None:
         self._process = subprocess.Popen(
             ["kubectl", "port-forward", self._target, f"{self.port}:{self._remote_port}"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+
+    def start(self, timeout: float = 120, await_trino: bool = True) -> None:
+        """With await_trino, returns only once Trino is serving through the tunnel.
+        Without it, returns as soon as the tunnel accepts a connection -- for a pod
+        whose Trino is still starting and whose readiness the caller polls itself."""
+        self._spawn()
         if await_trino:
             self._await_coordinator(timeout)
         else:
@@ -140,9 +143,14 @@ class PortForward:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if not self._alive():
-                # The forward exits on its own if the pod is not accepting yet.
-                self.start(timeout=max(timeout - 10, 10))
-                return
+                # kubectl exits on its own when the pod it chose is not accepting, or when
+                # that pod goes away. Respawn and keep checking: returning here on the
+                # strength of having respawned would hand back a tunnel nothing has
+                # verified, which is how a coordinator that is serving perfectly well ends
+                # up refusing Verification's first query.
+                self._spawn()
+                time.sleep(1)
+                continue
             try:
                 info = httpx.get(f"http://127.0.0.1:{self.port}/v1/info", timeout=5)
                 if info.status_code == 200 and not info.json().get("starting", True):
