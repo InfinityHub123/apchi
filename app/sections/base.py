@@ -80,9 +80,14 @@ class Section(Protocol):
         raises; the pipeline's Auto Rollback is what handles that."""
         ...
 
-    async def restore(self, cluster: Cluster, snapshot: Resources) -> None:
-        """Put the Cluster back to a Snapshot's configuration, without assuming how far
-        a failed Apply got."""
+    async def restore(self, cluster: Cluster, snapshot: Resources) -> bool:
+        """Put the Cluster back to a Snapshot's configuration, without assuming how far a
+        failed Apply got.
+
+        Returns whether anything actually changed, which is what decides whether the
+        rollback has to restart Trino. It cannot be taken from the failed Apply's plan:
+        recovery after a restart has no plan, because the process that made it is gone.
+        """
         ...
 
     async def check(

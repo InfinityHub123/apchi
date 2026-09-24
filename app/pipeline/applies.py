@@ -14,7 +14,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 from pymongo.asynchronous.database import AsyncDatabase
@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 class Stage(StrEnum):
     VALIDATING = "validating"
     APPLYING = "applying"
+    #: Restarting Trino so it adopts what it cannot adopt while running. Only present on
+    #: an Apply that needed one.
+    ROLLING_OUT = "rolling_out"
     VERIFYING = "verifying"
     COMMITTING = "committing"
     #: Auto Rollback, on its way to one of the two failed terminals.
@@ -48,16 +51,25 @@ TERMINAL: frozenset[Stage] = frozenset({Stage.SUCCEEDED, Stage.FAILED, Stage.INC
 
 #: The order the pipeline walks. Stages stay separate internally even where the UI
 #: presents them as one action.
-PIPELINE: tuple[Stage, ...] = (Stage.VALIDATING, Stage.APPLYING, Stage.VERIFYING, Stage.COMMITTING)
+PIPELINE: tuple[Stage, ...] = (
+    Stage.VALIDATING,
+    Stage.APPLYING,
+    Stage.ROLLING_OUT,
+    Stage.VERIFYING,
+    Stage.COMMITTING,
+)
 
 #: Failing in one of these means the Cluster was touched, so Auto Rollback runs.
+#:
+#: A Rollout failure belongs here for the same reason Apply does: the configuration
+#: reached the Cluster and the Cluster has not come back on it.
 #:
 #: Validation is excluded because nothing reached the Cluster -- there is nothing to
 #: undo, and the Candidate is left for the Operator to fix. Commit is excluded for the
 #: opposite reason: the configuration was applied *and verified*, and what failed was
 #: MongoDB. Rolling back there would tear down a healthy Cluster to recover from a
 #: database error.
-ROLLED_BACK_FROM: frozenset[Stage] = frozenset({Stage.APPLYING, Stage.VERIFYING})
+ROLLED_BACK_FROM: frozenset[Stage] = frozenset({Stage.APPLYING, Stage.ROLLING_OUT, Stage.VERIFYING})
 
 
 class Rollback(StrEnum):
@@ -174,6 +186,7 @@ class ApplyStore:
         await self.advance(apply_id, Stage.INCIDENT, detail=message)
 
 
+@runtime_checkable
 class ApplyEngine(Protocol):
     """What the pipeline does at each stage."""
 
@@ -181,6 +194,15 @@ class ApplyEngine(Protocol):
     async def apply(self) -> None: ...
     async def verify(self) -> None: ...
     async def commit(self) -> int | None: ...
+
+    def rollout_needed(self) -> bool:
+        """Whether the Candidate's changes require Trino restarted. Known once Validation
+        has planned, which is before the stage that asks."""
+        ...
+
+    async def roll_out(self) -> None:
+        """Restart Trino and wait for it to come back."""
+        ...
 
     async def roll_back(self) -> None:
         """Put the Cluster back on its latest Snapshot. Raises if it cannot."""
@@ -200,6 +222,10 @@ class NoOpEngine:
     async def commit(self) -> int | None:
         return None
 
+    def rollout_needed(self) -> bool:
+        return False
+
+    async def roll_out(self) -> None: ...
     async def roll_back(self) -> None: ...
     async def declare_incident(self, reason: str) -> None: ...
 
@@ -231,6 +257,7 @@ class ApplyRunner:
         steps: tuple[tuple[Stage, Callable[[], Awaitable[Any]]], ...] = (
             (Stage.VALIDATING, engine.validate),
             (Stage.APPLYING, engine.apply),
+            (Stage.ROLLING_OUT, engine.roll_out),
             (Stage.VERIFYING, engine.verify),
             (Stage.COMMITTING, engine.commit),
         )
@@ -238,6 +265,12 @@ class ApplyRunner:
         try:
             snapshot: int | None = None
             for index, (stage, step) in enumerate(steps):
+                # A Candidate that changed nothing Trino adopts by restarting gets no
+                # Rollout, and no stage for one: half the Sections reach the Cluster
+                # without a restart, and an Apply that did not restart anything should not
+                # look like one that did.
+                if stage is Stage.ROLLING_OUT and not engine.rollout_needed():
+                    continue
                 reached = stage
                 if index:  # the first stage is recorded at creation
                     await self._store.advance(apply_id, stage)

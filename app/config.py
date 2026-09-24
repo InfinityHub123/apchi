@@ -37,6 +37,18 @@ class Settings(BaseSettings):
     #: Holds the generated system access-control file. Mounted as a whole volume so the
     #: kubelet keeps it current; never with subPath (§16).
     access_control_secret_name: str = "trino-access-control"
+    #: Holds the generated Event Listener configuration. Apchi mounts it on the
+    #: coordinator when a listener is configured and unmounts it when none is: Trino
+    #: refuses to start if the file it is told to read is missing, so the presence of the
+    #: mount is the only way to express "no listener".
+    event_listener_secret_name: str = "trino-event-listener"
+    #: The one volume Apchi owns on the coordinator's pod template. Everything else there
+    #: belongs to the Admin.
+    event_listener_volume_name: str = "apchi-event-listener"
+    #: How long a rollout may take before the Apply fails. A coordinator that never comes
+    #: back must not hang the pipeline.
+    rollout_timeout_seconds: float = 600.0
+
     #: Where Trino keeps its dynamic catalog store. Nothing read-only may be mounted
     #: here or above it, or every CREATE CATALOG fails.
     catalog_store_dir: str = "/data/trino/catalogs"

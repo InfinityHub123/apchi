@@ -18,7 +18,7 @@ import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.adapters.kubernetes import PodState, RealKubernetes
+from app.adapters.kubernetes import PodState, RealKubernetes, RolloutState
 from app.adapters.trino import Trino
 from app.config import Settings
 from app.main import create_app
@@ -27,6 +27,7 @@ COORDINATOR = "deploy/trino-coordinator"
 TRINO_SERVICE = "svc/trino"
 CATALOG_SEED_SECRET = "trino-catalog-seed"
 ACCESS_CONTROL_SECRET = "trino-access-control"
+EVENT_LISTENER_SECRET = "trino-event-listener"
 
 
 def _cluster_available() -> bool:
@@ -118,6 +119,21 @@ class PortForward:
         if not self._alive():
             self.restart(await_trino=False)
 
+    def serving(self, timeout: float = 2.0) -> bool:
+        """Whether Trino answers *through this tunnel*.
+
+        Process liveness is not enough: a forward to a Service keeps running after the pod
+        it chose has gone, accepting local connections and failing every stream. That looks
+        exactly like a coordinator that died.
+        """
+        if not self._alive():
+            return False
+        try:
+            response = httpx.get(f"http://127.0.0.1:{self.port}/v1/info", timeout=timeout)
+            return response.status_code == 200 and not response.json().get("starting", True)
+        except Exception:
+            return False
+
     def _await_coordinator(self, timeout: float) -> None:
         """Ready means Trino answers, not merely that the tunnel is up: a forward to
         a starting coordinator accepts connections and then refuses queries."""
@@ -135,6 +151,16 @@ class PortForward:
                 pass
             time.sleep(1)
         raise AssertionError(f"coordinator not serving through the forward on {self.port}")
+
+
+def coordinator_log(lines: int = 400) -> str:
+    """The coordinator's own log.
+
+    How Tier 2 proves a listener was adopted. Nothing functional can tell Apchi whether an
+    event listener loaded -- its output goes to an external sink -- so the proof is read
+    from outside the product rather than turned into a product capability.
+    """
+    return kubectl("logs", f"deploy/{'trino-coordinator'}", "-c", "trino", f"--tail={lines}")
 
 
 def restart_coordinator() -> None:
@@ -164,8 +190,12 @@ class ForwardedKubernetes:
     the Trino inside it are all real.
     """
 
-    def __init__(self, real: RealKubernetes) -> None:
+    def __init__(self, real: RealKubernetes, cluster: PortForward | None = None) -> None:
         self._real = real
+        #: The tunnel to the Cluster's coordinator. A Rollout kills the pod it is attached
+        #: to, so the harness has to revive it -- in production Apchi reaches the
+        #: coordinator through its Service, which outlives the pod.
+        self._cluster = cluster
         self._forwards: dict[str, PortForward] = {}
         #: Every pod Apchi asked for, so a test can prove one was really created.
         self.created_pods: list[str] = []
@@ -188,6 +218,39 @@ class ForwardedKubernetes:
     async def create_pod(self, manifest: dict[str, Any]) -> None:
         self.created_pods.append(manifest["metadata"]["name"])
         await self._real.create_pod(manifest)
+
+    async def restart_deployment(self, deployment: str, reason: str) -> None:
+        await self._real.restart_deployment(deployment, reason)
+
+    async def rollout_state(self, deployment: str) -> RolloutState:
+        """Revives the Cluster tunnel while polling.
+
+        This is the one call made repeatedly *during* a rollout, so it is where the harness
+        notices its own port-forward died with the pod being replaced. Verification runs
+        straight afterwards and would otherwise be told the coordinator did not respond --
+        which would be the harness's fault, not the Cluster's.
+        """
+        state = await self._real.rollout_state(deployment)
+        if self._cluster is None or not state.complete:
+            return state
+        if self._cluster.serving():
+            return state
+        # Kubernetes is satisfied but this tunnel is not usable, so the harness is not
+        # ready even though the Cluster is. Report it as unavailable and re-establish:
+        # Verification talks to Trino before it talks to Kubernetes, so there is no later
+        # chance to fix it.
+        self._cluster.restart(await_trino=False)
+        return state.model_copy(update={"ready": 0, "unavailable": state.replicas})
+
+    async def mount_secret_file(
+        self, deployment: str, container: str, volume: str, secret: str, path: str, key: str
+    ) -> None:
+        await self._real.mount_secret_file(deployment, container, volume, secret, path, key)
+
+    async def unmount_secret_file(
+        self, deployment: str, container: str, volume: str, path: str
+    ) -> None:
+        await self._real.unmount_secret_file(deployment, container, volume, path)
 
     async def pod_state(self, name: str) -> PodState:
         state = await self._real.pod_state(name)
@@ -234,7 +297,7 @@ async def cluster_state(
     test that runs Apchi under a different identity to force a failure also revokes the
     real one's `owner` -- and the cleanup would then be denied its own DROP CATALOG.
     """
-    secrets = (CATALOG_SEED_SECRET, ACCESS_CONTROL_SECRET)
+    secrets = (CATALOG_SEED_SECRET, ACCESS_CONTROL_SECRET, EVENT_LISTENER_SECRET)
     originals = {name: await real_kubernetes.read_secret(name) for name in secrets}
 
     def cluster() -> Trino:
@@ -250,6 +313,19 @@ async def cluster_state(
         )
         for name, content in originals.items():
             await real_kubernetes.write_secret(name, content)
+        # Apchi mounts its own volume on the coordinator when a listener is configured.
+        # Left behind, the next test inherits a listener it never asked for.
+        kubectl(
+            "patch",
+            "deployment",
+            "trino-coordinator",
+            "--type=strategic",
+            "-p",
+            '{"spec":{"template":{"spec":{"volumes":[{"name":"apchi-event-listener",'
+            '"$patch":"delete"}],"containers":[{"name":"trino","volumeMounts":'
+            '[{"mountPath":"/etc/trino/event-listener.properties","$patch":"delete"}]}]}}}}',
+        )
+
         if changed_rules:
             # Writing the Secret back is not enough. Trino re-reads the rules on its own
             # security.refresh-period, and the kubelet takes up to its syncFrequency to
@@ -273,8 +349,10 @@ def forward(cluster: None) -> Iterator[PortForward]:
 
 
 @pytest.fixture
-def forwarded_kubernetes(real_kubernetes: RealKubernetes) -> ForwardedKubernetes:
-    return ForwardedKubernetes(real_kubernetes)
+def forwarded_kubernetes(
+    real_kubernetes: RealKubernetes, forward: PortForward
+) -> ForwardedKubernetes:
+    return ForwardedKubernetes(real_kubernetes, cluster=forward)
 
 
 @asynccontextmanager

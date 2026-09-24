@@ -5,6 +5,7 @@ is ever substituted. MongoDB and Trino are real in both tiers.
 """
 
 import re
+import socket
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
@@ -15,7 +16,7 @@ from testcontainers.community.mongodb import MongoDbContainer
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
-from app.adapters.kubernetes import PodState
+from app.adapters.kubernetes import PodState, RolloutState
 from app.adapters.trino import Trino
 from app.config import Environment, Settings
 from app.main import create_app
@@ -59,10 +60,20 @@ def _validation_container() -> DockerContainer:
     )
 
 
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
 def _trino_container() -> DockerContainer:
+    # A *bound* host port rather than a random one, because the Cluster's container is
+    # restarted by tests of the rollout engine and Docker hands out a different random
+    # port each time it comes back -- which would strand the client the app under test is
+    # already holding.
     return (
         DockerContainer(TRINO_IMAGE)
-        .with_exposed_ports(8080)
+        .with_bind_ports(8080, _free_port())
         .with_command(f"sh -c '{_DYNAMIC_CATALOGS}'")
         .waiting_for(
             LogMessageWaitStrategy(
@@ -143,6 +154,15 @@ class FakeKubernetes:
         #: Auto Rollback that follows it to succeed, which two verifications against a
         #: permanently broken cluster could never show.
         self.report_a_missing_worker_once = False
+        #: Every Rollout Apchi asked for, with the reason it gave.
+        self.restarts: list[str] = []
+        #: Set by a test to make the container behind the Cluster genuinely restart.
+        self.restarts_for_real = False
+        #: Set by a test to make the rollout never finish, proving the hard timeout.
+        self.rollout_never_completes = False
+        #: The file mounts Apchi owns on the coordinator, keyed by volume name.
+        self.mounts: dict[str, dict[str, str]] = {}
+        self._cluster: DockerContainer | None = None
         self._validation = validation
         self._baselines: dict[str, set[str]] = {}
 
@@ -166,6 +186,55 @@ class FakeKubernetes:
 
     async def deployment_pod_spec(self, deployment: str) -> dict[str, Any]:
         return self.pod_spec
+
+    async def restart_deployment(self, deployment: str, reason: str) -> None:
+        """Records the restart, and optionally performs one.
+
+        Restarting the container for real is opt-in because it costs twenty seconds. What
+        it buys is Verification polling through a coordinator that becomes unreachable and
+        then serves, which is the behaviour the rollout engine exists to get right and
+        which no amount of recording proves.
+        """
+        self.restarts.append(reason)
+        if self.restarts_for_real and self._cluster is not None:
+            self._cluster.get_wrapped_container().restart()
+
+    async def rollout_state(self, deployment: str) -> RolloutState:
+        """Reports what Kubernetes would report.
+
+        A rollout is complete only when every replica is *ready*, and the coordinator's
+        readiness probe is Trino's own health check -- so while the restarted container is
+        still initialising, Kubernetes would say one replica is unavailable. Claiming
+        completion the moment a restart was requested would let Verification interrogate a
+        coordinator that is still booting, which is precisely the race the rollout wait
+        exists to close.
+        """
+        if self.rollout_never_completes:
+            return RolloutState(generation=2, observed_generation=1, replicas=1)
+        if self.restarts_for_real and self._cluster is not None and self.restarts:
+            probe = Trino(
+                host=self._cluster.get_container_host_ip(),
+                port=int(self._cluster.get_exposed_port(8080)),
+            )
+            if await probe.is_starting() is not False:
+                return RolloutState(
+                    generation=2, observed_generation=2, replicas=1, updated=1, unavailable=1
+                )
+        return RolloutState(generation=1, observed_generation=1, replicas=1, updated=1, ready=1)
+
+    async def mount_secret_file(
+        self, deployment: str, container: str, volume: str, secret: str, path: str, key: str
+    ) -> None:
+        self.mounts[volume] = {"secret": secret, "path": path, "key": key}
+
+    async def unmount_secret_file(
+        self, deployment: str, container: str, volume: str, path: str
+    ) -> None:
+        self.mounts.pop(volume, None)
+
+    def attach_cluster(self, container: DockerContainer) -> None:
+        """The container standing in for the Cluster, so a Rollout can really restart it."""
+        self._cluster = container
 
     def attach_validation(self, container: DockerContainer) -> None:
         """Point the stand-in validation pod at a container. Until this is called a
@@ -294,6 +363,7 @@ async def applying_client(
     and prove nothing.
     """
     fake_kubernetes.attach_validation(trino_validation)
+    fake_kubernetes.attach_cluster(trino_cluster)
     app = create_app(settings)
     app.state.kubernetes = fake_kubernetes
     app.state.trino = Trino(

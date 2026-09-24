@@ -23,3 +23,17 @@ async def test_fake_kubernetes_records_patches(fake_kubernetes: FakeKubernetes) 
     await fake_kubernetes.write_secret("trino-catalog-seed", {"finance.properties": "x"})
 
     assert await fake_kubernetes.read_secret("trino-catalog-seed") == {"finance.properties": "x"}
+
+
+def test_the_tier_2_forwarding_wrapper_satisfies_the_adapter_interface() -> None:
+    """Checked in tier 1, where it costs nothing and fails fast.
+
+    The wrapper delegates method by method, so it is the thing most likely to fall behind
+    the adapter -- and nothing else catches it, because `app.state.kubernetes` is untyped
+    and a missing method surfaces only as an AttributeError inside a running Apply, which
+    then looks like a failed rollback and engages Maintenance Mode. It lived in tier 2
+    until it drifted during a run of a single tier 2 file.
+    """
+    from tests.tier2.conftest import ForwardedKubernetes
+
+    assert isinstance(ForwardedKubernetes(RealKubernetes()), KubernetesAdapter)

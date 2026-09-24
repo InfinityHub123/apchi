@@ -108,17 +108,18 @@ class CatalogsSection:
         logger.info("patched the catalog Secret")
         await apply.execute(cluster.trino, desired, plan)
 
-    async def restore(self, cluster: Cluster, snapshot: Resources) -> None:
+    async def restore(self, cluster: Cluster, snapshot: Resources) -> bool:
         """Rewrite the Secret and issue the compensating DDL.
 
         The plan is read before anything is written, because the Secret as the failed
         Apply left it is half of the diff that decides what to undo.
         """
         durable_copy = render_secret({SECTION: snapshot})
+        durable_now = await cluster.kubernetes.read_secret(cluster.settings.catalog_secret_name)
         rollback = apply.rollback_plan(
             snapshot,
             await cluster.trino.catalogs(),
-            await cluster.kubernetes.read_secret(cluster.settings.catalog_secret_name),
+            durable_now,
             durable_copy,
         )
         logger.info("rollback planned", extra={"catalogs": rollback.summary()})
@@ -127,6 +128,9 @@ class CatalogsSection:
         logger.info("restored the catalog Secret")
 
         await apply.execute(cluster.trino, snapshot, rollback)
+        # Catalogs never need a restart, so this answer costs nothing -- but it is the
+        # honest one: something changed if the durable copy did or any DDL was issued.
+        return durable_now != durable_copy or not rollback.empty
 
     async def check(
         self, cluster: Cluster, desired: Resources, plan: SectionPlan

@@ -6,6 +6,7 @@ mention threads. Keeping the whole surface in one protocol is also what lets the
 fast test tier substitute it while MongoDB and Trino stay real.
 """
 
+from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
 from fastapi.concurrency import run_in_threadpool
@@ -24,6 +25,39 @@ class PodState(BaseModel):
     host: str | None = None
     port: int = 8080
     problem: str | None = None
+
+
+class RolloutState(BaseModel):
+    """Where a Deployment is in adopting its current pod template.
+
+    `complete` is the question `kubectl rollout status` answers, asked through the API:
+    the controller has seen this template, every replica has been replaced by one running
+    it, and none is unavailable. Checking readiness alone would pass while old pods were
+    still serving.
+    """
+
+    generation: int = 0
+    observed_generation: int = 0
+    replicas: int = 0
+    updated: int = 0
+    ready: int = 0
+    unavailable: int = 0
+
+    @property
+    def complete(self) -> bool:
+        return (
+            self.observed_generation >= self.generation
+            and self.updated == self.replicas
+            and self.ready == self.replicas
+            and self.unavailable == 0
+        )
+
+    def summary(self) -> str:
+        return (
+            f"generation {self.observed_generation}/{self.generation}, "
+            f"updated {self.updated}/{self.replicas}, ready {self.ready}/{self.replicas}, "
+            f"unavailable {self.unavailable}"
+        )
 
 
 #: Container states that no amount of waiting resolves.
@@ -58,6 +92,18 @@ class KubernetesAdapter(Protocol):
     async def delete_pod(self, name: str) -> None: ...
 
     async def delete_pods(self, label_selector: str) -> list[str]: ...
+
+    async def restart_deployment(self, deployment: str, reason: str) -> None: ...
+
+    async def rollout_state(self, deployment: str) -> RolloutState: ...
+
+    async def mount_secret_file(
+        self, deployment: str, container: str, volume: str, secret: str, path: str, key: str
+    ) -> None: ...
+
+    async def unmount_secret_file(
+        self, deployment: str, container: str, volume: str, path: str
+    ) -> None: ...
 
 
 class RealKubernetes:
@@ -150,6 +196,101 @@ class RealKubernetes:
         )
         serialised = client.ApiClient().sanitize_for_serialization(dep.spec.template.spec)
         return dict(serialised)
+
+    async def restart_deployment(self, deployment: str, reason: str) -> None:
+        """Patch the pod template's annotations, which is all a rollout restart is -- so it
+        works through the API with no kubectl dependency. Any change to the template makes
+        the controller replace every pod."""
+        await self._patch_deployment(
+            deployment,
+            {
+                "spec": {
+                    "template": {
+                        "metadata": {
+                            "annotations": {
+                                "apchi.dev/restarted-at": datetime.now(UTC).isoformat(),
+                                "apchi.dev/restarted-because": reason,
+                            }
+                        }
+                    }
+                }
+            },
+        )
+
+    async def rollout_state(self, deployment: str) -> RolloutState:
+        dep = await run_in_threadpool(
+            self._apps.read_namespaced_deployment, deployment, self._namespace
+        )
+        status = dep.status
+        return RolloutState(
+            generation=int(dep.metadata.generation or 0),
+            observed_generation=int(status.observed_generation or 0),
+            replicas=int(dep.spec.replicas or 0),
+            updated=int(status.updated_replicas or 0),
+            ready=int(status.ready_replicas or 0),
+            unavailable=int(status.unavailable_replicas or 0),
+        )
+
+    async def mount_secret_file(
+        self, deployment: str, container: str, volume: str, secret: str, path: str, key: str
+    ) -> None:
+        """Mount one key of a Secret at one path. Idempotent: volumes merge by name and
+        mounts by mountPath, so re-applying the same mount changes nothing -- and a
+        template that does not change triggers no rollout."""
+        await self._patch_deployment(
+            deployment,
+            {
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "volumes": [{"name": volume, "secret": {"secretName": secret}}],
+                            "containers": [
+                                {
+                                    "name": container,
+                                    "volumeMounts": [
+                                        {
+                                            "name": volume,
+                                            "mountPath": path,
+                                            "subPath": key,
+                                            "readOnly": True,
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    }
+                }
+            },
+        )
+
+    async def unmount_secret_file(
+        self, deployment: str, container: str, volume: str, path: str
+    ) -> None:
+        """Remove that mount and its volume, leaving every other mount alone. Idempotent:
+        deleting what is not there is the outcome the caller wanted."""
+        await self._patch_deployment(
+            deployment,
+            {
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "volumes": [{"name": volume, "$patch": "delete"}],
+                            "containers": [
+                                {
+                                    "name": container,
+                                    "volumeMounts": [{"mountPath": path, "$patch": "delete"}],
+                                }
+                            ],
+                        }
+                    }
+                }
+            },
+        )
+
+    async def _patch_deployment(self, deployment: str, patch: dict[str, Any]) -> None:
+        await run_in_threadpool(
+            self._apps.patch_namespaced_deployment, deployment, self._namespace, patch
+        )
 
     async def create_pod(self, manifest: dict[str, Any]) -> None:
         await run_in_threadpool(self._core.create_namespaced_pod, self._namespace, manifest)

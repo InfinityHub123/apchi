@@ -47,3 +47,13 @@ stringData:
   # directory in the pod is the live working copy, reseeded at every start.
   tpch.properties: |
     connector.name=tpch
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: trino-event-listener
+# Apchi writes this, and mounts it on the coordinator itself when an Event Listener is
+# configured. It starts empty and carries no mount: Trino refuses to start if a listener
+# file it was told to read is missing, so "no Event Listener" is expressed by the absence
+# of the mount -- which is why Apchi owns that one volume on the pod template.
+stringData: {}

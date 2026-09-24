@@ -17,6 +17,7 @@ from typing import Any
 from pydantic import AliasPath, BaseModel, ConfigDict, Field
 
 from app.config import Settings
+from app.sections.event_listeners.generator import MOUNT_PATH as EVENT_LISTENER_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,22 @@ def check(spec: PodSpec, settings: Settings) -> None:
                     f"{mount.name!r} at {mount.mount_path}, which covers the catalog "
                     f"store {settings.catalog_store_dir}. Trino writes that directory "
                     "itself, so every CREATE CATALOG would fail."
+                )
+
+    # 4. The Event Listener file is Apchi's to mount. An Admin mounting something else at
+    #    the same path would be fighting Apchi over one file, and whichever of them wrote
+    #    last would win silently.
+    for container in spec.containers:
+        for mount in container.volume_mounts:
+            if (
+                mount.mount_path == EVENT_LISTENER_PATH
+                and mount.name != settings.event_listener_volume_name
+            ):
+                problems.append(
+                    f"Container {container.name!r} mounts {mount.name!r} at "
+                    f"{EVENT_LISTENER_PATH}, which is the file Apchi delivers Event "
+                    f"Listeners through. Apchi adds and removes its own volume "
+                    f"{settings.event_listener_volume_name!r} there; remove this mount."
                 )
 
     if problems:
