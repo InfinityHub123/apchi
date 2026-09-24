@@ -13,6 +13,7 @@ from testcontainers.core.container import DockerContainer
 
 from app.adapters.trino import Trino
 from app.pipeline.applies import TERMINAL
+from app.sections.registry import SECTIONS
 
 ALPHA = {"name": "alpha", "connector": "memory", "properties": {}}
 BETA = {"name": "beta", "connector": "memory", "properties": {}}
@@ -183,7 +184,7 @@ async def test_a_full_rollback_replaces_the_whole_candidate(
 
     effect = (await applying_client.post("/api/v1/candidate/rollback", json={"snapshot": 1})).json()
 
-    assert effect["sections"] == ["catalogs"]
+    assert effect["sections"] == list(SECTIONS), "a Full Rollback replaces every Section"
     assert effect["other_sections_stay_at"] is None
     assert sorted(effect["catalogs_dropped"]) == ["beta"]
     staged = [c["name"] for c in (await applying_client.get("/api/v1/catalogs")).json()]

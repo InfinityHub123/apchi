@@ -14,6 +14,7 @@ from app.api.admin import router as admin_router
 from app.api.applies import router as applies_router
 from app.api.candidate import router as candidate_router
 from app.api.catalogs import router as catalogs_router
+from app.api.event_listeners import router as event_listeners_router
 from app.api.health import router as health_router
 from app.api.snapshots import router as snapshots_router
 from app.api.validations import router as validations_router
@@ -116,6 +117,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     errors.install(app)
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(catalogs_router, prefix="/api/v1")
+    app.include_router(event_listeners_router, prefix="/api/v1")
     app.include_router(candidate_router, prefix="/api/v1")
     app.include_router(applies_router, prefix="/api/v1")
     app.include_router(snapshots_router, prefix="/api/v1")
