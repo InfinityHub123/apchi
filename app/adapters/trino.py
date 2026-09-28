@@ -50,6 +50,19 @@ class Trino:
         )
         return int(rows[0][0]) if rows else 0
 
+    async def queries_at_risk(self) -> int:
+        """Queries a coordinator restart would destroy: running and queued alike.
+
+        The counting query is itself running while it counts, so it is excluded --
+        verified against a coordinator with nothing else in flight, which still reported
+        one.
+        """
+        rows = await self.query(
+            "SELECT count(*) FROM system.runtime.queries WHERE state IN ('RUNNING', 'QUEUED')"
+        )
+        counted = int(rows[0][0]) if rows else 0
+        return max(counted - 1, 0)
+
     async def catalogs(self) -> set[str]:
         return {row[0] for row in await self.query("SHOW CATALOGS")}
 

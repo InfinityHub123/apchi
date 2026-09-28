@@ -1,6 +1,45 @@
 {
   "components": {
     "schemas": {
+      "ApplyCost": {
+        "description": "What an Operator is agreeing to when they Apply.",
+        "properties": {
+          "queries_at_risk": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Queries running or queued on the Cluster right now, every one of which a Rollout terminates. A live reading and not a promise: it is already stale, and it is null when the Cluster could not be asked or when no restart is coming.",
+            "title": "Queries At Risk"
+          },
+          "restarts_coordinator": {
+            "description": "Whether applying the Candidate as it stands requires a Rollout.",
+            "title": "Restarts Coordinator",
+            "type": "boolean"
+          },
+          "warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What to show an Operator before they Apply.",
+            "title": "Warning"
+          }
+        },
+        "required": [
+          "restarts_coordinator"
+        ],
+        "title": "ApplyCost",
+        "type": "object"
+      },
       "ApplyRecord": {
         "properties": {
           "base_snapshot": {
@@ -538,6 +577,10 @@
             "description": "The Snapshot this Candidate was derived from; null before the first.",
             "title": "Base Snapshot"
           },
+          "cost": {
+            "$ref": "#/components/schemas/ApplyCost",
+            "description": "What applying the Candidate as it stands would cost the Cluster."
+          },
           "has_changes": {
             "title": "Has Changes",
             "type": "boolean"
@@ -553,7 +596,8 @@
         "required": [
           "base_snapshot",
           "has_changes",
-          "sections"
+          "sections",
+          "cost"
         ],
         "title": "Review",
         "type": "object"
