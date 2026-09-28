@@ -199,7 +199,19 @@ class EventListenersSection:
         return []
 
     def needs_probe(self, desired: Resources) -> bool:
-        return False
+        return bool(desired)
+
+    def probe_files(self, desired: Resources) -> dict[str, str]:
+        """The listener file, so the probe starts with it in place.
+
+        Starting *is* the check. A Kafka listener whose brokers are unreachable makes Trino
+        refuse to start, because `terminate-on-initialization-failure` defaults to true --
+        so the probe turns what would have been a coordinator that never came back into a
+        Validation failure that costs the Operator nothing.
+        """
+        if not desired:
+            return {}
+        return {MOUNT_PATH: render_secret(desired)[FILE_KEY]}
 
     async def check_against_probe(
         self, probe: Trino, desired: Resources

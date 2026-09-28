@@ -199,10 +199,31 @@ get wrong:
 **Validation has two modes**, because Apply does:
 
 - **File-based Sections** (permissions, resource groups, event listeners, certificate
-  mapping) — mount the Candidate's generated ConfigMap and confirm the pod reaches ready.
+  mapping) — start the pod with the Candidate's generated file in place and confirm it
+  reaches ready. **Starting is the check**: a file Trino will not accept becomes a pod that
+  will not start, which is the same failure the Cluster would have suffered, paid for by a
+  pod nobody was using.
 - **Catalogs** — bring the pod up, then issue the `CREATE CATALOG` statements against it and
   confirm they succeed. When a catalog under test references a client certificate, the
   validation pod must mount the certificate Secret too, or it fails for the wrong reason.
+
+A Section declares which files it needs inside the probe, and they travel in a Secret created
+and deleted with the pod, carrying the same label as the pod so an interrupted Validation
+leaves nothing the startup sweep cannot find. Inside the probe those files are `subPath`
+mounts, which is right for the reason it is wrong on the Cluster (§16): the probe is a fresh
+pod every time, so a mount that never updates is a mount that never needs to.
+
+**Where the reason comes from.** When a probe refuses to start, its **log** is the only place
+the reason exists — Trino writes nothing to the termination-log file Kubernetes would otherwise
+surface — so Apchi reads it and quotes the error lines back in the Validation failure. That is
+a deliberate exception to the stance taken in §8, and the two cases are different: here the log
+is the *diagnostic an Operator needs to fix their configuration*, where in Verification it would
+have been a *correctness signal* standing in for a functional check. Reading a log to explain a
+failure is not the same as reading one to decide whether something worked.
+
+The failure names the listener as well as the reason. With one file-based Section that
+attribution is unambiguous; a second will need it to come from whichever Section contributed the
+file Trino choked on.
 
 Requirements:
 

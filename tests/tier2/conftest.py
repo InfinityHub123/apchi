@@ -67,15 +67,18 @@ class PortForward:
         self.port = _free_port()
         self._process: subprocess.Popen[bytes] | None = None
 
-    def start(self, timeout: float = 120, await_trino: bool = True) -> None:
-        """With await_trino, returns only once Trino is serving through the tunnel.
-        Without it, returns as soon as the tunnel accepts a connection -- for a pod
-        whose Trino is still starting and whose readiness the caller polls itself."""
+    def _spawn(self) -> None:
         self._process = subprocess.Popen(
             ["kubectl", "port-forward", self._target, f"{self.port}:{self._remote_port}"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+
+    def start(self, timeout: float = 120, await_trino: bool = True) -> None:
+        """With await_trino, returns only once Trino is serving through the tunnel.
+        Without it, returns as soon as the tunnel accepts a connection -- for a pod
+        whose Trino is still starting and whose readiness the caller polls itself."""
+        self._spawn()
         if await_trino:
             self._await_coordinator(timeout)
         else:
@@ -140,9 +143,14 @@ class PortForward:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if not self._alive():
-                # The forward exits on its own if the pod is not accepting yet.
-                self.start(timeout=max(timeout - 10, 10))
-                return
+                # kubectl exits on its own when the pod it chose is not accepting, or when
+                # that pod goes away. Respawn and keep checking: returning here on the
+                # strength of having respawned would hand back a tunnel nothing has
+                # verified, which is how a coordinator that is serving perfectly well ends
+                # up refusing Verification's first query.
+                self._spawn()
+                time.sleep(1)
+                continue
             try:
                 info = httpx.get(f"http://127.0.0.1:{self.port}/v1/info", timeout=5)
                 if info.status_code == 200 and not info.json().get("starting", True):
@@ -151,6 +159,28 @@ class PortForward:
                 pass
             time.sleep(1)
         raise AssertionError(f"coordinator not serving through the forward on {self.port}")
+
+
+def _listener_volume_present() -> bool:
+    """Whether Apchi's volume is on the coordinator right now.
+
+    Checked before patching it away, because a patch that changes nothing still bumps the
+    Deployment's generation and starts a rollout nobody needed.
+    """
+    volumes = kubectl(
+        "get",
+        "deployment",
+        "trino-coordinator",
+        "-o",
+        "jsonpath={.spec.template.spec.volumes[*].name}",
+    )
+    return "apchi-event-listener" in volumes.split()
+
+
+def _coordinator_pods() -> int:
+    """How many coordinator pods exist, Terminating included."""
+    listed = kubectl("get", "pods", "-l", "app=trino,component=coordinator", "--no-headers")
+    return len([line for line in listed.splitlines() if line.strip()])
 
 
 def coordinator_log(lines: int = 400) -> str:
@@ -219,6 +249,18 @@ class ForwardedKubernetes:
         self.created_pods.append(manifest["metadata"]["name"])
         await self._real.create_pod(manifest)
 
+    async def create_secret(self, name: str, data: dict[str, str], labels: dict[str, str]) -> None:
+        await self._real.create_secret(name, data, labels)
+
+    async def delete_secret(self, name: str) -> None:
+        await self._real.delete_secret(name)
+
+    async def delete_secrets(self, label_selector: str) -> list[str]:
+        return await self._real.delete_secrets(label_selector)
+
+    async def pod_logs(self, name: str, tail: int) -> str:
+        return await self._real.pod_logs(name, tail)
+
     async def restart_deployment(self, deployment: str, reason: str) -> None:
         await self._real.restart_deployment(deployment, reason)
 
@@ -233,14 +275,24 @@ class ForwardedKubernetes:
         state = await self._real.rollout_state(deployment)
         if self._cluster is None or not state.complete:
             return state
-        if self._cluster.serving():
-            return state
-        # Kubernetes is satisfied but this tunnel is not usable, so the harness is not
-        # ready even though the Cluster is. Report it as unavailable and re-establish:
-        # Verification talks to Trino before it talks to Kubernetes, so there is no later
-        # chance to fix it.
-        self._cluster.restart(await_trino=False)
-        return state.model_copy(update={"ready": 0, "unavailable": state.replicas})
+
+        unready = state.model_copy(update={"ready": 0, "unavailable": state.replicas})
+
+        # Kubernetes calls the rollout complete while the previous pod is still
+        # Terminating, and a Terminating pod still matches the Service selector -- so a
+        # port-forward can be attached to one that is about to vanish. Waiting for exactly
+        # one coordinator pod is what makes the tunnel's target unambiguous.
+        if _coordinator_pods() != 1:
+            return unready
+
+        # Rebuilt rather than reused, so the tunnel is established *after* the rollout
+        # finished and cannot be holding the pod that was replaced. Verification talks to
+        # Trino before it talks to Kubernetes, so there is no later chance to fix this.
+        try:
+            self._cluster.restart(await_trino=True)
+        except AssertionError:
+            return unready
+        return state
 
     async def mount_secret_file(
         self, deployment: str, container: str, volume: str, secret: str, path: str, key: str
@@ -254,13 +306,24 @@ class ForwardedKubernetes:
 
     async def pod_state(self, name: str) -> PodState:
         state = await self._real.pod_state(name)
-        if state.host is None:
+        if state.host is None or state.problem is not None:
+            # No point tunnelling to a pod that is already failing -- and a probe that is
+            # *meant* to fail, like a listener whose brokers cannot be reached, would take
+            # the forward down with it and turn a clean Validation failure into a harness
+            # error.
             return state
         if name not in self._forwards:
             forward = PortForward(f"pod/{name}", state.port)
-            # The pod has an address but Trino may still be starting, which the
-            # caller is already polling for; wait only for the tunnel.
-            forward.start(await_trino=False)
+            try:
+                # The pod has an address but Trino may still be starting, which the caller
+                # is already polling for; wait only for the tunnel.
+                forward.start(await_trino=False)
+            except AssertionError:
+                # The pod went away while the tunnel was being built. Report what Kubernetes
+                # said and let the caller poll again; the harness failing to connect is not
+                # a verdict about the Candidate.
+                forward.stop()
+                return state
             self._forwards[name] = forward
         else:
             self._forwards[name].ensure_alive()
@@ -315,16 +378,25 @@ async def cluster_state(
             await real_kubernetes.write_secret(name, content)
         # Apchi mounts its own volume on the coordinator when a listener is configured.
         # Left behind, the next test inherits a listener it never asked for.
-        kubectl(
-            "patch",
-            "deployment",
-            "trino-coordinator",
-            "--type=strategic",
-            "-p",
-            '{"spec":{"template":{"spec":{"volumes":[{"name":"apchi-event-listener",'
-            '"$patch":"delete"}],"containers":[{"name":"trino","volumeMounts":'
-            '[{"mountPath":"/etc/trino/event-listener.properties","$patch":"delete"}]}]}}}}',
-        )
+        #
+        # Removing it changes the pod template, which starts a rollout -- so this waits for
+        # it. Leaving a rollout in flight was the whole bug: the next test began while the
+        # coordinator was being replaced, its port-forward attached to a pod on its way out,
+        # and its very first Trino call was refused long before it reached a rollout of its
+        # own.
+        if _listener_volume_present():
+            kubectl(
+                "patch",
+                "deployment",
+                "trino-coordinator",
+                "--type=strategic",
+                "-p",
+                '{"spec":{"template":{"spec":{"volumes":[{"name":"apchi-event-listener",'
+                '"$patch":"delete"}],"containers":[{"name":"trino","volumeMounts":'
+                '[{"mountPath":"/etc/trino/event-listener.properties","$patch":"delete"}]}]}}}}',
+            )
+            kubectl("rollout", "status", COORDINATOR, "--timeout=600s")
+            forward.restart()
 
         if changed_rules:
             # Writing the Secret back is not enough. Trino re-reads the rules on its own

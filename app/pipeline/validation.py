@@ -18,6 +18,7 @@ import re
 import time
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from app.adapters.kubernetes import KubernetesAdapter
@@ -52,6 +53,15 @@ _STATIC_CATALOG_DIR = "/etc/trino/catalog"
 #: How often the probe is asked whether it is serving yet.
 _POLL_SECONDS = 2.0
 
+#: The volume carrying whatever files the Sections need inside the probe.
+_FILES_VOLUME = "section-files"
+
+#: How much of a failed probe's log to quote back. Enough to carry Trino's error, little
+#: enough not to put a wall of startup output in an API response.
+_LOG_LINES = 40
+
+LABELS = {ROLE_LABEL: VALIDATION_ROLE, "app.kubernetes.io/managed-by": "apchi"}
+
 
 class ValidationFailed(Exception):
     """Raised with every failure found, not just the first.
@@ -73,7 +83,9 @@ def pod_name(validation_id: str) -> str:
     return f"apchi-validate-{suffix}"[:63].rstrip("-")
 
 
-def validation_manifest(name: str, image: str, deadline_seconds: int) -> dict[str, Any]:
+def validation_manifest(
+    name: str, image: str, deadline_seconds: int, files: dict[str, str] | None = None
+) -> dict[str, Any]:
     """A coordinator-only Trino and nothing else.
 
     No workers: this tests whether configuration *loads*, not whether queries run.
@@ -93,7 +105,7 @@ def validation_manifest(name: str, image: str, deadline_seconds: int) -> dict[st
         "kind": "Pod",
         "metadata": {
             "name": name,
-            "labels": {ROLE_LABEL: VALIDATION_ROLE, "app.kubernetes.io/managed-by": "apchi"},
+            "labels": dict(LABELS),
         },
         "spec": {
             # A crash is a validation failure to report, never something to retry.
@@ -105,17 +117,51 @@ def validation_manifest(name: str, image: str, deadline_seconds: int) -> dict[st
                     "image": image,
                     "env": [{"name": _CATALOG_MANAGEMENT_ENV, "value": "dynamic"}],
                     "ports": [{"containerPort": 8080, "name": "http"}],
-                    "volumeMounts": [{"name": "no-catalogs", "mountPath": _STATIC_CATALOG_DIR}],
+                    "volumeMounts": [
+                        {"name": "no-catalogs", "mountPath": _STATIC_CATALOG_DIR},
+                        *_file_mounts(files or {}),
+                    ],
                 }
             ],
-            "volumes": [{"name": "no-catalogs", "emptyDir": {}}],
+            "volumes": [
+                {"name": "no-catalogs", "emptyDir": {}},
+                *([{"name": _FILES_VOLUME, "secret": {"secretName": name}}] if files else []),
+            ],
         },
     }
 
 
+def _file_mounts(files: dict[str, str]) -> list[dict[str, Any]]:
+    """One subPath mount per file a Section needs in the probe.
+
+    subPath is right here for the reason it is wrong on the Cluster: the probe is a fresh
+    pod every time, so a mount that never updates is a mount that never needs to.
+    """
+    return [
+        {"name": _FILES_VOLUME, "mountPath": path, "subPath": Path(path).name, "readOnly": True}
+        for path in sorted(files)
+    ]
+
+
+def probe_secret(files: dict[str, str]) -> dict[str, str]:
+    """The probe's companion Secret, keyed by filename.
+
+    Two Sections wanting files of the same name would collide, so it is asserted rather
+    than assumed: the Secret is flat and the mount paths are not.
+    """
+    keyed = {Path(path).name: content for path, content in files.items()}
+    if len(keyed) != len(files):
+        raise ValueError(f"two Sections want probe files with the same name: {sorted(files)}")
+    return keyed
+
+
 @asynccontextmanager
 async def ephemeral_trino(
-    kubernetes: KubernetesAdapter, settings: Settings, validation_id: str
+    kubernetes: KubernetesAdapter,
+    settings: Settings,
+    validation_id: str,
+    files: dict[str, str] | None = None,
+    resource: str | None = None,
 ) -> AsyncIterator[Trino]:
     """An ephemeral coordinator, deleted however this block exits.
 
@@ -129,24 +175,51 @@ async def ephemeral_trino(
     name = pod_name(validation_id)
     timeout = settings.validation_timeout_seconds
 
-    await kubernetes.create_pod(validation_manifest(name, image, int(timeout) + 60))
-    logger.info("validation pod created", extra={"pod": name, "image": image})
+    if files:
+        # Born and dies with the pod, and labelled like it, so a crash mid-Validation
+        # leaves a Secret the startup sweep can find.
+        await kubernetes.create_secret(name, probe_secret(files), dict(LABELS))
+    await kubernetes.create_pod(validation_manifest(name, image, int(timeout) + 60, files))
+    logger.info(
+        "validation pod created", extra={"pod": name, "image": image, "files": len(files or {})}
+    )
     try:
-        yield await _await_serving(kubernetes, name, timeout)
+        yield await _await_serving(kubernetes, name, timeout, resource)
     finally:
         await kubernetes.delete_pod(name)
+        if files:
+            await kubernetes.delete_secret(name)
         logger.info("validation pod deleted", extra={"pod": name})
 
 
-async def _await_serving(kubernetes: KubernetesAdapter, name: str, timeout: float) -> Trino:
+def _why(logs: str) -> str:
+    """The lines of a failed probe's log that say what went wrong."""
+    interesting = [
+        line.strip()
+        for line in logs.splitlines()
+        if "ERROR" in line or "Caused by" in line or "Configuration is invalid" in line
+    ]
+    return " / ".join(interesting[-3:])
+
+
+async def _await_serving(
+    kubernetes: KubernetesAdapter, name: str, timeout: float, resource: str | None = None
+) -> Trino:
     deadline = time.monotonic() + timeout
     while True:
         state = await kubernetes.pod_state(name)
         if state.problem is not None:
+            # A probe that will not start is how a file-based Section fails Validation, and
+            # its log is the only place the reason exists: Trino writes nothing to the
+            # termination-log file Kubernetes would otherwise surface.
             raise ValidationFailed(
                 [
                     ValidationFailure(
-                        reason=f"The validation coordinator could not start: {state.problem}"
+                        resource=resource,
+                        reason=(
+                            f"The validation coordinator could not start: {state.problem}. "
+                            f"{_why(await kubernetes.pod_logs(name, _LOG_LINES))}"
+                        ).strip(),
                     )
                 ]
             )
@@ -204,7 +277,25 @@ async def validate_candidate(
         logger.info("no Trino validation needed")
         return
 
-    async with ephemeral_trino(cluster.kubernetes, cluster.settings, validation_id) as probe:
+    files: dict[str, str] = {}
+    for section in probing:
+        files.update(section.probe_files(sections.get(section.name, {})))
+
+    # Named so that a probe which refuses to start can be blamed on something. With one
+    # file-based Section that is unambiguous; a second will need the attribution to come
+    # from whichever Section contributed the file Trino choked on.
+    culprit = next(
+        (
+            sorted(sections.get(section.name, {}))[0]
+            for section in probing
+            if section.probe_files(sections.get(section.name, {}))
+        ),
+        None,
+    )
+
+    async with ephemeral_trino(
+        cluster.kubernetes, cluster.settings, validation_id, files, culprit
+    ) as probe:
         for section in probing:
             failures.extend(
                 await section.check_against_probe(probe, sections.get(section.name, {}))

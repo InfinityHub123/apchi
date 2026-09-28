@@ -145,6 +145,11 @@ class CatalogsSection:
     def needs_probe(self, desired: Resources) -> bool:
         return bool(desired)
 
+    def probe_files(self, desired: Resources) -> dict[str, str]:
+        """Nothing. Catalogs are proved by issuing statements against the probe, not by
+        starting it with a file in place."""
+        return {}
+
     async def check_against_probe(
         self, probe: Trino, desired: Resources
     ) -> list[ValidationFailure]:

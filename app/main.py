@@ -91,11 +91,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # the Apchi that never comes back at all.
     try:
         orphans = await app.state.kubernetes.delete_pods(VALIDATION_SELECTOR)
+        stale = await app.state.kubernetes.delete_secrets(VALIDATION_SELECTOR)
     except Exception:
-        logger.exception("could not sweep orphaned validation pods")
+        logger.exception("could not sweep orphaned validation objects")
     else:
-        if orphans:
-            logger.warning("deleted orphaned validation pods", extra={"pods": orphans})
+        if orphans or stale:
+            logger.warning(
+                "deleted orphaned validation objects",
+                extra={"pods": orphans, "secrets": stale},
+            )
 
     yield
     await app.state.apply_runner.shutdown()

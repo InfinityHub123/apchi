@@ -101,6 +101,16 @@ class Section(Protocol):
         """Whether this Section has anything for an ephemeral coordinator to reject."""
         ...
 
+    def probe_files(self, desired: Resources) -> dict[str, str]:
+        """Files the probe must hold for this Section, keyed by where Trino reads them.
+
+        This is how a Section whose configuration is a *file* gets validated at all: the
+        probe is started with it in place, and a file Trino will not accept becomes a pod
+        that will not start. A Section applied by statements rather than by a file
+        contributes nothing here.
+        """
+        ...
+
     async def check_against_probe(
         self, probe: Trino, desired: Resources
     ) -> list[ValidationFailure]:

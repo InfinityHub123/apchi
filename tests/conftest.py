@@ -145,6 +145,11 @@ class FakeKubernetes:
         self.pods: dict[str, dict[str, Any]] = {}
         #: Every pod ever created, so a test can prove one was and that it went away.
         self.pod_history: list[str] = []
+        #: What Apchi asked for, kept after deletion. `pods` and `secrets` hold only what is
+        #: live, and most of what is worth asserting about a probe is true only while it
+        #: exists -- which is exactly when a test cannot look.
+        self.pod_manifests: dict[str, dict[str, Any]] = {}
+        self.secret_history: dict[str, dict[str, str]] = {}
         #: Set by a test to make the pod report a condition waiting cannot fix.
         self.pod_problem: str | None = None
         #: Set by a test to make the pod never reach serving, proving the timeout.
@@ -162,6 +167,10 @@ class FakeKubernetes:
         self.rollout_never_completes = False
         #: The file mounts Apchi owns on the coordinator, keyed by volume name.
         self.mounts: dict[str, dict[str, str]] = {}
+        #: Labels on Secrets Apchi created, so a test can prove the sweep can find them.
+        self.secret_labels: dict[str, dict[str, str]] = {}
+        #: What a failed probe's log says. Set by a test that makes one fail.
+        self.pod_log = ""
         self._cluster: DockerContainer | None = None
         self._validation = validation
         self._baselines: dict[str, set[str]] = {}
@@ -248,9 +257,32 @@ class FakeKubernetes:
             port=int(self._validation.get_exposed_port(8080)),
         )
 
+    async def create_secret(self, name: str, data: dict[str, str], labels: dict[str, str]) -> None:
+        self.secrets[name] = dict(data)
+        self.secret_history[name] = dict(data)
+        self.secret_labels[name] = dict(labels)
+
+    async def delete_secret(self, name: str) -> None:
+        self.secrets.pop(name, None)
+        self.secret_labels.pop(name, None)
+
+    async def delete_secrets(self, label_selector: str) -> list[str]:
+        names = [
+            name
+            for name, labels in self.secret_labels.items()
+            if label_selector in {f"{k}={v}" for k, v in labels.items()}
+        ]
+        for name in names:
+            await self.delete_secret(name)
+        return names
+
+    async def pod_logs(self, name: str, tail: int) -> str:
+        return self.pod_log
+
     async def create_pod(self, manifest: dict[str, Any]) -> None:
         name = manifest["metadata"]["name"]
         self.pods[name] = manifest
+        self.pod_manifests[name] = manifest
         self.pod_history.append(name)
         if self._validation is not None:
             self._baselines[name] = await self._probe().catalogs()
