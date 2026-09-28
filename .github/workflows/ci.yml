@@ -59,11 +59,11 @@ jobs:
       - name: Select this shard's tests
         id: shard
         run: |
-          files=$(ls tests/tier2/test_*.py | awk "NR % 4 == ${{ matrix.shard }} % 4")
-          echo "files<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$files" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          # One line, space separated. A multi-line output turns the pytest step into
+          # several shell lines, and the second one tries to *execute* a test file.
+          files=$(ls tests/tier2/test_*.py | awk "NR % 4 == ${{ matrix.shard }} % 4" | tr '\n' ' ')
           test -n "$files" || { echo "shard ${{ matrix.shard }} selected no files"; exit 1; }
+          echo "files=$files" >> "$GITHUB_OUTPUT"
           echo "$files"
 
       - name: Create cluster
