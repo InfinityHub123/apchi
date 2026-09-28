@@ -41,6 +41,11 @@ LISTENER = {
     },
 }
 
+#: A bare 200 with no body. nc is not an HTTP server, so the response is written by hand.
+#: It has to live in a YAML block scalar: the `Content-Length: 0` in it reads as a mapping
+#: key in a plain one, and kubectl rejects the container command as an object.
+_RESPONSE = "HTTP/1.1 200 OK\\r\\nContent-Length: 0\\r\\n\\r\\n"
+
 _MANIFEST = f"""
 apiVersion: v1
 kind: Pod
@@ -52,7 +57,11 @@ spec:
   containers:
     - name: echo
       image: busybox:1.37
-      command: ["sh","-c","while true; do printf 'HTTP/1.1 200 OK\\r\\nContent-Length: 0\\r\\n\\r\\n' | nc -l -p 8080; done"]
+      command:
+        - sh
+        - -c
+        - >-
+          while true; do printf '{_RESPONSE}' | nc -l -p 8080; done
       ports: [{{containerPort: 8080}}]
 ---
 apiVersion: v1
