@@ -46,9 +46,14 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def kubectl(*args: str, timeout: float = 600) -> str:
+def kubectl(*args: str, timeout: float = 600, stdin: str | None = None) -> str:
     result = subprocess.run(
-        ["kubectl", *args], capture_output=True, text=True, timeout=timeout, check=True
+        ["kubectl", *args],
+        input=stdin,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=True,
     )
     return result.stdout
 

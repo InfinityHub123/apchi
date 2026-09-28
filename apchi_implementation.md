@@ -391,18 +391,19 @@ Apchi restarts only what the Candidate's changes require:
 | Permissions | no restart (timed reload) | no |
 | Certificate Mapping | restart | no |
 | Resource Groups | restart | no |
-| Event Listeners | restart | none — see below |
+| Event Listeners | restart | none — proven, see below |
 
 Resource groups: "The JSON file only needs to be present on the coordinator." Access
 control: "Access control must be configured on the coordinator."
 
 Event listener scope was recorded here as unresolved, with "restart both" as the conservative
-answer. Trino's documentation does in fact settle it — the plugin is installed *on the
-coordinator*, and the events a listener receives are query-created and query-completed, which the
-coordinator produces — so **the implementation restarts the coordinator only**. That divergence
-from the table above is deliberate and is not yet proven: the cost of being wrong is silently
-losing events rather than a visible failure, so the table is corrected only once a test has
-watched events arrive while the worker pods were never restarted.
+answer. It is now **settled, and proven**. Trino's documentation says the plugin is installed *on
+the coordinator*, and the events a listener receives — query-created and query-completed — are
+produced by the coordinator; a Tier 2 test then watched an event arrive at a receiver in the
+cluster while the worker pods kept their uids, so no worker was restarted and none needed to be.
+
+The proof matters more than the documentation here, because the cost of being wrong is silently
+losing events rather than failing visibly, and an absence of documentation is not evidence.
 
 This saves rollout time, not queries. The coordinator restart is what kills queries.
 
@@ -1556,8 +1557,7 @@ Additional constraints:
   until someone needs them curated.
 - **Who owns `event-listener.config-files`**, which is what limits the Candidate to a single
   Event Listener (§13.6). It is `config.properties`, so today it is Admin territory.
-- **Event listener node scope** — whether workers genuinely need event listener configuration
-  is unresolved in Trino's documentation.
+
 - **Apchi's own disaster recovery** — Mongo is the single copy of all Snapshots and audit
   history (§18).
 - **API policy** — breaking changes, deprecation, new versions.
