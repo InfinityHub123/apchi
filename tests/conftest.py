@@ -165,6 +165,10 @@ class FakeKubernetes:
         self.restarts_for_real = False
         #: Set by a test to make the rollout never finish, proving the hard timeout.
         self.rollout_never_completes = False
+        #: Set by a test to let the first N-1 Rollouts finish and stall every one after.
+        #: How a rollback's *own* rollout is made to fail while the Apply's succeeded --
+        #: a flag that stalls them all could never show the difference.
+        self.stall_rollout_from: int | None = None
         #: The file mounts Apchi owns on the coordinator, keyed by volume name.
         self.mounts: dict[str, dict[str, str]] = {}
         #: Labels on Secrets Apchi created, so a test can prove the sweep can find them.
@@ -219,6 +223,8 @@ class FakeKubernetes:
         exists to close.
         """
         if self.rollout_never_completes:
+            return RolloutState(generation=2, observed_generation=1, replicas=1)
+        if self.stall_rollout_from is not None and len(self.restarts) >= self.stall_rollout_from:
             return RolloutState(generation=2, observed_generation=1, replicas=1)
         if self.restarts_for_real and self._cluster is not None and self.restarts:
             probe = Trino(

@@ -536,6 +536,12 @@ Full Rollback — it is automatic, not an Operator action, and it produces no Sn
 - It creates **no** Snapshot.
 - It **never retries.**
 
+For a **rollout-required** Section there is no compensating statement to work out: the file
+engines are declarative, so the previous content is simply written again. What is different is
+that the Cluster does not adopt it until the coordinator comes back, so the rollback restarts
+too — within the single bounded attempt, not as a retry. A rollback that changed nothing
+requiring a restart does not perform one: undoing a catalog must not cost every running query.
+
 Auto Rollback also restores the **catalog Secret**, not only the live catalogs. Restoring the
 live ones alone would leave the durable copy holding a catalog the Snapshot never had, to be
 seeded back in at the next pod restart — the divergence below, arriving weeks later with
