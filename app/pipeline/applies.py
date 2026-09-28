@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 from pymongo.asynchronous.database import AsyncDatabase
 
 from app.logging import apply_id_var
@@ -112,6 +112,18 @@ class ApplyRecord(BaseModel):
     )
     started_at: datetime
     finished_at: datetime | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def rolled_out(self) -> bool:
+        """Whether this Apply restarted Trino to make its changes live.
+
+        Derived from the history rather than recorded beside it, so the two cannot
+        disagree. It is about the Apply's own Rollout: an Apply that failed before
+        reaching one may still have been restarted by its Auto Rollback, which the
+        rollback outcome is what reports.
+        """
+        return any(event.stage is Stage.ROLLING_OUT for event in self.history)
 
     @property
     def in_flight(self) -> bool:
