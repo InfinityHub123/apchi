@@ -36,14 +36,35 @@ jobs:
         run: uv run pytest tests/tier1 -q
 
   tier2:
-    name: Tier 2 -- end to end on kind
+    # Sharded because the suite is dominated by coordinator restarts, which are wall clock
+    # and not work -- one job spent seventeen minutes mostly waiting for pods. Each shard
+    # gets its own kind cluster, so they cannot contend over the one Trino they all reset.
+    #
+    # The split is computed from the directory rather than listed here, so a new tier 2 file
+    # runs without anyone remembering to add it. A hand-written list is how the adapter
+    # conformance check came to miss a method twice.
+    name: Tier 2 -- end to end on kind (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
       - run: uv sync --extra dev
+
+      - name: Select this shard's tests
+        id: shard
+        run: |
+          files=$(ls tests/tier2/test_*.py | awk "NR % 4 == ${{ matrix.shard }} % 4")
+          echo "files<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$files" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          test -n "$files" || { echo "shard ${{ matrix.shard }} selected no files"; exit 1; }
+          echo "$files"
 
       - name: Create cluster
         uses: helm/kind-action@v1
@@ -57,7 +78,7 @@ jobs:
           kubectl rollout status deploy/trino-worker --timeout=600s
 
       - name: Tier 2 -- against the real cluster
-        run: uv run pytest tests/tier2 -q
+        run: uv run pytest ${{ steps.shard.outputs.files }} -q
 
       - name: Diagnostics on failure
         if: failure()
