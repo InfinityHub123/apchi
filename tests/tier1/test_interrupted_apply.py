@@ -92,21 +92,42 @@ async def _succeed(client: AsyncClient) -> dict:
     return record
 
 
-async def _kill_mid_apply(client: AsyncClient, kubernetes: FakeKubernetes, key: str) -> str:
-    """Start an Apply and cancel it once the Secret names the new catalog.
+async def _kill_mid_apply(
+    client: AsyncClient,
+    kubernetes: FakeKubernetes,
+    key: str,
+    cluster: DockerContainer | None = None,
+    catalog: str | None = None,
+) -> str:
+    """Start an Apply and cancel it once it has got far enough to matter.
 
-    That is the window that matters: the durable copy has been written and the DDL may
-    or may not have run. Recovery has to converge either way.
+    Far enough means the durable copy names the new catalog, and -- when the caller says
+    which -- the catalog is actually live in Trino.
+
+    Waiting for the catalog matters because of how this simulates a restart. A real Apchi
+    dying takes its threads with it; cancelling an asyncio task does not, and the catalog
+    DDL runs in a threadpool. Cancel while that call is in flight and the statement still
+    lands, possibly after recovery has already looked -- a race that exists only because
+    the process survives, and one that would make the assertion flap rather than fail.
     """
     started = await client.post("/api/v1/applies")
     apply_id = started.json()["id"]
     deadline = asyncio.get_running_loop().time() + 30
+    probe = (
+        Trino(
+            host=cluster.get_container_host_ip(),
+            port=int(cluster.get_exposed_port(8080)),
+        )
+        if cluster is not None and catalog is not None
+        else None
+    )
     while asyncio.get_running_loop().time() < deadline:
-        if key in kubernetes.secrets.get(SECRET, {}):
+        written = key in kubernetes.secrets.get(SECRET, {})
+        if written and (probe is None or catalog in await probe.catalogs()):
             break
         await asyncio.sleep(0.01)
     else:
-        raise AssertionError("the Apply never wrote the Secret")
+        raise AssertionError("the Apply never got far enough to interrupt")
     await client.app_under_test.state.apply_runner.shutdown()  # type: ignore[attr-defined]
     return apply_id
 
@@ -121,7 +142,9 @@ async def test_the_cluster_is_restored_after_a_restart_mid_apply(
         await first.post("/api/v1/catalogs", json=KEPT)
         await _succeed(first)
         await first.post("/api/v1/catalogs", json=ADDED)
-        apply_id = await _kill_mid_apply(first, fake_kubernetes, "added.properties")
+        apply_id = await _kill_mid_apply(
+            first, fake_kubernetes, "added.properties", trino_cluster, "added"
+        )
 
     async with _apchi(settings, fake_kubernetes, trino_cluster, trino_validation) as restarted:
         record = (await restarted.get(f"/api/v1/applies/{apply_id}")).json()
