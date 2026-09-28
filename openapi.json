@@ -77,6 +77,12 @@
             ],
             "description": "The outcome of Auto Rollback. Absent when none was attempted, which means nothing reached the Cluster."
           },
+          "rolled_out": {
+            "description": "Whether this Apply restarted Trino to make its changes live.\n\nDerived from the history rather than recorded beside it, so the two cannot\ndisagree. It is about the Apply's own Rollout: an Apply that failed before\nreaching one may still have been restarted by its Auto Rollback, which the\nrollback outcome is what reports.",
+            "readOnly": true,
+            "title": "Rolled Out",
+            "type": "boolean"
+          },
           "snapshot": {
             "anyOf": [
               {
@@ -101,7 +107,8 @@
         "required": [
           "id",
           "stage",
-          "started_at"
+          "started_at",
+          "rolled_out"
         ],
         "title": "ApplyRecord",
         "type": "object"

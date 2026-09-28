@@ -165,6 +165,56 @@ async def test_an_unchanged_listener_restarts_nothing(
     assert fake_kubernetes.restarts == []
 
 
+async def test_the_record_says_whether_this_apply_restarted_trino(
+    applying_client: AsyncClient,
+) -> None:
+    """So an Operator reading the history afterwards can tell an Apply that cost every
+    running query from one that cost nothing."""
+    await applying_client.post("/api/v1/catalogs", json=CATALOG)
+    quiet = await _apply(applying_client)
+
+    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+    noisy = await _apply(applying_client)
+
+    assert quiet["rolled_out"] is False
+    assert noisy["rolled_out"] is True
+
+
+async def test_removing_the_only_listener_is_a_change_and_restarts(
+    applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
+) -> None:
+    """Taking the listener away has to reach Trino just as adding it did -- the file is
+    read once per process, so the pod that still has it keeps using it."""
+    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+    await _apply(applying_client)
+    fake_kubernetes.restarts.clear()
+
+    await applying_client.delete("/api/v1/event-listeners/audit")
+    record = await _apply(applying_client)
+
+    assert record["stage"] == "succeeded", record.get("failure_reason")
+    assert record["rolled_out"] is True
+    assert len(fake_kubernetes.restarts) == 1
+
+
+async def test_editing_a_listener_in_place_restarts(
+    applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
+) -> None:
+    """The decision is what changed, not whether the Section gained or lost a resource."""
+    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+    await _apply(applying_client)
+    fake_kubernetes.restarts.clear()
+
+    await applying_client.patch(
+        "/api/v1/event-listeners/audit",
+        json={"properties": {"http-event-listener.connect-ingest-uri": "http://other:9090/e"}},
+    )
+    record = await _apply(applying_client)
+
+    assert record["rolled_out"] is True
+    assert len(fake_kubernetes.restarts) == 1
+
+
 async def test_the_rollout_is_its_own_stage_in_the_history(
     applying_client: AsyncClient,
 ) -> None:

@@ -406,6 +406,16 @@ watched events arrive while the worker pods were never restarted.
 
 This saves rollout time, not queries. The coordinator restart is what kills queries.
 
+The decision is made from **what changed**, not from which Sections exist or which are
+non-empty. A Cluster that has an Event Listener configured must not pay a restart on every
+Apply that leaves it alone; adding, editing and removing one all count as changes, and removal
+counts because the file is read once per process, so a pod that still has it keeps using it.
+
+The Apply record reports whether a Rollout happened, derived from the stage history rather
+than recorded beside it so the two cannot disagree. It describes that Apply's own Rollout: an
+Apply that failed before reaching one may still have been restarted by its Auto Rollback, and
+the rollback outcome is what reports that.
+
 **A Candidate touching only catalogs, client certificates and permissions applies with no
 restart at all.** Half the Sections reach the Cluster without one.
 
