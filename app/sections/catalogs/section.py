@@ -10,8 +10,15 @@ from typing import Any
 
 from app.adapters.trino import Trino
 from app.api.errors import NameAlreadyTaken, NotFound, UnprocessablePayload
+from app.config import Settings
 from app.sections import SectionName
-from app.sections.base import Cluster, Resources, SectionPlan, ValidationFailure
+from app.sections.base import (
+    Cluster,
+    CoordinatorFile,
+    Resources,
+    SectionPlan,
+    ValidationFailure,
+)
 from app.sections.catalogs import SECTION, apply
 from app.sections.catalogs.connectors import PropertyProblem, is_curated, validate_properties
 from app.sections.catalogs.generator import render_secret
@@ -85,6 +92,15 @@ class CatalogsSection:
     #: Trino adopts a catalog through CREATE CATALOG against the running coordinator.
     requires_rollout = False
 
+    def coordinator_file(self, settings: Settings) -> CoordinatorFile | None:
+        """None. Catalogs reach Trino as statements, not as a file the coordinator reads --
+        the Secret they do have is a seed the Admin's initContainer copies, not a mount
+        Apchi owns."""
+        return None
+
+    def render_file(self, desired: Resources) -> str | None:
+        return None
+
     def plan(self, desired: Resources, current: Resources) -> apply.CatalogPlan:
         return apply.plan(desired, current)
 
@@ -144,11 +160,6 @@ class CatalogsSection:
 
     def needs_probe(self, desired: Resources) -> bool:
         return bool(desired)
-
-    def probe_files(self, desired: Resources) -> dict[str, str]:
-        """Nothing. Catalogs are proved by issuing statements against the probe, not by
-        starting it with a file in place."""
-        return {}
 
     async def check_against_probe(
         self, probe: Trino, desired: Resources

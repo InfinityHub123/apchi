@@ -24,6 +24,7 @@ from typing import Any
 from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.config import Settings
+from app.pipeline.files import probe_files
 from app.sections import SectionName
 from app.sections.base import Cluster, Resources, SectionPlan, ValidationFailure
 from app.sections.registry import REGISTERED
@@ -279,7 +280,7 @@ async def validate_candidate(
 
     files: dict[str, str] = {}
     for section in probing:
-        files.update(section.probe_files(sections.get(section.name, {})))
+        files.update(probe_files(section, cluster.settings, sections.get(section.name, {})))
 
     # Named so that a probe which refuses to start can be blamed on something. With one
     # file-based Section that is unambiguous; a second will need the attribution to come
@@ -288,7 +289,7 @@ async def validate_candidate(
         (
             sorted(sections.get(section.name, {}))[0]
             for section in probing
-            if section.probe_files(sections.get(section.name, {}))
+            if probe_files(section, cluster.settings, sections.get(section.name, {}))
         ),
         None,
     )

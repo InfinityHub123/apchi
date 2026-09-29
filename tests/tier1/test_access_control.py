@@ -197,3 +197,28 @@ async def test_an_apply_is_refused_when_a_precondition_is_broken(
     assert record["stage"] == "failed"
     assert "PreconditionFailed" in record["failure_reason"]
     assert record["rollback"] is None, "nothing was touched, so there is nothing to undo"
+
+
+def test_every_file_a_section_declares_is_guarded(settings: Settings) -> None:
+    """The precondition reads the registry rather than naming a path.
+
+    This is the property worth having: a Section added later is guarded without anyone
+    remembering to extend the check, and forgetting is the likely failure because nothing
+    breaks when you do -- Apchi and an Admin would simply overwrite each other's file, last
+    writer winning, silently.
+    """
+    from app.pipeline.files import owned_paths
+    from app.sections.registry import REGISTERED
+
+    guarded = owned_paths(REGISTERED, settings)
+    assert guarded, "no Section declares a file; this test has stopped proving anything"
+
+    for path, volume in guarded.items():
+        spec = healthy_pod_spec()
+        spec["containers"][0]["volumeMounts"].append({"name": "someone-elses", "mountPath": path})
+
+        with pytest.raises(PreconditionFailed) as raised:
+            check(pod_spec(spec), settings)
+
+        assert path in str(raised.value)
+        assert volume in str(raised.value)

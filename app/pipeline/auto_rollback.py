@@ -16,6 +16,7 @@ import logging
 import httpx
 
 from app.config import Settings
+from app.pipeline.files import deliver, would_change
 from app.pipeline.maintenance import EngagedBy, MaintenanceStore
 from app.pipeline.rollout import roll_out
 from app.pipeline.verification import verify
@@ -47,11 +48,14 @@ async def restore(
     Each Section knows how to undo itself, including what it can and cannot assume about
     how far a failed Apply got. The pipeline only decides that this happens once.
     """
-    changed = {
-        section.name
-        for section in REGISTERED
-        if await section.restore(cluster, snapshot_sections.get(section.name, {}))
-    }
+    changed: set[SectionName] = set()
+    for section in REGISTERED:
+        snapshot = snapshot_sections.get(section.name, {})
+        # Asked before the file is written, because afterwards the answer is always no.
+        file_differs = await would_change(section, cluster, snapshot)
+        await deliver(section, cluster, snapshot)
+        if file_differs or await section.restore(cluster, snapshot):
+            changed.add(section.name)
 
     # A Section Trino adopts only by restarting has to be restarted to be *un*done too,
     # and that restart is part of the single bounded attempt rather than a retry.

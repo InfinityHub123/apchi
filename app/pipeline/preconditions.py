@@ -17,7 +17,8 @@ from typing import Any
 from pydantic import AliasPath, BaseModel, ConfigDict, Field
 
 from app.config import Settings
-from app.sections.event_listeners.generator import MOUNT_PATH as EVENT_LISTENER_PATH
+from app.pipeline.files import owned_paths
+from app.sections.registry import REGISTERED
 
 logger = logging.getLogger(__name__)
 
@@ -136,20 +137,19 @@ def check(spec: PodSpec, settings: Settings) -> None:
                     "itself, so every CREATE CATALOG would fail."
                 )
 
-    # 4. The Event Listener file is Apchi's to mount. An Admin mounting something else at
-    #    the same path would be fighting Apchi over one file, and whichever of them wrote
-    #    last would win silently.
+    # 4. Every file a Section declares is Apchi's to mount. An Admin mounting something
+    #    else at one of those paths would be fighting Apchi over one file, and whichever of
+    #    them wrote last would win silently. Read from the registry rather than named here,
+    #    so a new file-owning Section is guarded without anyone remembering to add it.
+    apchi_owned = owned_paths(REGISTERED, settings)
     for container in spec.containers:
         for mount in container.volume_mounts:
-            if (
-                mount.mount_path == EVENT_LISTENER_PATH
-                and mount.name != settings.event_listener_volume_name
-            ):
+            expected = apchi_owned.get(mount.mount_path)
+            if expected is not None and mount.name != expected:
                 problems.append(
                     f"Container {container.name!r} mounts {mount.name!r} at "
-                    f"{EVENT_LISTENER_PATH}, which is the file Apchi delivers Event "
-                    f"Listeners through. Apchi adds and removes its own volume "
-                    f"{settings.event_listener_volume_name!r} there; remove this mount."
+                    f"{mount.mount_path}, which is a file Apchi delivers. Apchi adds and "
+                    f"removes its own volume {expected!r} there; remove this mount."
                 )
 
     if problems:

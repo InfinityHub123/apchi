@@ -11,6 +11,7 @@ raised: the pipeline decides what a failure means to the Apply it is running.
 """
 
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Any, Protocol
 
 from pydantic import BaseModel
@@ -37,6 +38,29 @@ class ValidationFailure(BaseModel):
     def __str__(self) -> str:
         where = "/".join(part for part in (self.section, self.resource) if part)
         return f"{where}: {self.reason}" if where else self.reason
+
+
+@dataclass(frozen=True)
+class CoordinatorFile:
+    """A file Apchi delivers to the coordinator and owns the mount for.
+
+    Owning the mount is not a detail. Trino refuses to start when a file it was told to
+    read is missing, and Kubernetes turns a subPath mount of an absent Secret key into a
+    *directory* it dies on -- so "this Section is empty" can only be expressed by the mount
+    not being there, which means Apchi adds and removes it on the Admin's pod template.
+    Everything else on that template belongs to the Admin, and a precondition rejects
+    anything of theirs mounted at a path declared here.
+    """
+
+    secret: str
+    volume: str
+    path: str
+
+    @property
+    def key(self) -> str:
+        """The Secret key, which is the filename. Derived rather than declared: two names
+        for one thing is one of them waiting to be wrong."""
+        return PurePosixPath(self.path).name
 
 
 @dataclass(frozen=True)
@@ -71,6 +95,22 @@ class Section(Protocol):
     #: consumes the configuration, never of when an Operator's edit takes effect.
     requires_rollout: bool
 
+    def coordinator_file(self, settings: Settings) -> CoordinatorFile | None:
+        """The file this Section delivers to the coordinator, or None if it delivers none.
+
+        Declaring it is all a Section does about delivery: the pipeline writes the Secret,
+        mounts it when there is content, unmounts it when there is not, puts it in front of
+        the validation probe, and tells the preconditions to guard the path.
+        """
+        ...
+
+    def render_file(self, desired: Resources) -> str | None:
+        """The file's content, or None when this Section has nothing to deliver.
+
+        None and empty mean the same thing to the pipeline: no file, so no mount.
+        """
+        ...
+
     def plan(self, desired: Resources, current: Resources) -> SectionPlan:
         """What applying `desired` over `current` would do."""
         ...
@@ -99,16 +139,6 @@ class Section(Protocol):
 
     def needs_probe(self, desired: Resources) -> bool:
         """Whether this Section has anything for an ephemeral coordinator to reject."""
-        ...
-
-    def probe_files(self, desired: Resources) -> dict[str, str]:
-        """Files the probe must hold for this Section, keyed by where Trino reads them.
-
-        This is how a Section whose configuration is a *file* gets validated at all: the
-        probe is started with it in place, and a file Trino will not accept becomes a pod
-        that will not start. A Section applied by statements rather than by a file
-        contributes nothing here.
-        """
         ...
 
     async def check_against_probe(
