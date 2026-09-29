@@ -316,7 +316,7 @@ async def validate_candidate(
     blame: dict[str, str] = {}
     for section in probing:
         staged = sections.get(section.name, {})
-        contributed = probe_files(section, cluster.settings, staged)
+        contributed = probe_files(section, cluster.settings, staged, cluster.admin)
         files.update(contributed)
         blame.update({path: sorted(staged)[0] for path in contributed if staged})
         spec = section.coordinator_file(cluster.settings)

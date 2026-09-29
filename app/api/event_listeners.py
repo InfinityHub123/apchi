@@ -10,9 +10,9 @@ from fastapi import APIRouter, status
 
 from app.api.deps import (
     CandidateStoreDep,
+    ClusterDep,
     OperatorMutationAllowed,
     SnapshotStoreDep,
-    TrinoDep,
 )
 from app.pipeline.recovery import RevertEffect, RevertRequest, section_revert
 from app.sections.event_listeners import SECTION as LISTENERS
@@ -36,12 +36,12 @@ async def revert(
     request: RevertRequest,
     store: CandidateStoreDep,
     snapshots: SnapshotStoreDep,
-    trino: TrinoDep,
+    cluster: ClusterDep,
 ) -> RevertEffect:
     """Stages into the Candidate; it does not apply. An ordinary POST /applies follows,
     like any other edit -- and because this Section is rollout-required, that Apply
     restarts the coordinator. The effect says so, and what it costs."""
-    return await section_revert(store, snapshots, trino, LISTENERS, request.snapshot)
+    return await section_revert(store, snapshots, cluster, LISTENERS, request.snapshot)
 
 
 @router.get("", response_model=list[EventListener], summary="List staged Event Listeners")

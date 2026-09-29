@@ -12,6 +12,7 @@ from app.adapters.trino import Trino
 from app.api.errors import NameAlreadyTaken, NotFound, UnprocessablePayload
 from app.config import Settings
 from app.sections import SectionName
+from app.sections.admin import AdminValues
 from app.sections.base import (
     Cluster,
     CoordinatorFile,
@@ -98,7 +99,7 @@ class CatalogsSection:
         Apchi owns."""
         return None
 
-    def render_file(self, desired: Resources, settings: Settings) -> str | None:
+    def render_file(self, desired: Resources, settings: Settings, admin: AdminValues) -> str | None:
         return None
 
     def plan(self, desired: Resources, current: Resources) -> apply.CatalogPlan:

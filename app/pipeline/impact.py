@@ -11,9 +11,9 @@ import logging
 
 from pydantic import BaseModel, Field
 
-from app.adapters.trino import Trino
+from app.pipeline.files import would_change
 from app.sections import SectionName
-from app.sections.base import SectionPlan
+from app.sections.base import Cluster, Resources, SectionPlan
 from app.sections.registry import REGISTERED
 
 logger = logging.getLogger(__name__)
@@ -46,31 +46,61 @@ class ApplyCost(BaseModel):
     )
 
 
-def restarts_coordinator(plans: dict[SectionName, SectionPlan]) -> bool:
-    """Whether these changes need Trino restarted.
+async def sections_needing_rollout(
+    plans: dict[SectionName, SectionPlan],
+    desired: dict[SectionName, Resources],
+    cluster: Cluster,
+) -> set[SectionName]:
+    """Which rollout-required Sections a change actually moves.
 
-    The same rule Apply itself follows: a Section that needs no restart never causes one,
-    and a rollout-required Section that did not change does not either.
+    Two questions, because there are two ways what Apchi would write can differ from what
+    Trino is running. The plan answers the Operator's: the Candidate moved. The Cluster
+    answers the other: the rendered file is not the mounted one -- an Admin value changed
+    (§14), or someone edited the Secret by hand. The second is a diff of two durable
+    records, so it needs no history of its own and survives an Apchi restart.
+
+    A Section that needs no restart never causes one, and a rollout-required Section that
+    did not change does not either -- otherwise every Apply on a Cluster with an Event
+    Listener configured would terminate every running query for nothing.
+
+    An unreachable Cluster falls back to the plan. Refusing because the decision could not
+    be *double*-checked would be worse than answering as Apchi always has.
     """
-    return any(
-        section.requires_rollout
-        and (plan := plans.get(section.name)) is not None
-        and not plan.empty
-        for section in REGISTERED
-    )
+    changed: set[SectionName] = set()
+    for section in REGISTERED:
+        if not section.requires_rollout:
+            continue
+        plan = plans.get(section.name)
+        if plan is not None and not plan.empty:
+            changed.add(section.name)
+            continue
+        try:
+            if await would_change(section, cluster, desired.get(section.name, {})):
+                changed.add(section.name)
+        except Exception:
+            logger.warning(
+                "could not read what the Cluster holds for %s; the restart decision "
+                "falls back to the plan",
+                section.name,
+                exc_info=True,
+            )
+    return changed
 
 
-async def cost_of(plans: dict[SectionName, SectionPlan], trino: Trino) -> ApplyCost:
-    """The Cluster is only asked when the answer matters.
+async def cost_of(
+    plans: dict[SectionName, SectionPlan],
+    desired: dict[SectionName, Resources],
+    cluster: Cluster,
+) -> ApplyCost:
+    """The Cluster is only asked how busy it is when the answer matters.
 
-    A Candidate that needs no restart costs no queries, so there is nothing to count and no
-    reason to make Review depend on the Cluster being reachable.
+    A Candidate that needs no restart costs no queries, so there is nothing to count.
     """
-    if not restarts_coordinator(plans):
+    if not await sections_needing_rollout(plans, desired, cluster):
         return ApplyCost(restarts_coordinator=False)
 
     try:
-        at_risk: int | None = await trino.queries_at_risk()
+        at_risk: int | None = await cluster.trino.queries_at_risk()
     except Exception:
         # Review's job is to show what is staged. A Cluster that cannot be asked how busy
         # it is must not stop an Operator seeing their own changes.

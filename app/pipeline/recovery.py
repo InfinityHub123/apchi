@@ -17,13 +17,12 @@ import logging
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.adapters.trino import Trino
 from app.api.errors import NotFound
 from app.pipeline.candidate import Candidate, CandidateStore
 from app.pipeline.impact import RESTART_WARNING, ApplyCost, cost_of
 from app.pipeline.snapshots import SnapshotStore
 from app.sections import SectionName
-from app.sections.base import SectionPlan
+from app.sections.base import Cluster, SectionPlan
 from app.sections.catalogs import SECTION as CATALOGS
 from app.sections.catalogs import apply as catalog_apply
 from app.sections.registry import REGISTERED, SECTIONS
@@ -79,7 +78,7 @@ async def _snapshot_sections(
 async def _effect(
     candidate: Candidate,
     snapshots: SnapshotStore,
-    trino: Trino,
+    cluster: Cluster,
     number: int,
     sections: list[SectionName],
     others_stay_at: int | None,
@@ -111,7 +110,7 @@ async def _effect(
         catalogs_dropped=catalogs.dropped,
         catalogs_created=catalogs.created,
         catalogs_replaced=catalogs.replaced,
-        cost=await cost_of(plans, trino),
+        cost=await cost_of(plans, candidate.sections, cluster),
         summary="",
     )
     effect.summary = _summary(effect, summary_for)
@@ -142,7 +141,7 @@ def _summary(effect: RevertEffect, kind: str) -> str:
 async def section_revert(
     candidates: CandidateStore,
     snapshots: SnapshotStore,
-    trino: Trino,
+    cluster: Cluster,
     section: SectionName,
     number: int,
 ) -> RevertEffect:
@@ -155,7 +154,7 @@ async def section_revert(
     effect = await _effect(
         candidate,
         snapshots,
-        trino,
+        cluster,
         number,
         [section],
         candidate.base_snapshot,
@@ -170,7 +169,7 @@ async def section_revert(
 
 
 async def full_rollback(
-    candidates: CandidateStore, snapshots: SnapshotStore, trino: Trino, number: int
+    candidates: CandidateStore, snapshots: SnapshotStore, cluster: Cluster, number: int
 ) -> RevertEffect:
     """Replace the entire Candidate with an earlier Snapshot.
 
@@ -185,7 +184,7 @@ async def full_rollback(
     effect = await _effect(
         candidate,
         snapshots,
-        trino,
+        cluster,
         number,
         list(SECTIONS),
         None,

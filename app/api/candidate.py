@@ -7,9 +7,9 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import (
     CandidateStoreDep,
+    ClusterDep,
     OperatorMutationAllowed,
     SnapshotStoreDep,
-    TrinoDep,
 )
 from app.pipeline.impact import ApplyCost, cost_of
 from app.pipeline.recovery import RevertEffect, RevertRequest, full_rollback
@@ -66,7 +66,9 @@ def _diff(before: dict[str, Any], after: dict[str, Any]) -> list[ResourceChange]
 
 
 @router.get("/review", response_model=Review, summary="What an Apply would change")
-async def review(store: CandidateStoreDep, snapshots: SnapshotStoreDep, trino: TrinoDep) -> Review:
+async def review(
+    store: CandidateStoreDep, snapshots: SnapshotStoreDep, cluster: ClusterDep
+) -> Review:
     candidate = await store.load()
     # Diffed against the Snapshot the Candidate was derived from, so Review answers
     # "what would this Apply change" rather than "what is staged". Before the first
@@ -88,7 +90,7 @@ async def review(store: CandidateStoreDep, snapshots: SnapshotStoreDep, trino: T
         base_snapshot=candidate.base_snapshot,
         has_changes=any(section.changes for section in sections),
         sections=sections,
-        cost=await cost_of(plans, trino),
+        cost=await cost_of(plans, candidate.sections, cluster),
     )
 
 
@@ -117,11 +119,11 @@ async def rollback(
     request: RevertRequest,
     store: CandidateStoreDep,
     snapshots: SnapshotStoreDep,
-    trino: TrinoDep,
+    cluster: ClusterDep,
 ) -> RevertEffect:
     """Full Rollback: for a serious mistake, and never implicit.
 
     Like a Section Revert this only stages. The Snapshot being restored from is not
     modified -- applying this produces a new one, so history is never rewritten.
     """
-    return await full_rollback(store, snapshots, trino, request.snapshot)
+    return await full_rollback(store, snapshots, cluster, request.snapshot)

@@ -21,6 +21,7 @@ from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.config import Settings
 from app.sections import SectionName
+from app.sections.admin import AdminValues
 
 #: One Section's resources as they are stored in the Candidate and in Snapshots, keyed
 #: by resource name. Deliberately untyped here: the shape belongs to the Section's own
@@ -79,6 +80,10 @@ class Cluster:
     trino: Trino
     kubernetes: KubernetesAdapter
     settings: Settings
+    #: The Admin values in force, read once at the start of an operation and held for the
+    #: whole of it -- an Admin editing them mid-Apply must not change what that Apply is
+    #: delivering, for the reason invariant 4 freezes the Candidate.
+    admin: AdminValues = field(default_factory=AdminValues)
 
 
 class SectionPlan(Protocol):
@@ -109,10 +114,14 @@ class Section(Protocol):
         """
         ...
 
-    def render_file(self, desired: Resources, settings: Settings) -> str | None:
+    def render_file(self, desired: Resources, settings: Settings, admin: AdminValues) -> str | None:
         """The file's content, or None when this Section has nothing to deliver.
 
         None and empty mean the same thing to the pipeline: no file, so no mount.
+
+        Admin values are passed alongside the Candidate's resources rather than merged into
+        them, because the two have different lifecycles: what is rendered is the pair, and
+        only the Candidate half is ever recorded in a Snapshot (§14).
         """
         ...
 

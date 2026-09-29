@@ -19,8 +19,4 @@ REGISTERED: tuple[Section, ...] = (
 
 #: The names of the registered Sections, in registration order. Every other name in
 #: SectionName is vocabulary the model knows and nobody can edit yet.
-#:
-#: Nothing reads `requires_rollout` yet, though the two registered Sections now disagree
-#: about it: Catalogs are applied by DDL, Event Listeners only by restarting. The minimal
-#: restart set is what will use it.
 SECTIONS: tuple[SectionName, ...] = tuple(section.name for section in REGISTERED)

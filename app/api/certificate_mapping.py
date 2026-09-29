@@ -9,9 +9,9 @@ from fastapi import APIRouter, status
 
 from app.api.deps import (
     CandidateStoreDep,
+    ClusterDep,
     OperatorMutationAllowed,
     SnapshotStoreDep,
-    TrinoDep,
 )
 from app.pipeline.recovery import RevertEffect, RevertRequest, section_revert
 from app.sections.certificate_mapping import SECTION as MAPPING
@@ -66,6 +66,6 @@ async def revert(
     request: RevertRequest,
     store: CandidateStoreDep,
     snapshots: SnapshotStoreDep,
-    trino: TrinoDep,
+    cluster: ClusterDep,
 ) -> RevertEffect:
-    return await section_revert(store, snapshots, trino, MAPPING, request.snapshot)
+    return await section_revert(store, snapshots, cluster, MAPPING, request.snapshot)

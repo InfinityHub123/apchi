@@ -6,11 +6,13 @@ from fastapi import Depends, Request
 
 from app.adapters.trino import Trino
 from app.api.errors import Conflict, MaintenanceModeEngaged
+from app.pipeline.admin_values import AdminStore
 from app.pipeline.applies import ApplyStore
 from app.pipeline.candidate import CandidateStore
 from app.pipeline.maintenance import MaintenanceStore
 from app.pipeline.snapshots import SnapshotStore
 from app.pipeline.validations import ValidationStore
+from app.sections.base import Cluster
 
 
 def trino(request: Request) -> Trino:
@@ -19,6 +21,31 @@ def trino(request: Request) -> Trino:
 
 
 TrinoDep = Annotated[Trino, Depends(trino)]
+
+
+def admin_store(request: Request) -> AdminStore:
+    store: AdminStore = request.app.state.admin_store
+    return store
+
+
+AdminStoreDep = Annotated[AdminStore, Depends(admin_store)]
+
+
+async def cluster(request: Request) -> Cluster:
+    """The Cluster as a route sees it, with the Admin values loaded per request.
+
+    Read every time rather than cached: Review's job is to report what applying *now* would
+    cost, and an Admin change between two Reviews is exactly the thing that must show up.
+    """
+    return Cluster(
+        trino=request.app.state.trino,
+        kubernetes=request.app.state.kubernetes,
+        settings=request.app.state.settings,
+        admin=await admin_store(request).load(),
+    )
+
+
+ClusterDep = Annotated[Cluster, Depends(cluster)]
 
 
 def candidate_store(request: Request) -> CandidateStore:

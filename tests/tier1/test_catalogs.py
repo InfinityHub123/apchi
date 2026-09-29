@@ -6,6 +6,8 @@ Apchi's own state, and Apply is what makes it real.
 
 from httpx import AsyncClient
 
+from tests.conftest import bootstrap_secrets
+
 PG = {
     "name": "finance",
     "connector": "postgresql",
@@ -29,7 +31,7 @@ async def test_a_staged_catalog_is_listed_and_fetchable(client: AsyncClient) -> 
 async def test_staging_a_catalog_reaches_nothing_else(client: AsyncClient, fake_kubernetes) -> None:
     await client.post("/api/v1/catalogs", json=PG)
 
-    assert fake_kubernetes.secrets == {}
+    assert fake_kubernetes.secrets == bootstrap_secrets()
 
 
 async def test_a_catalog_can_be_edited(client: AsyncClient) -> None:

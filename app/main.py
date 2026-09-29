@@ -21,9 +21,10 @@ from app.api.snapshots import router as snapshots_router
 from app.api.validations import router as validations_router
 from app.config import Settings, get_settings
 from app.logging import configure_logging
+from app.pipeline.admin_values import AdminStore
 from app.pipeline.applies import ApplyEngine, ApplyRunner, ApplyStore, recover_interrupted
 from app.pipeline.candidate import CandidateStore
-from app.pipeline.engine import Engine
+from app.pipeline.engine import AdminEngine, Engine
 from app.pipeline.maintenance import MaintenanceStore
 from app.pipeline.snapshots import SnapshotStore
 from app.pipeline.validation import VALIDATION_SELECTOR
@@ -41,6 +42,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.apply_store = ApplyStore(app.state.mongo.database)
     app.state.validation_store = ValidationStore(app.state.mongo.database)
     app.state.maintenance_store = MaintenanceStore(app.state.mongo.database)
+    app.state.admin_store = AdminStore(app.state.mongo.database)
 
     # Tests substitute the Kubernetes adapter before the lifespan runs; nothing else
     # is ever substituted.
@@ -51,8 +53,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             host=settings.trino_host, port=settings.trino_port, user=settings.trino_user
         )
 
-    def build_engine(apply_id: str) -> ApplyEngine:
-        return Engine(
+    def build(engine: type[Engine], apply_id: str) -> ApplyEngine:
+        return engine(
             apply_id=apply_id,
             settings=settings,
             candidates=app.state.candidate_store,
@@ -60,9 +62,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             trino=app.state.trino,
             kubernetes=app.state.kubernetes,
             maintenance=app.state.maintenance_store,
+            admin=app.state.admin_store,
         )
 
+    def build_engine(apply_id: str) -> ApplyEngine:
+        return build(Engine, apply_id)
+
+    def build_admin_engine(apply_id: str) -> ApplyEngine:
+        return build(AdminEngine, apply_id)
+
     app.state.apply_runner = ApplyRunner(app.state.apply_store, build_engine)
+    app.state.admin_apply_runner = ApplyRunner(app.state.apply_store, build_admin_engine)
     app.state.validation_runner = ValidationRunner(app.state.validation_store, build_engine)
     logger.info("apchi starting", extra={"environment": settings.environment})
 
@@ -104,6 +114,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
     await app.state.apply_runner.shutdown()
+    await app.state.admin_apply_runner.shutdown()
     await app.state.validation_runner.shutdown()
     await app.state.mongo.close()
 

@@ -881,12 +881,29 @@ manages — not at Apply time, when everything still works, but at the first Ver
 the Rollout, with recovery needing the very connection the pattern just removed. The rule is
 generated, never stored in the Candidate, and it is first because first match wins.
 
-**No pattern is still a file.** A principal that matches no rule is **denied**, not passed
-through, and the authenticator refuses to start when the file it was told to read is missing.
-So "no Certificate Mapping Pattern" is expressed as a rule of `(.*)` — every name as
-presented, which is exactly Trino's behaviour with no mapping configured at all — rather than
-as an absent file. That is the difference from Event Listeners (§13.6), where the absence of
-the mount *is* the configuration.
+**The catch-all is always last, and the file always exists.** A principal that matches no
+rule is **denied**, not passed through, and the authenticator refuses to start when the file
+it was told to read is missing. Apchi therefore always writes the file, and always ends it
+with `(.*)` — every name as presented, which is Trino's behaviour with no mapping configured
+at all. Two consequences worth being explicit about: "no Certificate Mapping Pattern" is a
+file rather than an absent mount, which is the difference from Event Listeners (§13.6), where
+the absence of the mount *is* the configuration; and setting a pattern narrows who is
+*renamed*, never who is *admitted*. Apchi denies nobody here. What a caller may do is
+Permissions' answer (§13.4), and an authentication file that quietly became an authorisation
+one would be the wrong place to decide it.
+
+**Preserving the patterns a Cluster arrives with.** Apchi models one pattern; a Cluster being
+onboarded may run several, and its clients cannot all re-issue certificates at once. So an
+Admin lists the patterns already in use and Apchi renders them into the same file, beneath the
+Operator's pattern — first match wins, so a subject matching both resolves to the convention
+being migrated *to*. They are **Admin values** (§14): applied through the pipeline, never
+recorded in a Snapshot, and deliberately surviving a rollback. When the Admin is satisfied
+their clients have moved they remove them, and the Cluster ends on the single pattern Apchi
+models.
+
+Apchi does not time that migration. It schedules no removal, counts nothing down, and never
+warns that a preserved pattern is overdue. Only the Admin knows whether their clients have
+moved, and a deadline Apchi invented would be a deadline it could enforce by accident.
 
 **Which authenticator reads the file is the Admin's choice**, not Apchi's: `certificate`,
 `password` and `insecure` each take their own `...user-mapping.file` property and all three
@@ -911,9 +928,8 @@ cluster's manifest mounts the Secret rather than relying on a refresh timer.
 Changing the pattern is a breaking operational change regardless: clients must obtain new
 certificates, deploy them, and migrate. Allowing Operators to choose the destination pattern
 does not remove that migration; it gives freedom over the convention at the cost of more
-operational responsibility. There is **no grace period by default** — a Cluster migrating onto
-Apchi with existing patterns of its own keeps them through Admin-owned values, which is §13.3's
-migration story and not a second Operator-facing pattern.
+operational responsibility. There is **no grace period by default**: the preserved patterns
+above are an Admin's explicit act, not something Apchi arranges when a pattern changes.
 
 **Identity flow:**
 
@@ -1046,6 +1062,12 @@ configuration files. An Admin-only escape hatch, not exposed to Operators.
 Operator configuration — but never part of a Snapshot.** Snapshots are the history of
 Operator-managed configuration; Admin values are platform state with a different lifecycle.
 
+They are passed to a Section's generator alongside the Candidate's resources rather than
+merged into them, and that is not a detail of plumbing: only the Candidate half is ever
+recorded, so the two must stay distinguishable right up to the point where the file is
+written. The first implementation is the preserved mapping patterns of §13.3; the document is
+typed for exactly what is settled, because the wider escape hatch below is not.
+
 **Admin wins on conflict.** Where an Admin value and generated Operator configuration set the
 same property, the Admin value takes effect. It is an escape hatch used during upgrades and
 incidents; one an Operator could override would not be an escape hatch.
@@ -1054,6 +1076,18 @@ incidents; one an Operator could override would not be an escape hatch.
 
 An Admin change gets its own Apply, running the same pipeline — Validate on the ephemeral pod,
 render, roll out, Verify — but **creating no Snapshot**.
+
+It delivers the **latest Snapshot merged with today's Admin values**, not the Candidate. That
+is invariant 2 read forwards, and it is what stops an Admin Apply pushing an Operator's staged,
+unreviewed changes to the Cluster on an Admin's authority.
+
+Because nothing an Operator owns has moved, every Section's plan is empty — so the Rollout
+decision cannot come from the plan. It comes from the Cluster instead: Apchi renders the file
+and compares it with the one the coordinator is actually holding. A diff of two durable
+records, which is the same answer §11 settled on for rollback, and it needs no second history
+to stay honest. Review asks the same question, so an Operator sees the coming restart whether
+the change that caused it was theirs or an Admin's, and a Secret edited by hand is corrected
+by the next Apply rather than drifting forever.
 
 Arbitrary low-level values are precisely the class of configuration most able to stop Trino
 booting, so they go through the same validation as everything else rather than straight to the
@@ -1601,15 +1635,16 @@ Additional constraints:
 
 - **Admin arbitrary configuration** — which files and properties may be targeted, and how
   secrets among those values are handled (§14). Storage, precedence, validation, audit and
-  Snapshot scope are settled.
+  Snapshot scope are settled, and the Admin Apply that carries them is built — the preserved
+  mapping patterns of §13.3 are its first user.
 - **Maintenance Mode mechanics** — behaviour when an Apply is already in flight. The endpoint
   and the persistence model are settled (§14).
-- **Certificate mapping migration** — the mechanism is settled: a Cluster arriving with
-  patterns of its own keeps them as Admin-owned values beside Apchi's single Operator pattern,
-  and an Admin removes them when the migration is done, with no grace period by default
-  (§13.3). What remains undefined is the procedure around it: sequencing, authorization edge
-  cases, naming and domain constraints, rollback, and whether every existing setup can migrate
-  cleanly. Note each pattern change costs a coordinator restart.
+- **Certificate mapping migration** — the mechanism is built: a Cluster arriving with patterns
+  of its own keeps them as Admin values beside Apchi's single Operator pattern, and an Admin
+  removes them when the migration is done, with no grace period by default (§13.3). What
+  remains undefined is the procedure around it: sequencing, authorization edge cases, naming
+  and domain constraints, rollback, and whether every existing setup can migrate cleanly. Note
+  each pattern change costs a coordinator restart.
 - **Field-level models for Resource Groups** — hierarchy, selectors and guardrails. Event
   Listeners are settled for `http` and `kafka` (§13.6); `mysql` and `openlineage` pass through
   until someone needs them curated.

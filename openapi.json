@@ -504,6 +504,22 @@
         "title": "Outcome",
         "type": "string"
       },
+      "PreservedMappings": {
+        "description": "The patterns a Cluster ran before Apchi, kept alive while its clients migrate.",
+        "properties": {
+          "patterns": {
+            "description": "Evaluated in the order given, beneath the Operator's pattern, so a subject matching both resolves to the convention being migrated to.",
+            "items": {
+              "$ref": "#/components/schemas/CertificateMappingWrite"
+            },
+            "maxItems": 20,
+            "title": "Patterns",
+            "type": "array"
+          }
+        },
+        "title": "PreservedMappings",
+        "type": "object"
+      },
       "ResourceChange": {
         "properties": {
           "after": {
@@ -954,6 +970,89 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/admin/applies": {
+      "post": {
+        "description": "The same pipeline, over the latest Snapshot merged with today's Admin values.\n\nNot the Candidate: an Admin Apply must not push an Operator's staged, unreviewed\nchanges to the Cluster. And no Snapshot at the end, because nothing an Operator owns\nchanged -- what this Apply did is recorded as an Apply and nowhere else (section 14).\n\nIt freezes the Candidate exactly as an Operator Apply does. Both mutate one Cluster,\nand the pipeline's guarantees depend on nothing else changing underneath.",
+        "operationId": "start_admin_apply_api_v1_admin_applies_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplyRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Apply an Admin change without creating a Snapshot",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/certificate-mapping/preserved": {
+      "get": {
+        "operationId": "get_preserved_mappings_api_v1_admin_certificate_mapping_preserved_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreservedMappings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Mapping patterns preserved through a migration",
+        "tags": [
+          "admin"
+        ]
+      },
+      "put": {
+        "description": "Stages nothing and reaches nothing. The Cluster gets this at the next Apply --\nan Admin Apply if the Admin wants it now, an Operator Apply otherwise.\n\nApchi does not time the migration. It schedules no removal, counts nothing down and\nnever warns that a preserved pattern is overdue: only the Admin knows whether their\nclients have moved, and a deadline Apchi invented would be a deadline it could enforce\nby accident.",
+        "operationId": "set_preserved_mappings_api_v1_admin_certificate_mapping_preserved_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreservedMappings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreservedMappings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace the preserved mapping patterns",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/admin/maintenance-mode": {
       "get": {
         "operationId": "get_maintenance_mode_api_v1_admin_maintenance_mode_get",
