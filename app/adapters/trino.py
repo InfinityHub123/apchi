@@ -7,10 +7,28 @@ Cluster membership comes from the system.runtime.nodes system table rather than
 """
 
 import re
-from typing import Any
+from typing import Any, NamedTuple
 
 import httpx
 from fastapi.concurrency import run_in_threadpool
+
+#: What Apchi's own queries report as their source. The client would otherwise send
+#: "trino-python-client", which says nothing about who is asking. Named so that an Operator
+#: can see Apchi's queries in `system.runtime.queries` -- and so a Resource Group selector
+#: can route them deliberately, which is what makes Verification able to predict where its
+#: own query lands.
+SOURCE = "apchi"
+
+
+class Query(NamedTuple):
+    """A query's result and the identifier Trino filed it under.
+
+    The identifier is what turns a smoke query into evidence: Trino records which resource
+    group a query ran in, and that row is found by id.
+    """
+
+    rows: list[tuple[Any, ...]]
+    query_id: str
 
 
 class Trino:
@@ -20,18 +38,23 @@ class Trino:
         self._user = user
         self._base = f"http://{host}:{port}"
 
-    def _query_sync(self, sql: str) -> list[tuple[Any, ...]]:
+    def _query_sync(self, sql: str) -> Query:
         import trino
 
-        conn = trino.dbapi.connect(host=self._host, port=self._port, user=self._user)
+        conn = trino.dbapi.connect(host=self._host, port=self._port, user=self._user, source=SOURCE)
         try:
             cursor = conn.cursor()
             cursor.execute(sql)
-            return list(cursor.fetchall())
+            return Query(rows=list(cursor.fetchall()), query_id=str(cursor.query_id))
         finally:
             conn.close()
 
     async def query(self, sql: str) -> list[tuple[Any, ...]]:
+        return (await run_in_threadpool(self._query_sync, sql)).rows
+
+    async def run(self, sql: str) -> Query:
+        """The rows and the query id. Used where what happened to the query matters as much
+        as what it returned."""
         return await run_in_threadpool(self._query_sync, sql)
 
     async def is_starting(self) -> bool | None:

@@ -43,6 +43,21 @@ class ValidationFailure(BaseModel):
 
 
 @dataclass(frozen=True)
+class SmokeQuery:
+    """The query Verification ran against the Cluster, and how to find it again.
+
+    Handed to every Section so that a Section with something functional to prove can prove
+    it about a query that actually ran, rather than issuing one of its own. Trino records
+    what became of a query by id, which is what makes this evidence rather than a claim.
+    """
+
+    sql: str
+    query_id: str
+    user: str
+    source: str
+
+
+@dataclass(frozen=True)
 class CoordinatorFile:
     """A file Apchi delivers to the coordinator and owns the mount for.
 
@@ -167,6 +182,11 @@ class Section(Protocol):
         """Prove `desired` against a real Trino that is not the Cluster."""
         ...
 
-    async def verify(self, cluster: Cluster, desired: Resources) -> list[str]:
-        """Reasons the Cluster did not adopt this Section, empty if it did."""
+    async def verify(self, cluster: Cluster, desired: Resources, smoke: SmokeQuery) -> list[str]:
+        """Reasons the Cluster did not adopt this Section, empty if it did.
+
+        Functional, never introspective: ask the Cluster what happened rather than reading
+        configuration back (§8). `smoke` is the query Verification just ran, for a Section
+        whose adoption is visible in what became of a real query.
+        """
         ...

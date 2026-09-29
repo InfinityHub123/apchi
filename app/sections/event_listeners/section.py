@@ -19,6 +19,7 @@ from app.sections.base import (
     CoordinatorFile,
     Resources,
     SectionPlan,
+    SmokeQuery,
     ValidationFailure,
 )
 from app.sections.event_listeners import SECTION
@@ -201,7 +202,7 @@ class EventListenersSection:
     ) -> list[ValidationFailure]:
         return []
 
-    async def verify(self, cluster: Cluster, desired: Resources) -> list[str]:
+    async def verify(self, cluster: Cluster, desired: Resources, smoke: SmokeQuery) -> list[str]:
         """Nothing to assert.
 
         An event listener's output goes to an external sink rather than back to Apchi, so

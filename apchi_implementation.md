@@ -486,8 +486,9 @@ configuration and stay healthy?*
 2. `/v1/status` — node liveness
 3. `SELECT count(*) FROM system.runtime.nodes WHERE NOT coordinator AND state = 'active'` —
    worker count matches the Kubernetes replica count
-4. `SHOW CATALOGS` — every catalog in the Candidate is present
-5. A smoke query against a default catalog, run as Apchi's reserved identity
+4. A smoke query against a default catalog, run as Apchi's reserved identity
+5. `SHOW CATALOGS` — every catalog in the Candidate is present
+6. The resource group that smoke query ran in is the one the selectors name (§13.5)
 
 Step 4 catches divergence between the catalog Secret and Trino's store while the Apply is
 still in flight, rather than leaving it to surface at the next restart. It is Verification,
@@ -499,10 +500,25 @@ that endpoint returns 404 on Trino 483, verified against a running cluster. The 
 is a documented SQL interface reachable over the connection Apchi already holds, and needs no
 management credentials.
 
-Step 4 is what distinguishes "the coordinator came back up" from "the coordinator came back
+Step 5 is what distinguishes "the coordinator came back up" from "the coordinator came back
 up running the configuration we just applied". Trino exposes no endpoint reporting which
 version of a rules file is active, so verification must be functional rather than
 introspective.
+
+Step 6 is that same principle reaching a file-based Section for the first time. The smoke
+query runs *before* the Sections are asked rather than after, because what became of it is
+evidence: Trino records the resource group a query ran in, and a Section is handed the query
+id so it can ask the Cluster what happened instead of reading configuration back. Event
+Listeners and Certificate Mapping still have nothing of the kind — a listener's output goes
+to a sink Apchi cannot read, and proving a mapping pattern would mean holding a client
+certificate Apchi does not have.
+
+**A check that cannot be certain says nothing.** Predicting where a query lands means
+evaluating the selectors the way Trino does, and a wrong prediction fails Verification on a
+healthy Cluster and rolls a good Apply back. So the prediction stops rather than guesses
+whenever a selector turns on something Apchi cannot know about its own query — which groups
+its user belongs to, who it was before impersonation — and the check is skipped. The same
+holds when no selector claims the query at all, or when the Cluster reports no group.
 
 ## The reserved identity
 
@@ -1018,6 +1034,16 @@ cost of a probe that will not start. The second it does not catch at all -- such
 configuration starts cleanly and fails the queries that select into it, which is exactly the
 kind of failure Validation exists to move earlier. Deferring both to Validate is also what
 lets an Operator write a selector before the group it points at.
+
+**Verification proves the file is in force.** Trino reports the resource group a query ran
+in, so the Section reads back the group its Apply's smoke query landed in and compares it
+with the group the selectors name for that query. Two details were verified against a
+running coordinator, because getting either wrong would produce the false failure this check
+must never produce: selector regexes are **full matches**, so a selector for user `apch` does
+not match `apchi`; and a Cluster with no resource group manager still reports a group, since
+Trino's legacy manager files every query under `global`. Apchi's own queries carry the source
+`apchi`, which is both what lets an Operator route them deliberately and what makes the
+prediction certain.
 
 **Where Trino is stricter than it looks.** Three rules were found by putting generated files
 in front of a real coordinator, and each one is a coordinator that does not come back:

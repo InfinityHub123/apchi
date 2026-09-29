@@ -18,6 +18,7 @@ from app.sections.base import (
     CoordinatorFile,
     Resources,
     SectionPlan,
+    SmokeQuery,
     ValidationFailure,
 )
 from app.sections.certificate_mapping import RESOURCE, SECTION
@@ -169,7 +170,7 @@ class CertificateMappingSection:
         start, which the pipeline turns into a failure naming this Section."""
         return []
 
-    async def verify(self, cluster: Cluster, desired: Resources) -> list[str]:
+    async def verify(self, cluster: Cluster, desired: Resources, smoke: SmokeQuery) -> list[str]:
         """Nothing to assert.
 
         Proving the mapping works would mean presenting a certificate, and Apchi connects
