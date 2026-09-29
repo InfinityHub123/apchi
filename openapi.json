@@ -502,6 +502,10 @@
             "title": "Catalogs Replaced",
             "type": "array"
           },
+          "cost": {
+            "$ref": "#/components/schemas/ApplyCost",
+            "description": "What applying this would cost the Cluster. A recovery action that restarts Trino must say so as loudly as the change that made it necessary."
+          },
           "from_snapshot": {
             "title": "From Snapshot",
             "type": "integer"
@@ -543,6 +547,7 @@
         "required": [
           "from_snapshot",
           "sections",
+          "cost",
           "summary"
         ],
         "title": "RevertEffect",
@@ -550,6 +555,7 @@
       },
       "RevertRequest": {
         "additionalProperties": false,
+        "description": "Which Snapshot to go back to. Shared by both recovery actions so the two cannot\ndrift into different shapes for the same question.",
         "properties": {
           "snapshot": {
             "title": "Snapshot",
@@ -609,20 +615,6 @@
         ],
         "title": "Rollback",
         "type": "string"
-      },
-      "RollbackRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "snapshot": {
-            "title": "Snapshot",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "snapshot"
-        ],
-        "title": "RollbackRequest",
-        "type": "object"
       },
       "SectionDiff": {
         "properties": {
@@ -1115,7 +1107,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RollbackRequest"
+                "$ref": "#/components/schemas/RevertRequest"
               }
             }
           },
@@ -1439,6 +1431,48 @@
           }
         },
         "summary": "Stage a new Event Listener",
+        "tags": [
+          "event listeners"
+        ]
+      }
+    },
+    "/api/v1/event-listeners/revert": {
+      "post": {
+        "description": "Stages into the Candidate; it does not apply. An ordinary POST /applies follows,\nlike any other edit -- and because this Section is rollout-required, that Apply\nrestarts the coordinator. The effect says so, and what it costs.",
+        "operationId": "revert_api_v1_event_listeners_revert_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevertEffect"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stage this Section's content from an earlier Snapshot",
         "tags": [
           "event listeners"
         ]

@@ -688,8 +688,10 @@ The warning must be specific: "3 catalogs will be dropped" is materially differe
 "resource groups will be rewritten".
 
 Both actions therefore return the **effect** rather than a bare acknowledgement: which catalogs
-an Apply would drop, create and replace, which Snapshot the other Sections stay at, and a
-sentence saying what it does. The drop list names the catalogs, it does not count them — an
+an Apply would drop, create and replace, which Snapshot the other Sections stay at, whether
+applying restarts the coordinator and what that costs in queries, and a sentence saying what it
+does. A recovery action that destroys every running query must not be quieter about it than the
+change that made it necessary. The drop list names the catalogs, it does not count them — an
 Operator about to lose one should see which. The plan behind it is the same one Apply computes,
 against the Candidate's base Snapshot, so it is the statements an Operator would actually cause
 rather than an estimate. Whether the other Sections stay put is stated by the action, never
