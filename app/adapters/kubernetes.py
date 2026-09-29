@@ -6,8 +6,8 @@ mention threads. Keeping the whole surface in one protocol is also what lets the
 fast test tier substitute it while MongoDB and Trino stay real.
 """
 
-from datetime import UTC, datetime
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
 from fastapi.concurrency import run_in_threadpool
