@@ -100,9 +100,9 @@ async def test_the_listener_file_is_mounted_when_one_is_configured(
 
     await _apply(applying_client)
 
-    assert fake_kubernetes.mounts[VOLUME] == {
+    assert fake_kubernetes.mounts[MOUNT_PATH] == {
+        "volume": VOLUME,
         "secret": LISTENER_SECRET,
-        "path": MOUNT_PATH,
         "key": FILE_KEY,
     }
 
@@ -119,7 +119,7 @@ async def test_removing_the_listener_unmounts_the_file(
     record = await _apply(applying_client)
 
     assert record["stage"] == "succeeded", record.get("failure_reason")
-    assert VOLUME not in fake_kubernetes.mounts
+    assert MOUNT_PATH not in fake_kubernetes.mounts
     assert fake_kubernetes.secrets[LISTENER_SECRET] == {}
 
 

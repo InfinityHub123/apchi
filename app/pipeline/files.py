@@ -30,24 +30,38 @@ async def deliver(section: Section, cluster: Cluster, desired: Resources) -> Non
     for secret, data in _by_secret(specs, contents).items():
         await cluster.kubernetes.write_secret(secret, data)
 
-    for spec in specs:
-        if contents.get(spec.path):
+    # Grouped by volume, because a volume and the mounts that name it can only be removed
+    # together: the API server rejects a volume removed while a mount still names it, and a
+    # volume left behind with no mounts is dead weight on the Admin's pod template.
+    for volume, group in _by_volume(specs).items():
+        present = [spec for spec in group if contents.get(spec.path)]
+        absent = [spec for spec in group if not contents.get(spec.path)]
+        for spec in present:
             await cluster.kubernetes.mount_secret_file(
                 cluster.settings.coordinator_deployment_name,
                 cluster.settings.trino_container_name,
-                spec.volume,
+                volume,
                 spec.secret,
                 spec.path,
                 spec.key,
             )
-        else:
-            await cluster.kubernetes.unmount_secret_file(
+        if absent:
+            await cluster.kubernetes.unmount_secret_files(
                 cluster.settings.coordinator_deployment_name,
                 cluster.settings.trino_container_name,
-                spec.volume,
-                spec.path,
+                volume,
+                [spec.path for spec in absent],
+                drop_volume=not present,
             )
-        logger.info("delivered %s", spec.path, extra={"section": section.name})
+        for spec in group:
+            logger.info("delivered %s", spec.path, extra={"section": section.name})
+
+
+def _by_volume(specs: tuple[CoordinatorFile, ...]) -> dict[str, list[CoordinatorFile]]:
+    volumes: dict[str, list[CoordinatorFile]] = {}
+    for spec in specs:
+        volumes.setdefault(spec.volume, []).append(spec)
+    return volumes
 
 
 def _by_secret(

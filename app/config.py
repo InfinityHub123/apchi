@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     certificate_mapping_secret_name: str = "trino-user-mapping"
     certificate_mapping_volume_name: str = "apchi-user-mapping"
 
+    #: Holds both files the Resource Groups Section owns: the rules and the properties file
+    #: that tells Trino to read them. One Secret, so they arrive and leave together.
+    resource_groups_secret_name: str = "trino-resource-groups"
+    resource_groups_volume_name: str = "apchi-resource-groups"
+
     #: How long a rollout may take before the Apply fails. A coordinator that never comes
     #: back must not hang the pipeline.
     rollout_timeout_seconds: float = 600.0

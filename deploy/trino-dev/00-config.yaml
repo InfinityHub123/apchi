@@ -56,6 +56,16 @@ stringData:
 apiVersion: v1
 kind: Secret
 metadata:
+  name: trino-resource-groups
+# Apchi writes both files it holds -- the rules and the resource-groups.properties that
+# points at them -- and mounts them on the coordinator when a group or selector is
+# configured. It starts empty and carries no mount: the properties file is what turns the
+# feature on, so "no Resource Groups" is the absence of both.
+stringData: {}
+---
+apiVersion: v1
+kind: Secret
+metadata:
   name: trino-event-listener
 # Apchi writes this, and mounts it on the coordinator itself when an Event Listener is
 # configured. It starts empty and carries no mount: Trino refuses to start if a listener

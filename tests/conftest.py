@@ -7,7 +7,7 @@ is ever substituted. MongoDB and Trino are real in both tiers.
 import re
 import socket
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any
 
 import pytest
@@ -192,7 +192,8 @@ class FakeKubernetes:
         #: How a rollback's *own* rollout is made to fail while the Apply's succeeded --
         #: a flag that stalls them all could never show the difference.
         self.stall_rollout_from: int | None = None
-        #: The file mounts Apchi owns on the coordinator, keyed by volume name.
+        #: The file mounts Apchi owns on the coordinator, keyed by the path they are at --
+        #: as the pod template keys them, and because one volume may carry several files.
         self.mounts: dict[str, dict[str, str]] = {}
         #: Labels on Secrets Apchi created, so a test can prove the sweep can find them.
         self.secret_labels: dict[str, dict[str, str]] = {}
@@ -263,12 +264,20 @@ class FakeKubernetes:
     async def mount_secret_file(
         self, deployment: str, container: str, volume: str, secret: str, path: str, key: str
     ) -> None:
-        self.mounts[volume] = {"secret": secret, "path": path, "key": key}
+        self.mounts[path] = {"volume": volume, "secret": secret, "key": key}
 
-    async def unmount_secret_file(
-        self, deployment: str, container: str, volume: str, path: str
+    async def unmount_secret_files(
+        self, deployment: str, container: str, volume: str, paths: Sequence[str], drop_volume: bool
     ) -> None:
-        self.mounts.pop(volume, None)
+        """The API server rejects a volume removed while a mount still names it, so the fake
+        refuses it too: a test double that accepts what production rejects is how a bug
+        reaches a real cluster."""
+        for path in paths:
+            self.mounts.pop(path, None)
+        remaining = [p for p, mount in self.mounts.items() if mount["volume"] == volume]
+        assert not (drop_volume and remaining), (
+            f"volume {volume!r} dropped while {remaining} still mount it"
+        )
 
     def attach_cluster(self, container: DockerContainer) -> None:
         """The container standing in for the Cluster, so a Rollout can really restart it."""

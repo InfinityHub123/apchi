@@ -7,6 +7,7 @@ fast test tier substitute it while MongoDB and Trino stay real.
 """
 
 from datetime import UTC, datetime
+from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
 from fastapi.concurrency import run_in_threadpool
@@ -111,8 +112,8 @@ class KubernetesAdapter(Protocol):
         self, deployment: str, container: str, volume: str, secret: str, path: str, key: str
     ) -> None: ...
 
-    async def unmount_secret_file(
-        self, deployment: str, container: str, volume: str, path: str
+    async def unmount_secret_files(
+        self, deployment: str, container: str, volume: str, paths: Sequence[str], drop_volume: bool
     ) -> None: ...
 
 
@@ -273,22 +274,33 @@ class RealKubernetes:
             },
         )
 
-    async def unmount_secret_file(
-        self, deployment: str, container: str, volume: str, path: str
+    async def unmount_secret_files(
+        self, deployment: str, container: str, volume: str, paths: Sequence[str], drop_volume: bool
     ) -> None:
-        """Remove that mount and its volume, leaving every other mount alone. Idempotent:
-        deleting what is not there is the outcome the caller wanted."""
+        """Remove these mounts, and the volume with them when nothing is left on it.
+
+        One patch for all of them, and `drop_volume` decided by the caller, because the two
+        cannot be separated safely: removing a volume while another mount still names it is
+        rejected by the API server ("volumeMounts[0].name ... not found"), and removing the
+        last mount while leaving the volume behind leaves a volume nothing uses.
+
+        Idempotent: deleting what is not there is the outcome the caller wanted.
+        """
         await self._patch_deployment(
             deployment,
             {
                 "spec": {
                     "template": {
                         "spec": {
-                            "volumes": [{"name": volume, "$patch": "delete"}],
+                            "volumes": (
+                                [{"name": volume, "$patch": "delete"}] if drop_volume else []
+                            ),
                             "containers": [
                                 {
                                     "name": container,
-                                    "volumeMounts": [{"mountPath": path, "$patch": "delete"}],
+                                    "volumeMounts": [
+                                        {"mountPath": path, "$patch": "delete"} for path in paths
+                                    ],
                                 }
                             ],
                         }
@@ -350,7 +362,11 @@ class RealKubernetes:
             logs = await run_in_threadpool(
                 self._core.read_namespaced_pod_log, name, self._namespace, tail_lines=tail
             )
-            return str(logs)
+            # The client hands back bytes unless it is asked not to, and `str(bytes)` is a
+            # `b'...'` repr with the newlines escaped -- one enormous line, from which the
+            # error lines cannot be picked out. The whole point of reading this is to quote
+            # three of its lines back to an Operator.
+            return logs.decode(errors="replace") if isinstance(logs, bytes) else str(logs)
         except ApiException:
             return ""
 

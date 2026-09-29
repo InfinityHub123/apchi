@@ -567,6 +567,426 @@
         "title": "ResourceChange",
         "type": "object"
       },
+      "ResourceGroup": {
+        "additionalProperties": false,
+        "description": "A group as it is stored and returned, with the path that addresses it.",
+        "properties": {
+          "hard_concurrency_limit": {
+            "description": "How many queries may run in this group at once.",
+            "minimum": 0.0,
+            "title": "Hard Concurrency Limit",
+            "type": "integer"
+          },
+          "hard_cpu_limit": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "CPU time per quota period beyond which queries are refused.",
+            "title": "Hard Cpu Limit"
+          },
+          "jmx_export": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether this group's statistics are exported over JMX.",
+            "title": "Jmx Export"
+          },
+          "max_queued": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How many queries may wait. Trino's own default applies when unset.",
+            "title": "Max Queued"
+          },
+          "path": {
+            "description": "The dotted path from a root group down to this one.",
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^[^.#]+(\\.[^.#]+)*$",
+            "title": "Path",
+            "type": "string"
+          },
+          "scheduling_policy": {
+            "anyOf": [
+              {
+                "enum": [
+                  "fair",
+                  "weighted",
+                  "weighted_fair",
+                  "query_priority"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How this group picks which of its queued queries runs next.",
+            "title": "Scheduling Policy"
+          },
+          "scheduling_weight": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This group's share among its siblings under a weighted policy.",
+            "title": "Scheduling Weight"
+          },
+          "soft_concurrency_limit": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Concurrency beyond which queries are deprioritised.",
+            "title": "Soft Concurrency Limit"
+          },
+          "soft_cpu_limit": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "CPU time per quota period beyond which queries slow down.",
+            "title": "Soft Cpu Limit"
+          },
+          "soft_memory_limit": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Memory beyond which new queries queue, absolute (10GB) or a share (80%).",
+            "title": "Soft Memory Limit"
+          }
+        },
+        "required": [
+          "hard_concurrency_limit",
+          "path"
+        ],
+        "title": "ResourceGroup",
+        "type": "object"
+      },
+      "ResourceGroupCreate": {
+        "additionalProperties": false,
+        "description": "A group and where it belongs. The parent must already be staged.",
+        "properties": {
+          "hard_concurrency_limit": {
+            "description": "How many queries may run in this group at once.",
+            "minimum": 0.0,
+            "title": "Hard Concurrency Limit",
+            "type": "integer"
+          },
+          "hard_cpu_limit": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "CPU time per quota period beyond which queries are refused.",
+            "title": "Hard Cpu Limit"
+          },
+          "jmx_export": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether this group's statistics are exported over JMX.",
+            "title": "Jmx Export"
+          },
+          "max_queued": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How many queries may wait. Trino's own default applies when unset.",
+            "title": "Max Queued"
+          },
+          "path": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^[^.#]+(\\.[^.#]+)*$",
+            "title": "Path",
+            "type": "string"
+          },
+          "scheduling_policy": {
+            "anyOf": [
+              {
+                "enum": [
+                  "fair",
+                  "weighted",
+                  "weighted_fair",
+                  "query_priority"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How this group picks which of its queued queries runs next.",
+            "title": "Scheduling Policy"
+          },
+          "scheduling_weight": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This group's share among its siblings under a weighted policy.",
+            "title": "Scheduling Weight"
+          },
+          "soft_concurrency_limit": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Concurrency beyond which queries are deprioritised.",
+            "title": "Soft Concurrency Limit"
+          },
+          "soft_cpu_limit": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "CPU time per quota period beyond which queries slow down.",
+            "title": "Soft Cpu Limit"
+          },
+          "soft_memory_limit": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Memory beyond which new queries queue, absolute (10GB) or a share (80%).",
+            "title": "Soft Memory Limit"
+          }
+        },
+        "required": [
+          "hard_concurrency_limit",
+          "path"
+        ],
+        "title": "ResourceGroupCreate",
+        "type": "object"
+      },
+      "ResourceGroupSettings": {
+        "additionalProperties": false,
+        "description": "What the file says outside any group. One thing, so far.\n\n`cpu_quota_period` is not optional decoration: a real coordinator refuses to start when\na group sets a CPU limit without it -- \"cpuQuotaPeriod must be specified to use CPU\nlimits on group: etl\" -- so a Section offering CPU limits has to offer this too.",
+        "properties": {
+          "cpu_quota_period": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How often each group's CPU limits reset, as Trino spells a duration (1h). Required by Trino before any group may set a CPU limit.",
+            "title": "Cpu Quota Period"
+          }
+        },
+        "title": "ResourceGroupSettings",
+        "type": "object"
+      },
+      "ResourceGroupWrite": {
+        "additionalProperties": false,
+        "description": "A group's own configuration. Its name and place in the hierarchy are its path.",
+        "properties": {
+          "hard_concurrency_limit": {
+            "description": "How many queries may run in this group at once.",
+            "minimum": 0.0,
+            "title": "Hard Concurrency Limit",
+            "type": "integer"
+          },
+          "hard_cpu_limit": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "CPU time per quota period beyond which queries are refused.",
+            "title": "Hard Cpu Limit"
+          },
+          "jmx_export": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether this group's statistics are exported over JMX.",
+            "title": "Jmx Export"
+          },
+          "max_queued": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How many queries may wait. Trino's own default applies when unset.",
+            "title": "Max Queued"
+          },
+          "scheduling_policy": {
+            "anyOf": [
+              {
+                "enum": [
+                  "fair",
+                  "weighted",
+                  "weighted_fair",
+                  "query_priority"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How this group picks which of its queued queries runs next.",
+            "title": "Scheduling Policy"
+          },
+          "scheduling_weight": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This group's share among its siblings under a weighted policy.",
+            "title": "Scheduling Weight"
+          },
+          "soft_concurrency_limit": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Concurrency beyond which queries are deprioritised.",
+            "title": "Soft Concurrency Limit"
+          },
+          "soft_cpu_limit": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "CPU time per quota period beyond which queries slow down.",
+            "title": "Soft Cpu Limit"
+          },
+          "soft_memory_limit": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Memory beyond which new queries queue, absolute (10GB) or a share (80%).",
+            "title": "Soft Memory Limit"
+          }
+        },
+        "required": [
+          "hard_concurrency_limit"
+        ],
+        "title": "ResourceGroupWrite",
+        "type": "object"
+      },
       "RevertEffect": {
         "description": "What was staged, and what an Apply would then do to the Cluster.\n\nThe catalog lists are the point of this model. A revert is not a paper change:\napplying it issues real DROP CATALOG statements, and \"3 catalogs will be dropped\"\nis a materially different warning from \"the configuration will be rewritten\".",
         "properties": {
@@ -732,6 +1152,153 @@
           "section"
         ],
         "title": "SectionDiff",
+        "type": "object"
+      },
+      "Selector": {
+        "additionalProperties": false,
+        "description": "One rule choosing a group for a query. First match wins, so position matters.\n\nEvery field but `group` is optional and every one given must match. An empty selector\ntherefore matches everything, which is the usual last rule.",
+        "properties": {
+          "authenticated_user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Regex matched against the authenticated principal.",
+            "title": "Authenticated User"
+          },
+          "client_tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Every tag listed must be present on the query.",
+            "title": "Client Tags"
+          },
+          "group": {
+            "description": "The group queries matching this rule run in.",
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^[^.#]+(\\.[^.#]+)*$",
+            "title": "Group",
+            "type": "string"
+          },
+          "original_user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Regex matched against the user before impersonation.",
+            "title": "Original User"
+          },
+          "query_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Regex matched against the query text itself.",
+            "title": "Query Text"
+          },
+          "query_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "SELECT",
+                  "INSERT",
+                  "DELETE",
+                  "UPDATE",
+                  "MERGE",
+                  "ANALYZE",
+                  "EXPLAIN",
+                  "DESCRIBE",
+                  "DATA_DEFINITION",
+                  "ALTER_TABLE_EXECUTE"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only queries of this kind match.",
+            "title": "Query Type"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Regex matched against the query source.",
+            "title": "Source"
+          },
+          "user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Regex matched against the user.",
+            "title": "User"
+          },
+          "user_group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Regex matched against the user's groups.",
+            "title": "User Group"
+          }
+        },
+        "required": [
+          "group"
+        ],
+        "title": "Selector",
+        "type": "object"
+      },
+      "Selectors": {
+        "additionalProperties": false,
+        "description": "The whole ordered list, read and replaced as one.\n\nPositional meaning is why there is no endpoint for one selector: editing a rule in place\nwould let an Operator change what matches without seeing what now shadows it.",
+        "properties": {
+          "selectors": {
+            "description": "Evaluated top to bottom.",
+            "items": {
+              "$ref": "#/components/schemas/Selector"
+            },
+            "maxItems": 200,
+            "title": "Selectors",
+            "type": "array"
+          }
+        },
+        "title": "Selectors",
         "type": "object"
       },
       "Snapshot": {
@@ -1908,6 +2475,359 @@
         "summary": "Apchi's own liveness",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/api/v1/resource-groups": {
+      "get": {
+        "operationId": "list_resource_groups_api_v1_resource_groups_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ResourceGroup"
+                  },
+                  "title": "Response List Resource Groups Api V1 Resource Groups Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "The staged resource groups",
+        "tags": [
+          "resource groups"
+        ]
+      },
+      "post": {
+        "operationId": "add_resource_group_api_v1_resource_groups_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResourceGroupCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceGroup"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add a resource group",
+        "tags": [
+          "resource groups"
+        ]
+      }
+    },
+    "/api/v1/resource-groups/revert": {
+      "post": {
+        "operationId": "revert_api_v1_resource_groups_revert_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevertEffect"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stage this Section's content from an earlier Snapshot",
+        "tags": [
+          "resource groups"
+        ]
+      }
+    },
+    "/api/v1/resource-groups/selectors": {
+      "get": {
+        "operationId": "get_selectors_api_v1_resource_groups_selectors_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Selectors"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "The staged selectors, in order",
+        "tags": [
+          "resource groups"
+        ]
+      },
+      "put": {
+        "description": "Whole-list replacement is the contract. A selector naming a group that is not staged\nyet is accepted here and refused at Validate, so an Operator can write the rule before\nthe group it points at.",
+        "operationId": "set_selectors_api_v1_resource_groups_selectors_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Selectors"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Selectors"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace the selectors",
+        "tags": [
+          "resource groups"
+        ]
+      }
+    },
+    "/api/v1/resource-groups/settings": {
+      "get": {
+        "operationId": "get_settings_api_v1_resource_groups_settings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceGroupSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "The Section's own settings",
+        "tags": [
+          "resource groups"
+        ]
+      },
+      "put": {
+        "description": "The CPU quota period governs the whole file rather than any one group, and Trino\nrefuses to start when a group sets a CPU limit without it.",
+        "operationId": "set_settings_api_v1_resource_groups_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResourceGroupSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceGroupSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace the Section's own settings",
+        "tags": [
+          "resource groups"
+        ]
+      }
+    },
+    "/api/v1/resource-groups/{path}": {
+      "delete": {
+        "description": "Refused while it still has subgroups: deleting a parent would take its whole subtree\nwith it, and an Operator should do that deliberately.",
+        "operationId": "delete_resource_group_api_v1_resource_groups__path__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove a resource group",
+        "tags": [
+          "resource groups"
+        ]
+      },
+      "get": {
+        "operationId": "get_resource_group_api_v1_resource_groups__path__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceGroup"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "One resource group",
+        "tags": [
+          "resource groups"
+        ]
+      },
+      "put": {
+        "operationId": "edit_resource_group_api_v1_resource_groups__path__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResourceGroupWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceGroup"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace a resource group's configuration",
+        "tags": [
+          "resource groups"
         ]
       }
     },

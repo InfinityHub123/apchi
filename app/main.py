@@ -17,6 +17,7 @@ from app.api.catalogs import router as catalogs_router
 from app.api.certificate_mapping import router as certificate_mapping_router
 from app.api.event_listeners import router as event_listeners_router
 from app.api.health import router as health_router
+from app.api.resource_groups import router as resource_groups_router
 from app.api.snapshots import router as snapshots_router
 from app.api.validations import router as validations_router
 from app.config import Settings, get_settings
@@ -134,6 +135,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(catalogs_router, prefix="/api/v1")
     app.include_router(certificate_mapping_router, prefix="/api/v1")
+    app.include_router(resource_groups_router, prefix="/api/v1")
     app.include_router(event_listeners_router, prefix="/api/v1")
     app.include_router(candidate_router, prefix="/api/v1")
     app.include_router(applies_router, prefix="/api/v1")
