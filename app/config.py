@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     #: The one volume Apchi owns on the coordinator's pod template. Everything else there
     #: belongs to the Admin.
     event_listener_volume_name: str = "apchi-event-listener"
+    #: Holds the generated user-mapping file. Always present once Apchi has applied: the
+    #: authenticator reading it refuses to start when it is missing, so "no pattern" is a
+    #: file that changes nothing rather than no file.
+    certificate_mapping_secret_name: str = "trino-user-mapping"
+    certificate_mapping_volume_name: str = "apchi-user-mapping"
+
     #: How long a rollout may take before the Apply fails. A coordinator that never comes
     #: back must not hang the pipeline.
     rollout_timeout_seconds: float = 600.0

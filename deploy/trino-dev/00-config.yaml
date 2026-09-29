@@ -4,6 +4,10 @@ metadata:
   name: trino-config
 data:
   # catalog.store selects the store; it belongs HERE, not in catalog-store.properties.
+  # The insecure variant, because this dev cluster has no TLS. It is the same file and
+  # the same parser as the certificate variant an Operator configures in production --
+  # Trino rejects `...certificate.user-mapping.file` unless certificate authentication is
+  # on, so the property differs and nothing else does. See §7.6.
   coordinator-config.properties: |
     coordinator=true
     node-scheduler.include-coordinator=false
@@ -11,6 +15,7 @@ data:
     discovery.uri=http://trino:8080
     catalog.management=dynamic
     catalog.store=file
+    http-server.authentication.insecure.user-mapping.file=/etc/trino/user-mapping.json
   worker-config.properties: |
     coordinator=false
     http-server.http.port=8080

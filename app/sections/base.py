@@ -10,7 +10,8 @@ about the pipeline, which is why the failures below are returned as data rather 
 raised: the pipeline decides what a failure means to the Apply it is running.
 """
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any, Protocol
 
@@ -55,6 +56,10 @@ class CoordinatorFile:
     secret: str
     volume: str
     path: str
+    #: Configuration the validation probe needs before it will read this file at all. The
+    #: Cluster's own copy of these properties belongs to the Admin; the probe is Apchi's,
+    #: so Apchi sets them there itself.
+    probe_config: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def key(self) -> str:
@@ -104,7 +109,7 @@ class Section(Protocol):
         """
         ...
 
-    def render_file(self, desired: Resources) -> str | None:
+    def render_file(self, desired: Resources, settings: Settings) -> str | None:
         """The file's content, or None when this Section has nothing to deliver.
 
         None and empty mean the same thing to the pipeline: no file, so no mount.

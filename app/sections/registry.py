@@ -8,9 +8,14 @@ beside it -- the two cannot drift.
 from app.sections import SectionName
 from app.sections.base import Section
 from app.sections.catalogs.section import CatalogsSection
+from app.sections.certificate_mapping.section import CertificateMappingSection
 from app.sections.event_listeners.section import EventListenersSection
 
-REGISTERED: tuple[Section, ...] = (CatalogsSection(), EventListenersSection())
+REGISTERED: tuple[Section, ...] = (
+    CatalogsSection(),
+    CertificateMappingSection(),
+    EventListenersSection(),
+)
 
 #: The names of the registered Sections, in registration order. Every other name in
 #: SectionName is vocabulary the model knows and nobody can edit yet.

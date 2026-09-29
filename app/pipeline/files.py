@@ -25,7 +25,7 @@ async def deliver(section: Section, cluster: Cluster, desired: Resources) -> Non
     if spec is None:
         return
 
-    content = section.render_file(desired)
+    content = section.render_file(desired, cluster.settings)
     await cluster.kubernetes.write_secret(spec.secret, {spec.key: content} if content else {})
 
     if content:
@@ -57,7 +57,7 @@ async def would_change(section: Section, cluster: Cluster, resources: Resources)
     spec = section.coordinator_file(cluster.settings)
     if spec is None:
         return False
-    content = section.render_file(resources)
+    content = section.render_file(resources, cluster.settings)
     current = await cluster.kubernetes.read_secret(spec.secret)
     return current != ({spec.key: content} if content else {})
 
@@ -70,7 +70,7 @@ def probe_files(section: Section, settings: Settings, desired: Resources) -> dic
     not accept becomes a pod that will not start rather than a Cluster that will not.
     """
     spec = section.coordinator_file(settings)
-    content = section.render_file(desired)
+    content = section.render_file(desired, settings)
     if spec is None or not content:
         return {}
     return {spec.path: content}

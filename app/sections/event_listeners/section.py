@@ -161,7 +161,7 @@ class EventListenersSection:
             path=MOUNT_PATH,
         )
 
-    def render_file(self, desired: Resources) -> str | None:
+    def render_file(self, desired: Resources, settings: Settings) -> str | None:
         return render_secret(desired).get(FILE_KEY)
 
     async def apply(self, cluster: Cluster, desired: Resources, plan: SectionPlan) -> None:

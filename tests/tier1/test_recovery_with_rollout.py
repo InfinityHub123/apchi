@@ -13,6 +13,7 @@ from httpx import AsyncClient
 
 from app.pipeline.applies import TERMINAL
 from app.pipeline.impact import RESTART_WARNING
+from app.sections.registry import SECTIONS
 
 KEPT = {"name": "kept", "connector": "memory", "properties": {}}
 ADDED = {"name": "added", "connector": "memory", "properties": {}}
@@ -119,12 +120,14 @@ async def test_reverting_to_a_snapshot_with_the_same_listener_reports_no_restart
     assert effect["cost"]["warning"] is None
 
 
-async def test_a_full_rollback_restores_both_sections_and_warns(
+async def test_a_full_rollback_restores_every_section_and_warns(
     two_snapshots: AsyncClient,
 ) -> None:
     effect = (await two_snapshots.post("/api/v1/candidate/rollback", json={"snapshot": 1})).json()
 
-    assert effect["sections"] == ["catalogs", "event_listeners"]
+    # A Full Rollback replaces the whole Candidate, so it names every registered Section,
+    # not only the ones this Snapshot happens to differ in.
+    assert effect["sections"] == list(SECTIONS)
     assert effect["other_sections_stay_at"] is None
     assert effect["catalogs_dropped"] == ["added"]
     assert effect["cost"]["restarts_coordinator"] is True

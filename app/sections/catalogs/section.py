@@ -98,7 +98,7 @@ class CatalogsSection:
         Apchi owns."""
         return None
 
-    def render_file(self, desired: Resources) -> str | None:
+    def render_file(self, desired: Resources, settings: Settings) -> str | None:
         return None
 
     def plan(self, desired: Resources, current: Resources) -> apply.CatalogPlan:

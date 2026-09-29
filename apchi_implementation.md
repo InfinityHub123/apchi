@@ -187,8 +187,8 @@ Two things about the pod come from the Trino image rather than from Apchi, and b
 get wrong:
 
 - Dynamic catalogs are switched on through the `CATALOG_MANAGEMENT` environment variable, which
-  the image's own `config.properties` reads. Apchi therefore mounts no config file and overrides
-  no command.
+  the image's own `config.properties` reads. Apchi therefore overrides no command, and mounts no
+  config file until a Section needs one.
 - The image ships **example catalogs** — `jmx`, `memory`, `tpch`, `tpcds` — in
   `/etc/trino/catalog`. The validation pod hides them behind an empty volume, so the probe holds
   exactly what the Candidate declares. Without that, a Catalog an Operator quite reasonably named
@@ -213,6 +213,14 @@ leaves nothing the startup sweep cannot find. Inside the probe those files are `
 mounts, which is right for the reason it is wrong on the Cluster (§16): the probe is a fresh
 pod every time, so a mount that never updates is a mount that never needs to.
 
+**A file is only validated if something is configured to read it.** Trino ignores a file no
+property points at, so a probe left with the image's own configuration would start happily on a
+Certificate Mapping Pattern it could never parse — and every pattern would pass. So a Section
+declares the properties that make its file live, and the probe's `config.properties` is
+generated: what the image ships, plus each probing Section's own. Generated rather than patched,
+because the image's file is the thing being replaced. This is only true of the probe; on the
+Cluster those properties are Admin territory (§15), since they choose the authenticator.
+
 **Where the reason comes from.** When a probe refuses to start, its **log** is the only place
 the reason exists — Trino writes nothing to the termination-log file Kubernetes would otherwise
 surface — so Apchi reads it and quotes the error lines back in the Validation failure. That is
@@ -221,9 +229,11 @@ is the *diagnostic an Operator needs to fix their configuration*, where in Verif
 have been a *correctness signal* standing in for a functional check. Reading a log to explain a
 failure is not the same as reading one to decide whether something worked.
 
-The failure names the listener as well as the reason. With one file-based Section that
-attribution is unambiguous; a second will need it to come from whichever Section contributed the
-file Trino choked on.
+The failure names the resource as well as the reason. With more than one file-based Section
+"the first one" is not an answer, so the attribution comes from the log too: Trino names the
+file it choked on — `Invalid JSON file '/etc/trino/user-mapping.json' for ...` — and the file
+belongs to exactly one Section. Where the log names none of them the failure carries the reason
+without a resource, which is honest rather than a guess.
 
 Requirements:
 
@@ -859,18 +869,51 @@ need for a mapping entry per identity.
 trino-<identity>.customer.internal → <identity>
 ```
 
-When the pattern changes, the previous one remains valid for a defined grace period. Trino's
-user-mapping **file** format supports multiple rules evaluated top-to-bottom, first match
-wins, so a grace period is expressible directly as two rules — one per pattern.
+Because there is exactly one, it is a resource rather than a collection: `GET`, `PUT` and
+`DELETE` on `/certificate-mapping`, with no name to address it by. Trino's user-mapping
+**file** supports a list of rules evaluated top to bottom, first match wins; Apchi uses that
+list for two things and exposes neither as a second pattern.
 
-Changing the pattern is a breaking operational change regardless: clients must obtain new
-certificates, deploy them, and migrate before the grace period ends. Allowing Operators to
-choose the destination pattern does not remove that migration; it gives freedom over the
-convention at the cost of more operational responsibility. This trade was made deliberately,
-and the migration tooling must account for it.
+**Apchi's own rule comes first.** The file always opens with `^<trino user>$ → <trino user>`,
+the mapping twin of the reserved verification identity in §8. Without it an Operator could
+set a pattern matching only their own certificates and lock Apchi out of the Cluster it
+manages — not at Apply time, when everything still works, but at the first Verification after
+the Rollout, with recovery needing the very connection the pattern just removed. The rule is
+generated, never stored in the Candidate, and it is first because first match wins.
+
+**No pattern is still a file.** A principal that matches no rule is **denied**, not passed
+through, and the authenticator refuses to start when the file it was told to read is missing.
+So "no Certificate Mapping Pattern" is expressed as a rule of `(.*)` — every name as
+presented, which is exactly Trino's behaviour with no mapping configured at all — rather than
+as an absent file. That is the difference from Event Listeners (§13.6), where the absence of
+the mount *is* the configuration.
+
+**Which authenticator reads the file is the Admin's choice**, not Apchi's: `certificate`,
+`password` and `insecure` each take their own `...user-mapping.file` property and all three
+parse it with the same `UserMapping`. Apchi owns the file; the property that points at it
+lives in `config.properties` and is therefore Admin territory (§15). Production sets the
+certificate variant; the development cluster and the validation probe set the insecure one,
+because Trino rejects the certificate property outright unless certificate authentication is
+configured, and a probe with no TLS could not use it.
+
+**Java's regex engine is the authority.** Static validation rejects the mistake worth
+catching at request time — a replacement naming a capturing group the pattern does not have,
+which substitutes nothing and produces no identity at all — but it compiles the pattern with
+Python's engine, so it is an approximation. An expression only Python accepts, such as
+`(?P<name>...)`, reaches the ephemeral coordinator and fails there (§6), before the Cluster is
+touched.
 
 **Rollout-required.** `UserMapping` parses an immutable rule list at authenticator
-construction, so entering and leaving a grace period each cost a coordinator restart.
+construction, so every change to the pattern costs a coordinator restart. Nothing re-reads the
+file, which is why a Rollout is the only way a pattern takes effect and why the development
+cluster's manifest mounts the Secret rather than relying on a refresh timer.
+
+Changing the pattern is a breaking operational change regardless: clients must obtain new
+certificates, deploy them, and migrate. Allowing Operators to choose the destination pattern
+does not remove that migration; it gives freedom over the convention at the cost of more
+operational responsibility. There is **no grace period by default** — a Cluster migrating onto
+Apchi with existing patterns of its own keeps them through Admin-owned values, which is §13.3's
+migration story and not a second Operator-facing pattern.
 
 **Identity flow:**
 
@@ -1561,10 +1604,12 @@ Additional constraints:
   Snapshot scope are settled.
 - **Maintenance Mode mechanics** — behaviour when an Apply is already in flight. The endpoint
   and the persistence model are settled (§14).
-- **Certificate mapping migration** — the procedure for moving an existing Cluster onto a
-  single Certificate Mapping Pattern is undefined: sequencing, authorization edge cases,
-  naming and domain constraints, grace-period duration, rollback, and whether every existing
-  setup can migrate cleanly. Note each pattern change costs a coordinator restart (§13.3).
+- **Certificate mapping migration** — the mechanism is settled: a Cluster arriving with
+  patterns of its own keeps them as Admin-owned values beside Apchi's single Operator pattern,
+  and an Admin removes them when the migration is done, with no grace period by default
+  (§13.3). What remains undefined is the procedure around it: sequencing, authorization edge
+  cases, naming and domain constraints, rollback, and whether every existing setup can migrate
+  cleanly. Note each pattern change costs a coordinator restart.
 - **Field-level models for Resource Groups** — hierarchy, selectors and guardrails. Event
   Listeners are settled for `http` and `kafka` (§13.6); `mysql` and `openlineage` pass through
   until someone needs them curated.

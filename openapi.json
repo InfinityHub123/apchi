@@ -245,6 +245,80 @@
         "title": "CatalogWrite",
         "type": "object"
       },
+      "CertificateMapping": {
+        "additionalProperties": false,
+        "description": "The pattern as it is stored and returned.",
+        "properties": {
+          "case": {
+            "default": "keep",
+            "description": "Whether to fold the derived identity's case.",
+            "enum": [
+              "keep",
+              "lower",
+              "upper"
+            ],
+            "title": "Case",
+            "type": "string"
+          },
+          "pattern": {
+            "description": "A regular expression matched against the subject the caller presents.",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Pattern",
+            "type": "string"
+          },
+          "user": {
+            "default": "$1",
+            "description": "The identity to derive. $1 is the pattern's first capturing group.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "title": "CertificateMapping",
+        "type": "object"
+      },
+      "CertificateMappingWrite": {
+        "additionalProperties": false,
+        "description": "What an Operator sends.",
+        "properties": {
+          "case": {
+            "default": "keep",
+            "description": "Whether to fold the derived identity's case.",
+            "enum": [
+              "keep",
+              "lower",
+              "upper"
+            ],
+            "title": "Case",
+            "type": "string"
+          },
+          "pattern": {
+            "description": "A regular expression matched against the subject the caller presents.",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Pattern",
+            "type": "string"
+          },
+          "user": {
+            "default": "$1",
+            "description": "The identity to derive. $1 is the pattern's first capturing group.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "title": "CertificateMappingWrite",
+        "type": "object"
+      },
       "EngagedBy": {
         "enum": [
           "admin",
@@ -1369,6 +1443,120 @@
         "summary": "Edit a staged Catalog",
         "tags": [
           "catalogs"
+        ]
+      }
+    },
+    "/api/v1/certificate-mapping": {
+      "delete": {
+        "description": "Removing it does not remove the file. Trino's authenticator refuses to start without\none, so what Apchi writes instead is the rule that leaves every name as presented --\nwhich is how Trino behaves with no mapping configured at all.",
+        "operationId": "clear_certificate_mapping_api_v1_certificate_mapping_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Remove the Certificate Mapping Pattern",
+        "tags": [
+          "certificate mapping"
+        ]
+      },
+      "get": {
+        "operationId": "get_certificate_mapping_api_v1_certificate_mapping_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CertificateMapping"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "The staged Certificate Mapping Pattern",
+        "tags": [
+          "certificate mapping"
+        ]
+      },
+      "put": {
+        "operationId": "set_certificate_mapping_api_v1_certificate_mapping_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CertificateMappingWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CertificateMapping"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set the Certificate Mapping Pattern",
+        "tags": [
+          "certificate mapping"
+        ]
+      }
+    },
+    "/api/v1/certificate-mapping/revert": {
+      "post": {
+        "operationId": "revert_api_v1_certificate_mapping_revert_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevertEffect"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stage this Section's content from an earlier Snapshot",
+        "tags": [
+          "certificate mapping"
         ]
       }
     },
