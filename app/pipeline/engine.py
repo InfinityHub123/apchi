@@ -17,16 +17,18 @@ from app.adapters.trino import Trino
 from app.config import Settings
 from app.pipeline import preconditions
 from app.pipeline.access_control import deliver as deliver_access_control
+from app.pipeline.admin_values import AdminStore
 from app.pipeline.auto_rollback import declare_incident, restore
 from app.pipeline.candidate import CandidateStore
 from app.pipeline.files import deliver
+from app.pipeline.impact import sections_needing_rollout
 from app.pipeline.maintenance import MaintenanceStore
 from app.pipeline.rollout import roll_out
 from app.pipeline.snapshots import SnapshotStore
 from app.pipeline.validation import validate_candidate
 from app.pipeline.verification import verify
 from app.sections import SectionName
-from app.sections.base import Cluster, Resources, Section, SectionPlan
+from app.sections.base import Cluster, Resources, SectionPlan
 from app.sections.registry import REGISTERED
 
 logger = logging.getLogger(__name__)
@@ -44,6 +46,7 @@ class Engine:
         trino: Trino,
         kubernetes: KubernetesAdapter,
         maintenance: MaintenanceStore,
+        admin: AdminStore,
     ) -> None:
         self._apply_id = apply_id
         self._settings = settings
@@ -52,9 +55,24 @@ class Engine:
         self._trino = trino
         self._kubernetes = kubernetes
         self._maintenance = maintenance
+        self._admin = admin
         self._desired: dict[SectionName, Resources] = {}
         self._plans: dict[SectionName, SectionPlan] = {}
+        self._rollout: set[SectionName] = set()
         self._cluster = Cluster(trino=trino, kubernetes=kubernetes, settings=settings)
+
+    async def _freeze_admin_values(self) -> None:
+        """Read the Admin values once and hold them for the rest of this Apply.
+
+        Loaded here rather than in the constructor because it is I/O, and rebuilt into the
+        Cluster because that is what every Section renders against.
+        """
+        self._cluster = Cluster(
+            trino=self._trino,
+            kubernetes=self._kubernetes,
+            settings=self._settings,
+            admin=await self._admin.load(),
+        )
 
     async def validate(self) -> None:
         """Capture the Candidate, plan the change, then prove it against a real Trino.
@@ -64,11 +82,9 @@ class Engine:
         Cluster, so a failure leaves it exactly as it was.
         """
         await self._assert_preconditions()
+        await self._freeze_admin_values()
 
-        candidate = await self._candidates.load()
-        self._desired = dict(candidate.sections)
-
-        current = await self._snapshots.sections_of(candidate.base_snapshot)
+        self._desired, current = await self._desired_and_baseline()
         self._plans = {
             section.name: section.plan(
                 self._desired.get(section.name, {}), current.get(section.name, {})
@@ -80,7 +96,19 @@ class Engine:
             extra={name: plan.summary() for name, plan in self._plans.items()},
         )
 
+        self._rollout = await sections_needing_rollout(self._plans, self._desired, self._cluster)
         await validate_candidate(self._desired, self._plans, self._cluster, self._apply_id)
+
+    async def _desired_and_baseline(
+        self,
+    ) -> tuple[dict[SectionName, Resources], dict[SectionName, Resources]]:
+        """What this Apply delivers, and what it is a change from.
+
+        An Operator Apply delivers the Candidate, measured against the Snapshot it was
+        derived from.
+        """
+        candidate = await self._candidates.load()
+        return dict(candidate.sections), await self._snapshots.sections_of(candidate.base_snapshot)
 
     async def _assert_preconditions(self) -> None:
         """Before every Apply, not once at startup: a chart change can reintroduce a
@@ -123,14 +151,10 @@ class Engine:
         Apply on a Cluster with an Event Listener configured would terminate every running
         query for nothing.
         """
-        return any(self._rollout_changed(section) for section in REGISTERED)
-
-    def _rollout_changed(self, section: Section) -> bool:
-        plan = self._plans.get(section.name)
-        return section.requires_rollout and plan is not None and not plan.empty
+        return bool(self._rollout)
 
     async def roll_out(self) -> None:
-        changed = sorted(section.name for section in REGISTERED if self._rollout_changed(section))
+        changed = sorted(self._rollout)
         await roll_out(
             self._kubernetes,
             self._settings.coordinator_deployment_name,
@@ -158,6 +182,7 @@ class Engine:
         two durable records, which is what would let it run after an Apchi restart as
         well as inside the Apply that failed.
         """
+        await self._freeze_admin_values()
         latest = await self._snapshots.latest()
         sections = await self._snapshots.sections_of(None if latest is None else latest.number)
         await restore(sections, self._cluster)
@@ -190,3 +215,37 @@ class Engine:
             raise
         logger.info("committed", extra={"snapshot": snapshot.number})
         return snapshot.number
+
+
+class AdminEngine(Engine):
+    """An Apply that carries an Admin change and creates no Snapshot.
+
+    Two differences from an Operator Apply, and both follow from what Admin values are.
+
+    It delivers the **latest Snapshot**, not the Candidate. Invariant 2 says what ran on a
+    Cluster was the Snapshot merged with the Admin values current at the time, and that is
+    exactly what this rebuilds with today's values. Delivering the Candidate instead would
+    push an Operator's staged, unreviewed changes to the Cluster on an Admin's authority.
+
+    It commits nothing. Snapshots are the history of Operator-managed configuration, and
+    this Apply changed none of it (invariant 9, §14). The Apply record is the history of
+    what the Admin did; the Snapshot pointer does not move.
+
+    Everything else is the same pipeline -- validated on the ephemeral coordinator, rolled
+    out, verified, rolled back on failure -- because arbitrary low-level values are
+    precisely the class of configuration most able to stop Trino booting, and an Admin
+    fixing something during an incident cannot be made to wait for an Operator.
+    """
+
+    async def _desired_and_baseline(
+        self,
+    ) -> tuple[dict[SectionName, Resources], dict[SectionName, Resources]]:
+        latest = await self._snapshots.latest()
+        sections = await self._snapshots.sections_of(None if latest is None else latest.number)
+        # The same on both sides: nothing an Operator owns is changing, so every Section's
+        # plan is empty and the Rollout decision comes from the Cluster instead.
+        return dict(sections), sections
+
+    async def commit(self) -> int | None:
+        logger.info("admin apply committed no snapshot")
+        return None

@@ -97,9 +97,9 @@ async def test_an_applied_pattern_maps_a_principal_on_the_real_cluster(
 async def test_apchi_can_still_reach_a_cluster_whose_pattern_excludes_it(
     e2e_client: AsyncClient, forward: PortForward, settings: Settings
 ) -> None:
-    """A principal no rule matches is denied, not passed through, so a pattern naming only
-    the Operator's certificates would lock Apchi out of its own Cluster. Verification
-    passing is the proof it does not: Apchi's reserved rule is first and matches itself."""
+    """An Operator pattern naming only their own certificates must not lock Apchi out of
+    the Cluster it manages. Verification passing is the proof it does not: Apchi's reserved
+    rule is first, and first match wins."""
     await e2e_client.put("/api/v1/certificate-mapping", json=EXCLUDES_APCHI)
 
     record = await _apply(e2e_client)
@@ -108,6 +108,18 @@ async def test_apchi_can_still_reach_a_cluster_whose_pattern_excludes_it(
     forward.restart()
     apchi = Trino(host="127.0.0.1", port=forward.port, user=settings.trino_user)
     assert await apchi.query("SELECT current_user") == [[settings.trino_user]]
+
+
+async def test_a_principal_no_pattern_matches_keeps_the_name_it_presented(
+    e2e_client: AsyncClient, forward: PortForward
+) -> None:
+    """Apchi's catch-all is last, so configuring a pattern does not start refusing everyone
+    it does not cover. What a caller may then do is Permissions' answer, not this file's."""
+    await e2e_client.put("/api/v1/certificate-mapping", json=EXCLUDES_APCHI)
+
+    record = await _apply(e2e_client)
+
+    assert record["stage"] == "succeeded", record
+    forward.restart()
     stranger = Trino(host="127.0.0.1", port=forward.port, user="nobody")
-    with pytest.raises(Exception, match="(?i)mapping|authentication"):
-        await stranger.query("SELECT 1")
+    assert await stranger.query("SELECT current_user") == [["nobody"]]

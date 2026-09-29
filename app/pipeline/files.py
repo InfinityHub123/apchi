@@ -10,6 +10,7 @@ that grows a branch each time, the branch being the thing nobody notices is miss
 import logging
 
 from app.config import Settings
+from app.sections.admin import AdminValues
 from app.sections.base import Cluster, Resources, Section
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ async def deliver(section: Section, cluster: Cluster, desired: Resources) -> Non
     if spec is None:
         return
 
-    content = section.render_file(desired, cluster.settings)
+    content = section.render_file(desired, cluster.settings, cluster.admin)
     await cluster.kubernetes.write_secret(spec.secret, {spec.key: content} if content else {})
 
     if content:
@@ -57,12 +58,14 @@ async def would_change(section: Section, cluster: Cluster, resources: Resources)
     spec = section.coordinator_file(cluster.settings)
     if spec is None:
         return False
-    content = section.render_file(resources, cluster.settings)
+    content = section.render_file(resources, cluster.settings, cluster.admin)
     current = await cluster.kubernetes.read_secret(spec.secret)
     return current != ({spec.key: content} if content else {})
 
 
-def probe_files(section: Section, settings: Settings, desired: Resources) -> dict[str, str]:
+def probe_files(
+    section: Section, settings: Settings, desired: Resources, admin: AdminValues
+) -> dict[str, str]:
     """What the validation probe must hold for this Section.
 
     Derived from the same declaration rather than answered separately: a Section's file is
@@ -70,7 +73,7 @@ def probe_files(section: Section, settings: Settings, desired: Resources) -> dic
     not accept becomes a pod that will not start rather than a Cluster that will not.
     """
     spec = section.coordinator_file(settings)
-    content = section.render_file(desired, settings)
+    content = section.render_file(desired, settings, admin)
     if spec is None or not content:
         return {}
     return {spec.path: content}

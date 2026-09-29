@@ -13,6 +13,7 @@ from app.adapters.trino import Trino
 from app.api.errors import Conflict, NameAlreadyTaken, NotFound, UnprocessablePayload
 from app.config import Settings
 from app.sections import SectionName
+from app.sections.admin import AdminValues
 from app.sections.base import (
     Cluster,
     CoordinatorFile,
@@ -161,7 +162,7 @@ class EventListenersSection:
             path=MOUNT_PATH,
         )
 
-    def render_file(self, desired: Resources, settings: Settings) -> str | None:
+    def render_file(self, desired: Resources, settings: Settings, admin: AdminValues) -> str | None:
         return render_secret(desired).get(FILE_KEY)
 
     async def apply(self, cluster: Cluster, desired: Resources, plan: SectionPlan) -> None:

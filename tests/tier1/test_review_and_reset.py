@@ -3,6 +3,7 @@
 from httpx import AsyncClient
 
 from app.sections.registry import SECTIONS
+from tests.conftest import bootstrap_secrets
 
 PG = {
     "name": "finance",
@@ -43,7 +44,7 @@ async def test_reset_reaches_nothing_outside_apchi(client: AsyncClient, fake_kub
 
     await client.post("/api/v1/candidate/reset")
 
-    assert fake_kubernetes.secrets == {}
+    assert fake_kubernetes.secrets == bootstrap_secrets()
 
 
 async def test_the_candidate_survives_across_requests(client: AsyncClient) -> None:

@@ -20,6 +20,9 @@ from app.adapters.kubernetes import PodState, RolloutState
 from app.adapters.trino import Trino
 from app.config import Environment, Settings
 from app.main import create_app
+from app.sections.certificate_mapping.generator import FILE_KEY as MAPPING_KEY
+from app.sections.certificate_mapping.generator import MOUNT_PATH as MAPPING_PATH
+from app.sections.certificate_mapping.generator import render_rules
 
 # Pinned to match deploy/trino-dev and the supported range in section 8, so a
 # Trino upgrade breaks CI rather than production.
@@ -83,6 +86,20 @@ def _trino_container() -> DockerContainer:
     )
 
 
+_SETTINGS = Settings()
+MAPPING_SECRET = _SETTINGS.certificate_mapping_secret_name
+
+
+def bootstrap_secrets() -> dict[str, dict[str, str]]:
+    """What a Cluster holds before Apchi has ever applied to it.
+
+    Not empty: the coordinator is configured to read a user-mapping file and will not start
+    without one, so deploy/trino-dev ships the generated default. A fake that started empty
+    would make the first Apply look like a change and restart a coordinator for nothing.
+    """
+    return {MAPPING_SECRET: {MAPPING_KEY: render_rules({}, _SETTINGS.trino_user)}}
+
+
 def healthy_pod_spec() -> dict[str, Any]:
     """A coordinator spec that meets §16's preconditions.
 
@@ -110,6 +127,11 @@ def healthy_pod_spec() -> dict[str, Any]:
                         "subPath": "coordinator-config.properties",
                     },
                     {"name": "access-control", "mountPath": "/etc/trino/access-control"},
+                    {
+                        "name": "apchi-user-mapping",
+                        "mountPath": MAPPING_PATH,
+                        "subPath": MAPPING_KEY,
+                    },
                     {"name": "catalog-store", "mountPath": "/data/trino/catalogs"},
                 ],
             }
@@ -117,6 +139,7 @@ def healthy_pod_spec() -> dict[str, Any]:
         "volumes": [
             {"name": "config", "configMap": {"name": "trino-config"}},
             {"name": "access-control", "secret": {"secretName": "trino-access-control"}},
+            {"name": "apchi-user-mapping", "secret": {"secretName": MAPPING_SECRET}},
             {"name": "catalog-seed", "secret": {"secretName": "trino-catalog-seed"}},
             {"name": "catalog-store", "emptyDir": {}},
         ],
@@ -136,7 +159,7 @@ class FakeKubernetes:
     """
 
     def __init__(self, validation: DockerContainer | None = None) -> None:
-        self.secrets: dict[str, dict[str, str]] = {}
+        self.secrets: dict[str, dict[str, str]] = bootstrap_secrets()
         self.replicas: dict[str, int] = {}
         self.image = TRINO_IMAGE
         #: What the coordinator Deployment looks like. Defaults to a spec that satisfies

@@ -6,11 +6,13 @@ constructed, so a change is adopted only by a new pod. See section 13.3.
 
 import logging
 import re
+from collections.abc import Sequence
 
 from app.adapters.trino import Trino
 from app.api.errors import NotFound, UnprocessablePayload
 from app.config import Settings
 from app.sections import SectionName
+from app.sections.admin import AdminValues
 from app.sections.base import (
     Cluster,
     CoordinatorFile,
@@ -50,8 +52,8 @@ def clear_mapping(stored: Resources) -> None:
     del stored[RESOURCE]
 
 
-def _validated(write: CertificateMappingWrite) -> None:
-    """Reject a pattern that cannot produce an identity.
+def _problems_with(write: CertificateMappingWrite, prefix: str = "") -> list[dict[str, str]]:
+    """Why a pattern could not produce an identity, if it could not.
 
     Trino uses Java's regex engine, so this is an approximation and the ephemeral
     coordinator remains the authority. What it catches is the mistake worth catching at
@@ -62,14 +64,16 @@ def _validated(write: CertificateMappingWrite) -> None:
     try:
         compiled = re.compile(write.pattern)
     except re.error as exc:
-        problems.append({"property": "pattern", "problem": f"not a valid expression: {exc}"})
+        problems.append(
+            {"property": f"{prefix}pattern", "problem": f"not a valid expression: {exc}"}
+        )
     else:
         wanted = [int(n) for n in _GROUP_REFERENCE.findall(write.user)]
         missing = [n for n in wanted if n > compiled.groups]
         if missing:
             problems.append(
                 {
-                    "property": "user",
+                    "property": f"{prefix}user",
                     "problem": (
                         f"refers to capturing group {missing[0]}, but the pattern has "
                         f"{compiled.groups}. Nothing would be substituted, so the pattern "
@@ -77,11 +81,29 @@ def _validated(write: CertificateMappingWrite) -> None:
                     ),
                 }
             )
+    return problems
 
-    if problems:
+
+def _validated(write: CertificateMappingWrite) -> None:
+    if problems := _problems_with(write):
         raise UnprocessablePayload(
             "The Certificate Mapping Pattern is not usable.", details=problems
         )
+
+
+def validate_patterns(patterns: Sequence[CertificateMappingWrite]) -> None:
+    """The same checks over a list of preserved patterns, naming which one.
+
+    An Admin pasting a Cluster's existing rules in gets the index back, because with
+    several of them "the pattern is invalid" does not say which pattern.
+    """
+    problems = [
+        problem
+        for index, pattern in enumerate(patterns)
+        for problem in _problems_with(pattern, prefix=f"patterns[{index}].")
+    ]
+    if problems:
+        raise UnprocessablePayload("A preserved mapping pattern is not usable.", details=problems)
 
 
 class CertificateMappingSection:
@@ -99,7 +121,7 @@ class CertificateMappingSection:
             probe_config=PROBE_CONFIG,
         )
 
-    def render_file(self, desired: Resources, settings: Settings) -> str:
+    def render_file(self, desired: Resources, settings: Settings, admin: AdminValues) -> str:
         """Always a file, never nothing.
 
         An absent file is not the same as no pattern: the authenticator is configured to
@@ -110,7 +132,7 @@ class CertificateMappingSection:
         The reserved rule needs the identity Apchi authenticates as, which is a deployment
         setting -- so it is read here rather than captured when the registry is built.
         """
-        return render_rules(desired, settings.trino_user)
+        return render_rules(desired, settings.trino_user, admin.preserved_certificate_mappings)
 
     def plan(self, desired: Resources, current: Resources) -> "MappingPlan":
         return MappingPlan(changed=desired.get(RESOURCE) != current.get(RESOURCE))
