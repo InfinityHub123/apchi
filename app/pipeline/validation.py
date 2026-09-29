@@ -319,8 +319,7 @@ async def validate_candidate(
         contributed = probe_files(section, cluster.settings, staged, cluster.admin)
         files.update(contributed)
         blame.update({path: sorted(staged)[0] for path in contributed if staged})
-        spec = section.coordinator_file(cluster.settings)
-        if spec is not None:
+        for spec in section.coordinator_files(cluster.settings):
             properties.update(spec.probe_config)
     if files:
         files[_CONFIG_PATH] = "".join(f"{key}={value}\n" for key, value in properties.items())

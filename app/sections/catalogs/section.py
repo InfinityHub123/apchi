@@ -93,14 +93,16 @@ class CatalogsSection:
     #: Trino adopts a catalog through CREATE CATALOG against the running coordinator.
     requires_rollout = False
 
-    def coordinator_file(self, settings: Settings) -> CoordinatorFile | None:
+    def coordinator_files(self, settings: Settings) -> tuple[CoordinatorFile, ...]:
         """None. Catalogs reach Trino as statements, not as a file the coordinator reads --
         the Secret they do have is a seed the Admin's initContainer copies, not a mount
         Apchi owns."""
-        return None
+        return ()
 
-    def render_file(self, desired: Resources, settings: Settings, admin: AdminValues) -> str | None:
-        return None
+    def render_files(
+        self, desired: Resources, settings: Settings, admin: AdminValues
+    ) -> dict[str, str]:
+        return {}
 
     def plan(self, desired: Resources, current: Resources) -> apply.CatalogPlan:
         return apply.plan(desired, current)
