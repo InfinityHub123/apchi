@@ -19,6 +19,7 @@ from app.pipeline import preconditions
 from app.pipeline.access_control import deliver as deliver_access_control
 from app.pipeline.auto_rollback import declare_incident, restore
 from app.pipeline.candidate import CandidateStore
+from app.pipeline.files import deliver
 from app.pipeline.maintenance import MaintenanceStore
 from app.pipeline.rollout import roll_out
 from app.pipeline.snapshots import SnapshotStore
@@ -108,9 +109,11 @@ class Engine:
         await deliver_access_control(self._kubernetes, self._settings)
 
         for section in REGISTERED:
-            await section.apply(
-                self._cluster, self._desired.get(section.name, {}), self._plans[section.name]
-            )
+            desired = self._desired.get(section.name, {})
+            # The file first, then whatever else the Section does. A Section that only owns
+            # a file does nothing here at all.
+            await deliver(section, self._cluster, desired)
+            await section.apply(self._cluster, desired, self._plans[section.name])
 
     def rollout_needed(self) -> bool:
         """True when a Section Trino adopts only by restarting actually changed.
