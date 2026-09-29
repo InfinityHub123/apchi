@@ -15,17 +15,29 @@ return says so in words rather than leaving the UI to imply otherwise.
 
 import logging
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+from app.adapters.trino import Trino
 from app.api.errors import NotFound
 from app.pipeline.candidate import Candidate, CandidateStore
+from app.pipeline.impact import RESTART_WARNING, ApplyCost, cost_of
 from app.pipeline.snapshots import SnapshotStore
 from app.sections import SectionName
+from app.sections.base import SectionPlan
 from app.sections.catalogs import SECTION as CATALOGS
 from app.sections.catalogs import apply as catalog_apply
-from app.sections.registry import SECTIONS
+from app.sections.registry import REGISTERED, SECTIONS
 
 logger = logging.getLogger(__name__)
+
+
+class RevertRequest(BaseModel):
+    """Which Snapshot to go back to. Shared by both recovery actions so the two cannot
+    drift into different shapes for the same question."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot: int
 
 
 class RevertEffect(BaseModel):
@@ -47,6 +59,12 @@ class RevertEffect(BaseModel):
     )
     catalogs_created: list[str] = Field(default_factory=list)
     catalogs_replaced: list[str] = Field(default_factory=list)
+    cost: ApplyCost = Field(
+        description=(
+            "What applying this would cost the Cluster. A recovery action that restarts "
+            "Trino must say so as loudly as the change that made it necessary."
+        )
+    )
     summary: str = Field(description="What this does, in words, for an Operator to read.")
 
 
@@ -61,6 +79,7 @@ async def _snapshot_sections(
 async def _effect(
     candidate: Candidate,
     snapshots: SnapshotStore,
+    trino: Trino,
     number: int,
     sections: list[SectionName],
     others_stay_at: int | None,
@@ -68,21 +87,31 @@ async def _effect(
 ) -> RevertEffect:
     """The Apply that would follow, planned but not run.
 
-    Planned against the Candidate's base Snapshot, because that is what Apply itself
-    plans against -- so these are the statements an Operator would actually cause.
+    Planned with every Section's own planner against the Candidate's base Snapshot,
+    because that is what Apply itself plans against -- so this reports the statements and
+    the restart an Operator would actually cause, rather than a second reading of the same
+    rules that can drift from them.
     """
     baseline = await snapshots.sections_of(candidate.base_snapshot)
-    plan = catalog_apply.plan(candidate.sections.get(CATALOGS, {}), baseline.get(CATALOGS, {}))
+    plans: dict[SectionName, SectionPlan] = {
+        section.name: section.plan(candidate.sections.get(section.name, {}), baseline[section.name])
+        for section in REGISTERED
+    }
+
+    catalogs = plans[CATALOGS]
+    assert isinstance(catalogs, catalog_apply.CatalogPlan)
+
     effect = RevertEffect(
         from_snapshot=number,
         sections=sections,
-        # Stated by the caller, never inferred from how many Sections were replaced:
-        # while catalogs is the only Section, a revert of it covers all of them and is
-        # still not a Full Rollback.
+        # Stated by the caller, never inferred from how many Sections were replaced: a
+        # revert that happens to cover every registered Section is still not a Full
+        # Rollback.
         other_sections_stay_at=others_stay_at,
-        catalogs_dropped=plan.dropped,
-        catalogs_created=plan.created,
-        catalogs_replaced=plan.replaced,
+        catalogs_dropped=catalogs.dropped,
+        catalogs_created=catalogs.created,
+        catalogs_replaced=catalogs.replaced,
+        cost=await cost_of(plans, trino),
         summary="",
     )
     effect.summary = _summary(effect, summary_for)
@@ -100,6 +129,10 @@ def _summary(effect: RevertEffect, kind: str) -> str:
         )
     else:
         parts.append("Applying this will drop no catalogs.")
+    if effect.cost.restarts_coordinator:
+        parts.append(RESTART_WARNING)
+        if effect.cost.queries_at_risk is not None:
+            parts.append(f"{effect.cost.queries_at_risk} are running or queued right now.")
     parts.append(
         f"Snapshot {effect.from_snapshot} is not modified; applying this produces a new Snapshot."
     )
@@ -107,7 +140,11 @@ def _summary(effect: RevertEffect, kind: str) -> str:
 
 
 async def section_revert(
-    candidates: CandidateStore, snapshots: SnapshotStore, section: SectionName, number: int
+    candidates: CandidateStore,
+    snapshots: SnapshotStore,
+    trino: Trino,
+    section: SectionName,
+    number: int,
 ) -> RevertEffect:
     """Replace one Section of the Candidate with its content from an earlier Snapshot."""
     restored = await _snapshot_sections(snapshots, number)
@@ -118,6 +155,7 @@ async def section_revert(
     effect = await _effect(
         candidate,
         snapshots,
+        trino,
         number,
         [section],
         candidate.base_snapshot,
@@ -132,7 +170,7 @@ async def section_revert(
 
 
 async def full_rollback(
-    candidates: CandidateStore, snapshots: SnapshotStore, number: int
+    candidates: CandidateStore, snapshots: SnapshotStore, trino: Trino, number: int
 ) -> RevertEffect:
     """Replace the entire Candidate with an earlier Snapshot.
 
@@ -147,6 +185,7 @@ async def full_rollback(
     effect = await _effect(
         candidate,
         snapshots,
+        trino,
         number,
         list(SECTIONS),
         None,

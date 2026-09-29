@@ -8,7 +8,13 @@ Apply with an Event Listener staged is refused at Validation until delivery exis
 
 from fastapi import APIRouter, status
 
-from app.api.deps import CandidateStoreDep, OperatorMutationAllowed
+from app.api.deps import (
+    CandidateStoreDep,
+    OperatorMutationAllowed,
+    SnapshotStoreDep,
+    TrinoDep,
+)
+from app.pipeline.recovery import RevertEffect, RevertRequest, section_revert
 from app.sections.event_listeners import SECTION as LISTENERS
 from app.sections.event_listeners import section
 from app.sections.event_listeners.model import (
@@ -18,6 +24,24 @@ from app.sections.event_listeners.model import (
 )
 
 router = APIRouter(prefix="/event-listeners", tags=["event listeners"])
+
+
+@router.post(
+    "/revert",
+    response_model=RevertEffect,
+    summary="Stage this Section's content from an earlier Snapshot",
+    dependencies=[OperatorMutationAllowed],
+)
+async def revert(
+    request: RevertRequest,
+    store: CandidateStoreDep,
+    snapshots: SnapshotStoreDep,
+    trino: TrinoDep,
+) -> RevertEffect:
+    """Stages into the Candidate; it does not apply. An ordinary POST /applies follows,
+    like any other edit -- and because this Section is rollout-required, that Apply
+    restarts the coordinator. The effect says so, and what it costs."""
+    return await section_revert(store, snapshots, trino, LISTENERS, request.snapshot)
 
 
 @router.get("", response_model=list[EventListener], summary="List staged Event Listeners")
