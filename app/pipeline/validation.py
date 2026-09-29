@@ -16,7 +16,7 @@ import asyncio
 import logging
 import re
 import time
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -39,10 +39,10 @@ VALIDATION_ROLE = "trino-validation"
 VALIDATION_SELECTOR = f"{ROLE_LABEL}={VALIDATION_ROLE}"
 
 #: The official image's own config reads `catalog.management` from this variable, so
-#: dynamic catalogs need no config file of our own and no command override. The store
-#: stays the default in-memory one: the probe is discarded, so there is nothing worth
-#: persisting. The Cluster sets catalog.store=file because its catalogs must outlive
-#: its pod; this one's must not.
+#: dynamic catalogs need no command override, and no config file of our own until a
+#: Section wants one. The store stays the default in-memory one: the probe is discarded,
+#: so there is nothing worth persisting. The Cluster sets catalog.store=file because its
+#: catalogs must outlive its pod; this one's must not.
 _CATALOG_MANAGEMENT_ENV = "CATALOG_MANAGEMENT"
 
 #: The image ships example catalogs -- jmx, memory, tpch, tpcds. An empty volume over
@@ -56,6 +56,20 @@ _POLL_SECONDS = 2.0
 
 #: The volume carrying whatever files the Sections need inside the probe.
 _FILES_VOLUME = "section-files"
+
+#: The probe's own configuration, written only when a Section contributes a file. A file is
+#: validated only if something is configured to read it, and the properties that do the
+#: reading are ones the image does not set -- so the image's own config.properties has to be
+#: replaced rather than added to. These four are what `trinodb/trino` ships, verbatim, down
+#: to the environment reference the manifest sets; the Sections add their own on top.
+_PROBE_CONFIG = {
+    "coordinator": "true",
+    "node-scheduler.include-coordinator": "true",
+    "discovery.uri": "http://localhost:8080",
+    "catalog.management": f"${{ENV:{_CATALOG_MANAGEMENT_ENV}}}",
+}
+
+_CONFIG_PATH = "/etc/trino/config.properties"
 
 #: How much of a failed probe's log to quote back. Enough to carry Trino's error, little
 #: enough not to put a wall of startup output in an API response.
@@ -162,7 +176,7 @@ async def ephemeral_trino(
     settings: Settings,
     validation_id: str,
     files: dict[str, str] | None = None,
-    resource: str | None = None,
+    blame: Mapping[str, str] | None = None,
 ) -> AsyncIterator[Trino]:
     """An ephemeral coordinator, deleted however this block exits.
 
@@ -185,7 +199,7 @@ async def ephemeral_trino(
         "validation pod created", extra={"pod": name, "image": image, "files": len(files or {})}
     )
     try:
-        yield await _await_serving(kubernetes, name, timeout, resource)
+        yield await _await_serving(kubernetes, name, timeout, blame)
     finally:
         await kubernetes.delete_pod(name)
         if files:
@@ -203,8 +217,24 @@ def _why(logs: str) -> str:
     return " / ".join(interesting[-3:])
 
 
+def _blame(logs: str, blame: Mapping[str, str]) -> str | None:
+    """Which Section's resource to hang a refusal to start on.
+
+    Trino names the file it choked on -- `Invalid JSON file '/etc/trino/user-mapping.json'
+    for ...` -- so the log is the only honest attribution once more than one Section puts a
+    file in front of the probe. With a single contributor there is nothing to weigh up, and
+    with none the failure is the probe's own.
+    """
+    named = [resource for path, resource in blame.items() if path in logs]
+    if len(named) == 1:
+        return named[0]
+    if not named and len(blame) == 1:
+        return next(iter(blame.values()))
+    return None
+
+
 async def _await_serving(
-    kubernetes: KubernetesAdapter, name: str, timeout: float, resource: str | None = None
+    kubernetes: KubernetesAdapter, name: str, timeout: float, blame: Mapping[str, str] | None = None
 ) -> Trino:
     deadline = time.monotonic() + timeout
     while True:
@@ -213,13 +243,14 @@ async def _await_serving(
             # A probe that will not start is how a file-based Section fails Validation, and
             # its log is the only place the reason exists: Trino writes nothing to the
             # termination-log file Kubernetes would otherwise surface.
+            logs = await kubernetes.pod_logs(name, _LOG_LINES)
             raise ValidationFailed(
                 [
                     ValidationFailure(
-                        resource=resource,
+                        resource=_blame(logs, blame or {}),
                         reason=(
                             f"The validation coordinator could not start: {state.problem}. "
-                            f"{_why(await kubernetes.pod_logs(name, _LOG_LINES))}"
+                            f"{_why(logs)}"
                         ).strip(),
                     )
                 ]
@@ -279,23 +310,23 @@ async def validate_candidate(
         return
 
     files: dict[str, str] = {}
+    properties = dict(_PROBE_CONFIG)
+    # Which resource to blame if the probe refuses to start: Trino names the file, and the
+    # file is the Section's, so the path is what ties a startup failure back to a resource.
+    blame: dict[str, str] = {}
     for section in probing:
-        files.update(probe_files(section, cluster.settings, sections.get(section.name, {})))
-
-    # Named so that a probe which refuses to start can be blamed on something. With one
-    # file-based Section that is unambiguous; a second will need the attribution to come
-    # from whichever Section contributed the file Trino choked on.
-    culprit = next(
-        (
-            sorted(sections.get(section.name, {}))[0]
-            for section in probing
-            if probe_files(section, cluster.settings, sections.get(section.name, {}))
-        ),
-        None,
-    )
+        staged = sections.get(section.name, {})
+        contributed = probe_files(section, cluster.settings, staged)
+        files.update(contributed)
+        blame.update({path: sorted(staged)[0] for path in contributed if staged})
+        spec = section.coordinator_file(cluster.settings)
+        if spec is not None:
+            properties.update(spec.probe_config)
+    if files:
+        files[_CONFIG_PATH] = "".join(f"{key}={value}\n" for key, value in properties.items())
 
     async with ephemeral_trino(
-        cluster.kubernetes, cluster.settings, validation_id, files, culprit
+        cluster.kubernetes, cluster.settings, validation_id, files, blame
     ) as probe:
         for section in probing:
             failures.extend(

@@ -9,10 +9,20 @@ kubectl apply -f deploy/trino-dev/
 kubectl wait --for=condition=ready pod -l app=trino --timeout=300s
 ```
 
-`05-access-control.yaml` is **generated** — `scripts/export_access_control.py` writes it from
-Apchi's own generator, and CI fails if the two disagree. Do not edit it by hand. It is committed
-only because Trino refuses to boot without the file, so the coordinator has to be able to start
-before Apchi has ever run; Apchi rewrites the Secret on every Apply.
+`05-access-control.yaml` and `06-user-mapping.yaml` are **generated** —
+`scripts/export_access_control.py` and `scripts/export_user_mapping.py` write them from Apchi's
+own generators, and CI fails if the two disagree. Do not edit them by hand. They are committed
+only because Trino refuses to boot without either file, so the coordinator has to be able to
+start before Apchi has ever run; Apchi rewrites both Secrets as the configuration changes.
+
+The coordinator sets `http-server.authentication.insecure.user-mapping.file` rather than the
+certificate variant, because there is no TLS here and Trino rejects
+`http-server.authentication.certificate.user-mapping.file` unless certificate authentication is
+configured. Both properties feed the same file to the same parser, so a pattern proven here is
+a pattern proven for production. Two consequences worth knowing before you run a query against
+this cluster: the rules are read once, when the authenticator is built, so a change takes only
+on a Rollout; and a principal no rule matches is **denied**, not passed through — which is why
+Apchi always emits the catch-all `(.*)` rule when no Certificate Mapping Pattern is set.
 
 ## The mechanism
 

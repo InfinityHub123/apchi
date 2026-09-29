@@ -28,6 +28,7 @@ TRINO_SERVICE = "svc/trino"
 CATALOG_SEED_SECRET = "trino-catalog-seed"
 ACCESS_CONTROL_SECRET = "trino-access-control"
 EVENT_LISTENER_SECRET = "trino-event-listener"
+USER_MAPPING_SECRET = "trino-user-mapping"
 
 
 def _cluster_available() -> bool:
@@ -365,7 +366,12 @@ async def cluster_state(
     test that runs Apchi under a different identity to force a failure also revokes the
     real one's `owner` -- and the cleanup would then be denied its own DROP CATALOG.
     """
-    secrets = (CATALOG_SEED_SECRET, ACCESS_CONTROL_SECRET, EVENT_LISTENER_SECRET)
+    secrets = (
+        CATALOG_SEED_SECRET,
+        ACCESS_CONTROL_SECRET,
+        EVENT_LISTENER_SECRET,
+        USER_MAPPING_SECRET,
+    )
     originals = {name: await real_kubernetes.read_secret(name) for name in secrets}
 
     def cluster() -> Trino:
@@ -375,10 +381,14 @@ async def cluster_state(
     try:
         yield
     finally:
-        changed_rules = (
-            await real_kubernetes.read_secret(ACCESS_CONTROL_SECRET)
-            != originals[ACCESS_CONTROL_SECRET]
-        )
+        # Both are rule files the running coordinator will not pick up again on its own:
+        # the access-control rules only on their refresh timer, the user-mapping rules never
+        # -- UserMapping parses them when the authenticator is built. Either one changed
+        # means the pod has to go.
+        changed_rules = False
+        for name in (ACCESS_CONTROL_SECRET, USER_MAPPING_SECRET):
+            if await real_kubernetes.read_secret(name) != originals[name]:
+                changed_rules = True
         for name, content in originals.items():
             await real_kubernetes.write_secret(name, content)
         # Apchi mounts its own volume on the coordinator when a listener is configured.

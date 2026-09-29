@@ -43,10 +43,15 @@ spec:
             # Apchi-managed: whole-volume mount, never subPath, so the
             # kubelet keeps it current.
             - {name: access-control, mountPath: /etc/trino/access-control, readOnly: true}
+            # Apchi-managed, and the one place it mounts a single key: the user-mapping
+            # rules are read once when the authenticator is built, so there is nothing for
+            # the kubelet to keep current -- a Rollout is what makes a change take.
+            - {name: apchi-user-mapping, mountPath: /etc/trino/user-mapping.json, subPath: user-mapping.json, readOnly: true}
             - {name: catalog-store, mountPath: /data/trino/catalogs}
       volumes:
         - {name: config, configMap: {name: trino-config}}
         - {name: access-control, secret: {secretName: trino-access-control}}
+        - {name: apchi-user-mapping, secret: {secretName: trino-user-mapping}}
         - {name: catalog-seed, secret: {secretName: trino-catalog-seed}}
         # Ephemeral by design. Durability lives in the Secret, not here.
         - {name: catalog-store, emptyDir: {}}
