@@ -149,21 +149,26 @@ class EventListenersSection:
             removed=sorted(set(current) - set(desired)),
         )
 
-    def coordinator_file(self, settings: Settings) -> CoordinatorFile:
+    def coordinator_files(self, settings: Settings) -> tuple[CoordinatorFile, ...]:
         """Where Trino reads the listener configuration, and the Secret Apchi puts it in.
 
         The path is Trino's default, not a choice. `event-listener.config-files` would let
         it live anywhere, but it makes Trino refuse to start when the file it names is
         missing -- and a Section that cannot be empty is not optional.
         """
-        return CoordinatorFile(
-            secret=settings.event_listener_secret_name,
-            volume=settings.event_listener_volume_name,
-            path=MOUNT_PATH,
+        return (
+            CoordinatorFile(
+                secret=settings.event_listener_secret_name,
+                volume=settings.event_listener_volume_name,
+                path=MOUNT_PATH,
+            ),
         )
 
-    def render_file(self, desired: Resources, settings: Settings, admin: AdminValues) -> str | None:
-        return render_secret(desired).get(FILE_KEY)
+    def render_files(
+        self, desired: Resources, settings: Settings, admin: AdminValues
+    ) -> dict[str, str]:
+        content = render_secret(desired).get(FILE_KEY)
+        return {MOUNT_PATH: content} if content else {}
 
     async def apply(self, cluster: Cluster, desired: Resources, plan: SectionPlan) -> None:
         """Nothing beyond the file, which the pipeline has already delivered.

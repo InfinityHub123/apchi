@@ -113,15 +113,19 @@ class CertificateMappingSection:
     #: UserMapping's rule list is immutable once the authenticator exists.
     requires_rollout = True
 
-    def coordinator_file(self, settings: Settings) -> CoordinatorFile:
-        return CoordinatorFile(
-            secret=settings.certificate_mapping_secret_name,
-            volume=settings.certificate_mapping_volume_name,
-            path=MOUNT_PATH,
-            probe_config=PROBE_CONFIG,
+    def coordinator_files(self, settings: Settings) -> tuple[CoordinatorFile, ...]:
+        return (
+            CoordinatorFile(
+                secret=settings.certificate_mapping_secret_name,
+                volume=settings.certificate_mapping_volume_name,
+                path=MOUNT_PATH,
+                probe_config=PROBE_CONFIG,
+            ),
         )
 
-    def render_file(self, desired: Resources, settings: Settings, admin: AdminValues) -> str:
+    def render_files(
+        self, desired: Resources, settings: Settings, admin: AdminValues
+    ) -> dict[str, str]:
         """Always a file, never nothing.
 
         An absent file is not the same as no pattern: the authenticator is configured to
@@ -132,7 +136,11 @@ class CertificateMappingSection:
         The reserved rule needs the identity Apchi authenticates as, which is a deployment
         setting -- so it is read here rather than captured when the registry is built.
         """
-        return render_rules(desired, settings.trino_user, admin.preserved_certificate_mappings)
+        return {
+            MOUNT_PATH: render_rules(
+                desired, settings.trino_user, admin.preserved_certificate_mappings
+            )
+        }
 
     def plan(self, desired: Resources, current: Resources) -> "MappingPlan":
         return MappingPlan(changed=desired.get(RESOURCE) != current.get(RESOURCE))

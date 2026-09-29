@@ -207,9 +207,9 @@ async def test_applying_a_pattern_delivers_the_file_and_restarts_the_coordinator
     assert record["stage"] == "succeeded", record
     delivered = fake_kubernetes.secrets["trino-user-mapping"][FILE_KEY]
     assert '"(.*)@example\\\\.com"' in delivered
-    assert fake_kubernetes.mounts["apchi-user-mapping"] == {
+    assert fake_kubernetes.mounts[MOUNT_PATH] == {
+        "volume": "apchi-user-mapping",
         "secret": "trino-user-mapping",
-        "path": MOUNT_PATH,
         "key": FILE_KEY,
     }
     assert len(fake_kubernetes.restarts) == 1
@@ -231,9 +231,9 @@ async def test_clearing_a_pattern_leaves_the_pass_through_rule_behind(
     delivered = fake_kubernetes.secrets["trino-user-mapping"][FILE_KEY]
     assert '"@example' not in delivered
     assert '"pattern": "(.*)"' in delivered
-    assert fake_kubernetes.mounts["apchi-user-mapping"] == {
+    assert fake_kubernetes.mounts[MOUNT_PATH] == {
+        "volume": "apchi-user-mapping",
         "secret": "trino-user-mapping",
-        "path": MOUNT_PATH,
         "key": FILE_KEY,
     }
 

@@ -987,6 +987,46 @@ constructor: no timer, no watcher. A change needs a coordinator restart. (The DB
 manager polls every second and would make this Section dynamic; that is a future migration,
 not the current design.)
 
+**Fully typed, with no pass-through.** Trino owns this format and documents it, so unlike a
+connector's properties or an uncurated event listener there is nothing to wave through:
+every field is modelled, and anything else is refused with the property named. The names are
+Apchi's snake_case on the API and Trino's camelCase in the file, translated by a rule rather
+than a table so a field cannot be added to one and forgotten in the other.
+
+**Groups are keyed by their dotted path; the selectors are one ordered list.** The two halves
+of the file have different shapes because they mean different things. Order between groups is
+irrelevant, so they are resources -- `global`, `global.etl` -- and Review names the group that
+changed rather than saying the configuration did. Order between selectors *is* the
+configuration, because first match wins, so they are read and replaced whole: editing one in
+place would let an Operator change what matches without seeing what now shadows it. Trino
+rejects a group name containing a dot, which is what makes a path unambiguous; Apchi also
+rejects `#`, which is what keeps the reserved keys the selectors and the file's own settings
+live under out of reach of anything an Operator can name.
+
+**The Section owns two files**, the rules and the `resource-groups.properties` that points at
+them, because the JSON is inert without it and `resource-groups.configuration-manager` is
+rejected outright in `config.properties`. They arrive together and leave together: an empty
+Section that unmounted only the rules would leave Trino pointed at a file that is no longer
+there, which it refuses to start on. This is the one Section where "no configuration" really
+is the absence of the mounts, and it is only safe *because* Apchi owns the switch as well as
+the content.
+
+**What Validation catches that a request cannot.** Two rules span the whole Candidate rather
+than one resource, so they are checked at Validate: a selector naming a group that does not
+exist, and a selector naming a group that has subgroups. The first Trino catches too, at the
+cost of a probe that will not start. The second it does not catch at all -- such a
+configuration starts cleanly and fails the queries that select into it, which is exactly the
+kind of failure Validation exists to move earlier. Deferring both to Validate is also what
+lets an Operator write a selector before the group it points at.
+
+**Where Trino is stricter than it looks.** Three rules were found by putting generated files
+in front of a real coordinator, and each one is a coordinator that does not come back:
+`hardConcurrencyLimit` is required while `maxQueued` is not; a `softCpuLimit` without a
+`hardCpuLimit` is refused ("Must specify hard CPU limit in addition to soft limit"); and any
+CPU limit at all requires a top-level `cpuQuotaPeriod`. The first two are within one group, so
+Apchi refuses them at request time; the quota period governs the whole file, so it is the
+Section's own setting and the check spans the Candidate.
+
 ## 13.6 Event Listeners
 
 Operators configure event listeners by type. Like catalogs, the properties are defined by
@@ -1645,9 +1685,9 @@ Additional constraints:
   remains undefined is the procedure around it: sequencing, authorization edge cases, naming
   and domain constraints, rollback, and whether every existing setup can migrate cleanly. Note
   each pattern change costs a coordinator restart.
-- **Field-level models for Resource Groups** — hierarchy, selectors and guardrails. Event
-  Listeners are settled for `http` and `kafka` (§13.6); `mysql` and `openlineage` pass through
-  until someone needs them curated.
+- **Field-level models for Event Listeners** — settled for `http` and `kafka` (§13.6);
+  `mysql` and `openlineage` pass through until someone needs them curated. Resource Groups
+  are settled and fully typed (§13.5).
 - **Who owns `event-listener.config-files`**, which is what limits the Candidate to a single
   Event Listener (§13.6). It is `config.properties`, so today it is Admin territory.
 

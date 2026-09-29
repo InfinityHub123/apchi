@@ -7,10 +7,11 @@ MongoDB still comes from testcontainers: what tier 2 adds is a real Kubernetes a
 a real in-cluster Trino, not a different database.
 """
 
+import json
 import socket
 import subprocess
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -29,6 +30,17 @@ CATALOG_SEED_SECRET = "trino-catalog-seed"
 ACCESS_CONTROL_SECRET = "trino-access-control"
 EVENT_LISTENER_SECRET = "trino-event-listener"
 USER_MAPPING_SECRET = "trino-user-mapping"
+RESOURCE_GROUPS_SECRET = "trino-resource-groups"
+
+#: The mounts Apchi adds and removes on the coordinator, by the volume that carries
+#: them. What the reset has to take back off between tests.
+APCHI_MOUNTS = {
+    "apchi-event-listener": ["/etc/trino/event-listener.properties"],
+    "apchi-resource-groups": [
+        "/etc/trino/resource-groups.json",
+        "/etc/trino/resource-groups.properties",
+    ],
+}
 
 
 def _cluster_available() -> bool:
@@ -167,11 +179,12 @@ class PortForward:
         raise AssertionError(f"coordinator not serving through the forward on {self.port}")
 
 
-def _listener_volume_present() -> bool:
-    """Whether Apchi's volume is on the coordinator right now.
+def _apchi_volumes_present() -> list[str]:
+    """Which of Apchi's optional volumes are on the coordinator right now.
 
-    Checked before patching it away, because a patch that changes nothing still bumps the
-    Deployment's generation and starts a rollout nobody needed.
+    Checked before patching them away, because a patch that changes nothing still bumps the
+    Deployment's generation and starts a rollout nobody needed. The user-mapping volume is
+    not here: it is part of the manifest, because that file cannot be absent.
     """
     volumes = kubectl(
         "get",
@@ -179,8 +192,8 @@ def _listener_volume_present() -> bool:
         "trino-coordinator",
         "-o",
         "jsonpath={.spec.template.spec.volumes[*].name}",
-    )
-    return "apchi-event-listener" in volumes.split()
+    ).split()
+    return [name for name in ("apchi-event-listener", "apchi-resource-groups") if name in volumes]
 
 
 def _coordinator_pods() -> int:
@@ -305,10 +318,10 @@ class ForwardedKubernetes:
     ) -> None:
         await self._real.mount_secret_file(deployment, container, volume, secret, path, key)
 
-    async def unmount_secret_file(
-        self, deployment: str, container: str, volume: str, path: str
+    async def unmount_secret_files(
+        self, deployment: str, container: str, volume: str, paths: Sequence[str], drop_volume: bool
     ) -> None:
-        await self._real.unmount_secret_file(deployment, container, volume, path)
+        await self._real.unmount_secret_files(deployment, container, volume, paths, drop_volume)
 
     async def pod_state(self, name: str) -> PodState:
         state = await self._real.pod_state(name)
@@ -371,6 +384,7 @@ async def cluster_state(
         ACCESS_CONTROL_SECRET,
         EVENT_LISTENER_SECRET,
         USER_MAPPING_SECRET,
+        RESOURCE_GROUPS_SECRET,
     )
     originals = {name: await real_kubernetes.read_secret(name) for name in secrets}
 
@@ -399,16 +413,33 @@ async def cluster_state(
         # coordinator was being replaced, its port-forward attached to a pod on its way out,
         # and its very first Trino call was refused long before it reached a rollout of its
         # own.
-        if _listener_volume_present():
+        if volumes := _apchi_volumes_present():
+            patch = {
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "volumes": [{"name": volume, "$patch": "delete"} for volume in volumes],
+                            "containers": [
+                                {
+                                    "name": "trino",
+                                    "volumeMounts": [
+                                        {"mountPath": path, "$patch": "delete"}
+                                        for volume in volumes
+                                        for path in APCHI_MOUNTS[volume]
+                                    ],
+                                }
+                            ],
+                        }
+                    }
+                }
+            }
             kubectl(
                 "patch",
                 "deployment",
                 "trino-coordinator",
                 "--type=strategic",
                 "-p",
-                '{"spec":{"template":{"spec":{"volumes":[{"name":"apchi-event-listener",'
-                '"$patch":"delete"}],"containers":[{"name":"trino","volumeMounts":'
-                '[{"mountPath":"/etc/trino/event-listener.properties","$patch":"delete"}]}]}}}}',
+                json.dumps(patch),
             )
             kubectl("rollout", "status", COORDINATOR, "--timeout=600s")
             forward.restart()

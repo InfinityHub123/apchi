@@ -105,19 +105,25 @@ class Section(Protocol):
     #: consumes the configuration, never of when an Operator's edit takes effect.
     requires_rollout: bool
 
-    def coordinator_file(self, settings: Settings) -> CoordinatorFile | None:
-        """The file this Section delivers to the coordinator, or None if it delivers none.
+    def coordinator_files(self, settings: Settings) -> tuple[CoordinatorFile, ...]:
+        """The files this Section delivers to the coordinator. Empty when it delivers none.
 
-        Declaring it is all a Section does about delivery: the pipeline writes the Secret,
-        mounts it when there is content, unmounts it when there is not, puts it in front of
-        the validation probe, and tells the preconditions to guard the path.
+        Declaring them is all a Section does about delivery: the pipeline writes the Secret,
+        mounts each file when there is content for it, unmounts it when there is not, puts
+        them in front of the validation probe, and tells the preconditions to guard the
+        paths.
+
+        More than one because a Section may need Trino *told* to read its file. Resource
+        Groups is the case: the JSON is inert until `resource-groups.properties` points at
+        it, so the Section that owns the one owns the other, and an empty Section takes both
+        away rather than leaving Trino pointed at a file that is no longer there.
         """
         ...
 
-    def render_file(self, desired: Resources, settings: Settings, admin: AdminValues) -> str | None:
-        """The file's content, or None when this Section has nothing to deliver.
-
-        None and empty mean the same thing to the pipeline: no file, so no mount.
+    def render_files(
+        self, desired: Resources, settings: Settings, admin: AdminValues
+    ) -> dict[str, str]:
+        """What belongs at each declared path. A path left out is a path unmounted.
 
         Admin values are passed alongside the Candidate's resources rather than merged into
         them, because the two have different lifecycles: what is rendered is the pair, and
