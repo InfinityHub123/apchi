@@ -112,7 +112,10 @@ async def _kill_mid_apply(
     """
     started = await client.post("/api/v1/applies")
     apply_id = started.json()["id"]
-    deadline = asyncio.get_running_loop().time() + 30
+    # Generous: this bounds how long the Apply is given to reach the point worth
+    # interrupting, and says nothing about how fast it ought to be. A loaded CI runner with
+    # two Trino containers on it took longer than thirty seconds to get through Validation.
+    deadline = asyncio.get_running_loop().time() + 180
     probe = (
         Trino(
             host=cluster.get_container_host_ip(),
@@ -127,7 +130,11 @@ async def _kill_mid_apply(
             break
         await asyncio.sleep(0.01)
     else:
-        raise AssertionError("the Apply never got far enough to interrupt")
+        stage = (await client.get(f"/api/v1/applies/{apply_id}")).json().get("stage")
+        raise AssertionError(
+            f"the Apply never got far enough to interrupt; it reached {stage!r} and the "
+            f"Secret held {sorted(kubernetes.secrets.get(SECRET, {}))}"
+        )
     await client.app_under_test.state.apply_runner.shutdown()  # type: ignore[attr-defined]
     return apply_id
 

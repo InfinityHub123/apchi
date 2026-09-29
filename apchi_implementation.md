@@ -380,6 +380,17 @@ There is no coordinator HA. No configuration of Apchi changes this. See
 
 The Apply confirmation must say so, in those words, with a live running-query count.
 
+`GET /review` carries it: whether applying restarts the coordinator, the sentence saying what
+that does to queries, and how many are running or queued right now. The count is a **live
+reading and not a promise** — it is stale the moment it is returned, and nothing depends on its
+exactness; what matters is the order of magnitude and the sentence beside it. The counting query
+is itself running while it counts, so it is excluded.
+
+The Cluster is asked only when the answer matters. A Candidate needing no restart costs no
+queries, so Review does not touch Trino for it — and when a restart *is* coming but the Cluster
+cannot be reached, the count is reported as unknown rather than guessed at, because Review's job
+is to show an Operator what is staged and an unreachable Cluster must not stop that.
+
 ## 7.4 Minimal restart set
 
 Apchi restarts only what the Candidate's changes require:

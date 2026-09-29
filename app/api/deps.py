@@ -4,12 +4,21 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 
+from app.adapters.trino import Trino
 from app.api.errors import Conflict, MaintenanceModeEngaged
 from app.pipeline.applies import ApplyStore
 from app.pipeline.candidate import CandidateStore
 from app.pipeline.maintenance import MaintenanceStore
 from app.pipeline.snapshots import SnapshotStore
 from app.pipeline.validations import ValidationStore
+
+
+def trino(request: Request) -> Trino:
+    store: Trino = request.app.state.trino
+    return store
+
+
+TrinoDep = Annotated[Trino, Depends(trino)]
 
 
 def candidate_store(request: Request) -> CandidateStore:

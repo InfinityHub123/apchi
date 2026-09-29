@@ -5,10 +5,16 @@ from typing import Any, Literal
 from fastapi import APIRouter, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.deps import CandidateStoreDep, OperatorMutationAllowed, SnapshotStoreDep
+from app.api.deps import (
+    CandidateStoreDep,
+    OperatorMutationAllowed,
+    SnapshotStoreDep,
+    TrinoDep,
+)
+from app.pipeline.impact import ApplyCost, cost_of
 from app.pipeline.recovery import RevertEffect, full_rollback
 from app.sections import SectionName
-from app.sections.registry import SECTIONS
+from app.sections.registry import REGISTERED, SECTIONS
 
 router = APIRouter(tags=["candidate"])
 
@@ -39,6 +45,9 @@ class Review(BaseModel):
     )
     has_changes: bool
     sections: list[SectionDiff]
+    cost: ApplyCost = Field(
+        description="What applying the Candidate as it stands would cost the Cluster."
+    )
 
 
 def _diff(before: dict[str, Any], after: dict[str, Any]) -> list[ResourceChange]:
@@ -57,7 +66,7 @@ def _diff(before: dict[str, Any], after: dict[str, Any]) -> list[ResourceChange]
 
 
 @router.get("/review", response_model=Review, summary="What an Apply would change")
-async def review(store: CandidateStoreDep, snapshots: SnapshotStoreDep) -> Review:
+async def review(store: CandidateStoreDep, snapshots: SnapshotStoreDep, trino: TrinoDep) -> Review:
     candidate = await store.load()
     # Diffed against the Snapshot the Candidate was derived from, so Review answers
     # "what would this Apply change" rather than "what is staged". Before the first
@@ -68,10 +77,18 @@ async def review(store: CandidateStoreDep, snapshots: SnapshotStoreDep) -> Revie
         SectionDiff(section=name, changes=_diff(baseline[name], candidate.sections.get(name, {})))
         for name in SECTIONS
     ]
+    # Planned with the Sections' own planners rather than read off the diff above: the
+    # restart decision has to be the one Apply will make, not a second implementation of it.
+    plans = {
+        section.name: section.plan(candidate.sections.get(section.name, {}), baseline[section.name])
+        for section in REGISTERED
+    }
+
     return Review(
         base_snapshot=candidate.base_snapshot,
         has_changes=any(section.changes for section in sections),
         sections=sections,
+        cost=await cost_of(plans, trino),
     )
 
 
