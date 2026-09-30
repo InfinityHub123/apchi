@@ -13,9 +13,10 @@ import pytest
 from httpx import AsyncClient
 
 from app.config import Settings
-from app.pipeline.access_control import RULES_KEY, render_rules
 from app.pipeline.applies import TERMINAL
 from app.pipeline.preconditions import PreconditionFailed, check, pod_spec
+from app.sections.certificate_mapping.generator import MOUNT_PATH as MAPPING_PATH
+from app.sections.permissions.generator import MOUNT_PATH, RULES_KEY, render_rules
 from tests.conftest import FakeKubernetes, healthy_pod_spec
 
 ACCESS_CONTROL_SECRET = "trino-access-control"
@@ -222,3 +223,48 @@ def test_every_file_a_section_declares_is_guarded(settings: Settings) -> None:
 
         assert path in str(raised.value)
         assert volume in str(raised.value)
+
+
+async def test_apchi_mounts_nothing_for_the_rules(
+    applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
+) -> None:
+    """The rules have to be a whole-volume mount, which is the Admin's to make. Apchi owns
+    what is in the Secret and nothing else, so delivering them touches no pod template."""
+    await applying_client.post("/api/v1/catalogs", json=MEMORY)
+
+    await _apply(applying_client)
+
+    assert fake_kubernetes.secrets[ACCESS_CONTROL_SECRET] != {}
+    assert MOUNT_PATH not in fake_kubernetes.mounts
+    assert fake_kubernetes.restarts == [], "a permission change costs no queries"
+
+
+async def test_the_rules_are_delivered_even_though_nothing_is_staged(
+    applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
+) -> None:
+    """A Section with nothing in the Candidate still has a file. Apchi generates the whole
+    of this one, so "empty" is not a reason to leave the Cluster without it."""
+    record = await _apply(applying_client)
+
+    assert record["stage"] == "succeeded", record.get("failure_reason")
+    assert fake_kubernetes.secrets[ACCESS_CONTROL_SECRET][RULES_KEY] == render_rules("apchi")
+
+
+async def test_permissions_appears_in_review_and_costs_no_restart(client: AsyncClient) -> None:
+    review = (await client.get("/api/v1/review")).json()
+
+    permissions = next(s for s in review["sections"] if s["section"] == "permissions")
+    assert permissions["changes"] == []
+    assert review["cost"]["restarts_coordinator"] is False
+
+
+def test_a_subpath_mount_of_a_file_apchi_mounts_itself_is_allowed(settings: Settings) -> None:
+    """The precondition must not over-reach. Apchi mounts single keys with subPath on
+    purpose -- the user-mapping file is one -- and replaces the mount when the file changes,
+    with a Rollout making the new content live. Rejecting those would refuse every
+    deployment Apchi itself produces."""
+    spec = healthy_pod_spec()
+    mounts = [m["mountPath"] for m in spec["containers"][0]["volumeMounts"]]
+
+    assert MAPPING_PATH in mounts, "the fixture mounts it the way Apchi does"
+    check(pod_spec(spec), settings)

@@ -13,8 +13,8 @@ from httpx import AsyncClient
 from app.adapters.kubernetes import RealKubernetes
 from app.adapters.trino import Trino
 from app.config import Settings
-from app.pipeline.access_control import RULES_KEY, render_rules
 from app.pipeline.preconditions import check, pod_spec
+from app.sections.permissions.generator import RULES_KEY, render_rules
 from tests.tier2.conftest import PortForward
 
 pytestmark = pytest.mark.tier2

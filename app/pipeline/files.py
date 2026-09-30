@@ -32,7 +32,8 @@ async def deliver(section: Section, cluster: Cluster, desired: Resources) -> Non
 
     # Grouped by volume, because a volume and the mounts that name it can only be removed
     # together: the API server rejects a volume removed while a mount still names it, and a
-    # volume left behind with no mounts is dead weight on the Admin's pod template.
+    # volume left behind with no mounts is dead weight on the Admin's pod template. Files the
+    # Admin mounts are not in this at all -- writing the Secret is the whole of Apchi's part.
     for volume, group in _by_volume(specs).items():
         present = [spec for spec in group if contents.get(spec.path)]
         absent = [spec for spec in group if not contents.get(spec.path)]
@@ -58,9 +59,12 @@ async def deliver(section: Section, cluster: Cluster, desired: Resources) -> Non
 
 
 def _by_volume(specs: tuple[CoordinatorFile, ...]) -> dict[str, list[CoordinatorFile]]:
+    """Only the files Apchi mounts. The rest arrive by being in a Secret the Admin already
+    mounts, so there is no mount for Apchi to add and none for it to take away."""
     volumes: dict[str, list[CoordinatorFile]] = {}
     for spec in specs:
-        volumes.setdefault(spec.volume, []).append(spec)
+        if spec.volume is not None:
+            volumes.setdefault(spec.volume, []).append(spec)
     return volumes
 
 
@@ -115,10 +119,33 @@ def owned_paths(sections: tuple[Section, ...], settings: Settings) -> dict[str, 
     """Every path Apchi mounts something at, to the volume it uses there.
 
     The preconditions read this rather than naming a Section, so a new file-owning Section
-    is guarded without anyone remembering to add it.
+    is guarded without anyone remembering to add it. A file the Admin mounts is deliberately
+    absent: their mount is the one that should be there.
     """
     return {
         spec.path: spec.volume
         for section in sections
         for spec in section.coordinator_files(settings)
+        if spec.volume is not None
+    }
+
+
+def admin_mounted_secrets(sections: tuple[Section, ...], settings: Settings) -> set[str]:
+    """The Secrets a Section writes and the Admin mounts.
+
+    These are the ones a subPath mount would ruin. A subPath mount is frozen at pod
+    creation, and these files have to change *under a running pod*: the access-control
+    rules are re-read on a timer, and a new client certificate has to appear in a directory
+    that is already mounted.
+
+    The files Apchi mounts itself are the opposite case and are deliberately absent. Apchi
+    mounts a single key with subPath on purpose, replaces that mount when the file changes,
+    and the Rollout that follows is what makes the new content live -- nothing has to reach
+    a pod that is staying.
+    """
+    return {
+        spec.secret
+        for section in sections
+        for spec in section.coordinator_files(settings)
+        if spec.volume is None
     }

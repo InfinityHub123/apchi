@@ -1,25 +1,25 @@
-"""The system access-control file.
+"""Rendering the Permissions Section to the file Trino reads.
 
 Only Apchi may create or drop Catalogs, and this is the file that enforces it.
 `FileBasedSystemAccessControl.checkCanCreateCatalog` and `checkCanDropCatalog` gate on
 the **owner** access mode, so the restriction is a `catalogs` rules block: Apchi's
 identity gets `owner`, everyone else gets `all`. See section 7.1.
 
-It is not an Operator-editable Section in slice 1. Apchi generates the whole file, and
-the Permissions Section will later own the rest of it with this block still
-system-owned -- visible to Operators, editable by nobody.
+Operator-managed grants are not here yet. What this file already carries is the block Apchi
+owns and nobody may edit, and the whole file is generated -- there is no hand-written part
+to preserve when the grants arrive.
 """
 
 import json
-import logging
 import re
 
-from app.adapters.kubernetes import KubernetesAdapter
-from app.config import Settings
-
-logger = logging.getLogger(__name__)
-
 RULES_KEY = "rules.json"
+
+#: The directory the Admin mounts the Secret at, and the file inside it. Apchi writes the
+#: Secret and never touches the mount: it has to be a whole volume, because a subPath mount
+#: never receives updates and Trino would read these rules once and never again (section 16).
+MOUNT_DIR = "/etc/trino/access-control"
+MOUNT_PATH = f"{MOUNT_DIR}/{RULES_KEY}"
 
 
 def render_rules(trino_user: str) -> str:
@@ -43,17 +43,3 @@ def render_rules(trino_user: str) -> str:
         ]
     }
     return json.dumps(rules, indent=2) + "\n"
-
-
-async def deliver(kubernetes: KubernetesAdapter, settings: Settings) -> None:
-    """Write the file to its Secret.
-
-    Mounted as a whole volume rather than with `subPath`, so the kubelet keeps it
-    current -- §16's precondition, asserted separately before every Apply. Nothing here
-    waits for Trino to notice: the file's content does not change between Applies in
-    slice 1, and a rules change that did need picking up is §7.5's problem.
-    """
-    await kubernetes.write_secret(
-        settings.access_control_secret_name, {RULES_KEY: render_rules(settings.trino_user)}
-    )
-    logger.info("delivered the access-control rules", extra={"identity": settings.trino_user})

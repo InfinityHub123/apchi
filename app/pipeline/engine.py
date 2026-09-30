@@ -16,7 +16,6 @@ from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.config import Settings
 from app.pipeline import preconditions
-from app.pipeline.access_control import deliver as deliver_access_control
 from app.pipeline.admin_values import AdminStore
 from app.pipeline.auto_rollback import declare_incident, restore
 from app.pipeline.candidate import CandidateStore
@@ -130,12 +129,6 @@ class Engine:
         There is no propagation race: nothing reads the seed mount until the next pod
         start, so the Secret write needs no wait before the DDL.
         """
-        # Re-asserted every Apply rather than written once. It is generated, not
-        # Operator-editable, so this is idempotent -- and it means a Cluster whose
-        # access-control Secret was changed outside Apchi is corrected by the next Apply
-        # instead of quietly keeping catalog DDL open to everyone.
-        await deliver_access_control(self._kubernetes, self._settings)
-
         for section in REGISTERED:
             desired = self._desired.get(section.name, {})
             # The file first, then whatever else the Section does. A Section that only owns

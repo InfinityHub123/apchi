@@ -17,7 +17,7 @@ from typing import Any
 from pydantic import AliasPath, BaseModel, ConfigDict, Field
 
 from app.config import Settings
-from app.pipeline.files import owned_paths
+from app.pipeline.files import admin_mounted_secrets, owned_paths
 from app.sections.registry import REGISTERED
 
 logger = logging.getLogger(__name__)
@@ -85,12 +85,17 @@ def _covers(mount_path: str, directory: str) -> bool:
 def check(spec: PodSpec, settings: Settings) -> None:
     """Raises PreconditionFailed listing everything wrong, not just the first thing."""
     volumes = {volume.name: volume for volume in spec.volumes}
-    apchi_managed = {settings.catalog_secret_name, settings.access_control_secret_name}
+    # Read from the registry rather than named here, so a Section that starts writing a
+    # whole-volume Secret is guarded without anyone remembering to add it. The catalog seed
+    # is not a Section's file -- an initContainer reads it, not Trino -- so it is named.
+    apchi_managed = admin_mounted_secrets(REGISTERED, settings) | {settings.catalog_secret_name}
     problems: list[str] = []
 
     # 1. Apchi-managed files must not be subPath-mounted. Kubernetes documents that a
     #    subPath volume mount never receives updates: the file is frozen at pod
-    #    creation, permanently, and Apchi's writes would go nowhere visible.
+    #    creation, permanently, and Apchi's writes would go nowhere visible. Only the
+    #    whole-volume files are checked: the ones Apchi mounts itself are single keys
+    #    mounted with subPath on purpose, and a Rollout is what makes their content live.
     for container in spec.every_container:
         for mount in container.volume_mounts:
             volume = volumes.get(mount.name)

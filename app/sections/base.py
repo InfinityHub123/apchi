@@ -59,18 +59,28 @@ class SmokeQuery:
 
 @dataclass(frozen=True)
 class CoordinatorFile:
-    """A file Apchi delivers to the coordinator and owns the mount for.
+    """A file Apchi delivers to the coordinator.
 
-    Owning the mount is not a detail. Trino refuses to start when a file it was told to
-    read is missing, and Kubernetes turns a subPath mount of an absent Secret key into a
-    *directory* it dies on -- so "this Section is empty" can only be expressed by the mount
-    not being there, which means Apchi adds and removes it on the Admin's pod template.
-    Everything else on that template belongs to the Admin, and a precondition rejects
-    anything of theirs mounted at a path declared here.
+    Who mounts it is the one question this answers, and there are two answers.
+
+    **Apchi mounts it** (`volume` names the volume it uses). Trino refuses to start when a
+    file it was told to read is missing, and Kubernetes turns a subPath mount of an absent
+    Secret key into a *directory* it dies on -- so "this Section is empty" can only be
+    expressed by the mount not being there, which means Apchi adds and removes it on the
+    Admin's pod template. A precondition rejects anything of the Admin's mounted there.
+
+    **The Admin mounts it** (`volume` is None). Some files cannot be mounted by Apchi at
+    all: the access-control rules have to be a whole-volume mount or the kubelet never
+    updates them, and the client certificate directory has to be one or files added after
+    the pod started never appear (ADR-0005). Both are part of the deployment. Apchi owns
+    what is in the Secret and nothing else, so it never adds, removes or reasons about the
+    mount -- it only insists, through the preconditions, that nobody mounts it with subPath.
     """
 
     secret: str
-    volume: str
+    #: The volume Apchi adds and removes for this file, or None when the mount belongs to
+    #: the Admin and Apchi only writes the Secret.
+    volume: str | None
     path: str
     #: Configuration the validation probe needs before it will read this file at all. The
     #: Cluster's own copy of these properties belongs to the Admin; the probe is Apchi's,
