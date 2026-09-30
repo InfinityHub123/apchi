@@ -64,6 +64,10 @@ class CoordinatorDirectory:
     #: The directory the Admin mounts the Secret at. Every file a Section renders must be
     #: directly inside it.
     path: str
+    #: Files the validation probe needs beside this one, which on the Cluster are the
+    #: Admin's. A file Trino was not told to read is a file Trino never rejects, so a probe
+    #: that holds the content without the configuration pointing at it proves nothing.
+    probe_files: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

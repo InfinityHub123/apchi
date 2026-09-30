@@ -35,6 +35,14 @@ PROPERTIES_PATH = "/etc/trino/access-control.properties"
 #: report success for permissions the Cluster will never read. Section 13.4.
 REFRESH_PERIOD = "security.refresh-period"
 
+#: What the validation probe is given, so that it *reads* the rules rather than merely
+#: holding them: a file Trino was not told to read is a file Trino never rejects. The
+#: Cluster's copy of this file is the Admin's, and Apchi checks one property in it (§16);
+#: the probe is Apchi's own, so Apchi writes the whole thing.
+PROBE_PROPERTIES = (
+    f"access-control.name=file\n{REFRESH_PERIOD}=1s\nsecurity.config-file={MOUNT_PATH}\n"
+)
+
 
 def reserved_table_rule(trino_user: str, verification_catalog: str) -> dict[str, Any]:
     """Apchi's own read access, and the reason the whole tables block is safe to write.

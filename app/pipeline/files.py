@@ -136,13 +136,22 @@ def probe_files(
     a file wherever it is, and starting the probe with it in place is how a file Trino will
     not accept becomes a pod that will not start rather than a Cluster that will not.
     """
-    if not section.coordinator_files(settings):
+    declared = section.coordinator_files(settings)
+    if not declared:
         return {}
-    return {
+    files = {
         path: content
         for path, content in section.render_files(desired, settings, admin).items()
         if content
     }
+    if not files:
+        return {}
+    # Plus whatever tells Trino to read them. On the Cluster that configuration is the
+    # Admin's; the probe is Apchi's, so Apchi supplies it there.
+    for spec in declared:
+        if isinstance(spec, CoordinatorDirectory):
+            files.update(spec.probe_files)
+    return files
 
 
 def owned_paths(sections: tuple[Section, ...], settings: Settings) -> dict[str, str]:

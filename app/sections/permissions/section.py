@@ -28,7 +28,13 @@ from app.sections.base import (
     ValidationFailure,
 )
 from app.sections.permissions import SECTION
-from app.sections.permissions.generator import MOUNT_DIR, MOUNT_PATH, render_rules
+from app.sections.permissions.generator import (
+    MOUNT_DIR,
+    MOUNT_PATH,
+    PROBE_PROPERTIES,
+    PROPERTIES_PATH,
+    render_rules,
+)
 from app.sections.permissions.model import (
     Grant,
     GrantWrite,
@@ -171,7 +177,13 @@ class PermissionsSection:
         would leave Trino reading the rules Apchi wrote at pod creation and no others
         (section 16). That rules Apchi out as the mounter: Apchi mounts single files.
         """
-        return (CoordinatorDirectory(secret=settings.access_control_secret_name, path=MOUNT_DIR),)
+        return (
+            CoordinatorDirectory(
+                secret=settings.access_control_secret_name,
+                path=MOUNT_DIR,
+                probe_files={PROPERTIES_PATH: PROBE_PROPERTIES},
+            ),
+        )
 
     def render_files(
         self, desired: Resources, settings: Settings, admin: AdminValues
@@ -208,14 +220,26 @@ class PermissionsSection:
         return []
 
     def needs_probe(self, desired: Resources) -> bool:
-        """Never. The probe exists to prove Trino accepts a configuration, and an
-        unconfigured Trino allows the DDL the probe is there to issue -- putting these
-        rules in front of it would only make the probe refuse Apchi's own statements."""
-        return False
+        """Whenever an Operator has granted something.
+
+        This was once never, on the grounds that Apchi's own rules would make the probe
+        refuse Apchi's own statements. That stopped being true when the file grew the
+        reserved rules: a coordinator running what Apchi generates accepts every statement
+        the probe issues, verified against a real one.
+
+        What it buys is the failure a running Cluster hides. Trino keeps the old rules when
+        a refresh fails, so a malformed file changes nothing today and stops the coordinator
+        starting whenever it next restarts -- hours or weeks later, with nothing connecting
+        the two events. A Candidate with no grants is not worth a pod: the file is then
+        entirely generated and constant.
+        """
+        return bool(desired)
 
     async def check_against_probe(
         self, probe: Trino, desired: Resources
     ) -> list[ValidationFailure]:
+        """Starting is the check: a rules file Trino will not parse is a pod that will not
+        start, which the pipeline turns into a failure."""
         return []
 
     async def verify(self, cluster: Cluster, desired: Resources, smoke: SmokeQuery) -> list[str]:
