@@ -25,6 +25,7 @@ from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.config import Settings
 from app.pipeline.files import probe_files
+from app.pipeline.references import missing_certificates
 from app.sections import SectionName
 from app.sections.base import (
     Cluster,
@@ -295,13 +296,16 @@ async def validate_candidate(
     References *between* Sections are checked here too, over the whole Candidate,
     because request-time validation deliberately stops at the resource in front of it --
     adding a permission before the catalog it names has to be allowed, since the
-    Candidate is coherent once both exist. With one Section registered and no Section
-    referencing another there is nothing of that kind to check yet.
+    Candidate is coherent once both exist. A Catalog naming a Client Certificate is the
+    first rule of that kind to span two Sections, and it is checked here rather than
+    inside either of them (§6).
     """
     failures: list[ValidationFailure] = []
     for section in REGISTERED:
         desired = sections.get(section.name, {})
         failures.extend(await section.check(cluster, desired, plans[section.name]))
+    # And the rules that belong to no single Section, because they are about two of them.
+    failures.extend(missing_certificates(sections))
     if failures:
         raise ValidationFailed(failures)
 

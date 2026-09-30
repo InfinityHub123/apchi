@@ -179,6 +179,20 @@
       "Catalog": {
         "description": "A Catalog as it is stored and returned.",
         "properties": {
+          "certificate": {
+            "anyOf": [
+              {
+                "maxLength": 63,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Certificate"
+          },
           "connector": {
             "pattern": "^[a-z][a-z0-9_-]{0,62}$",
             "title": "Connector",
@@ -214,6 +228,20 @@
         "additionalProperties": false,
         "description": "A partial update. The name is immutable; renaming is a drop and a create,\nwhich is a different and more destructive operation.",
         "properties": {
+          "certificate": {
+            "anyOf": [
+              {
+                "maxLength": 63,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Certificate"
+          },
           "connector": {
             "anyOf": [
               {
@@ -246,6 +274,21 @@
         "additionalProperties": false,
         "description": "What an Operator sends.",
         "properties": {
+          "certificate": {
+            "anyOf": [
+              {
+                "maxLength": 63,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A Client Certificate this Catalog presents. Apchi puts it into the properties the way this connector expects, so no path is ever typed. Only for connectors Apchi knows how to wire; elsewhere use ${cert:name} and ${key:name} in the property the connector documents.",
+            "title": "Certificate"
+          },
           "connector": {
             "pattern": "^[a-z][a-z0-9_-]{0,62}$",
             "title": "Connector",
@@ -2690,6 +2733,7 @@
     },
     "/api/v1/certificates/{name}": {
       "delete": {
+        "description": "Refused while a Catalog still presents it. Removing it would leave that Catalog\npointing at a file that is about to disappear, and the failure would surface as a\nconnection error with nothing pointing back at this request.",
         "operationId": "delete_certificate_api_v1_certificates__name__delete",
         "parameters": [
           {

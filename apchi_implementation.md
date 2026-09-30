@@ -457,10 +457,14 @@ occasionally too short. Poll for the change to become observable, with a timeout
 
 - **Permissions** — run a probe query as the reserved identity (§8) that the Candidate's
   rules should newly allow or deny, until the answer matches.
-- **Client certificates** — retry the catalog DDL that references the certificate, with
-  backoff, until it succeeds or the timeout expires. The certificate must be on disk before
-  a catalog using it can connect (§13.2), and Apchi cannot see the pod's filesystem to check
-  directly.
+- **Client certificates** — nothing to poll, and that is worth stating because the obvious
+  mechanism does not work. `CREATE CATALOG` does **not** open a connection: a catalog whose
+  `sslcert` names a file that is not there is created quite happily, and the failure appears
+  only when a query runs. Verified against a running coordinator. Retrying the DDL until it
+  succeeds would therefore prove nothing about whether the certificate arrived, so Apchi does
+  not do it. The Secret is still written before the DDL — the file should be on its way before
+  the catalog exists — but Apchi claims nothing about when it lands, and a query issued before
+  the kubelet projects it fails until it does.
 
 **Catalogs: Secret first, then DDL.** The catalog Secret is patched before the DDL is issued.
 A failed DDL then leaves a catalog recorded but not yet live — Apchi knows, because the DDL

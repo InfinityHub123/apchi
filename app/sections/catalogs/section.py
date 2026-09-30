@@ -22,8 +22,9 @@ from app.sections.base import (
     ValidationFailure,
 )
 from app.sections.catalogs import SECTION, apply
+from app.sections.catalogs.certificates import WIRED, ssl_is_configured
 from app.sections.catalogs.connectors import PropertyProblem, is_curated, validate_properties
-from app.sections.catalogs.generator import render_secret
+from app.sections.catalogs.generator import effective, render_secret
 from app.sections.catalogs.model import Catalog, CatalogUpdate, CatalogWrite
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ def _as_catalog(name: str, stored: dict[str, Any]) -> Catalog:
         name=name,
         connector=stored["connector"],
         properties=stored.get("properties", {}),
+        certificate=stored.get("certificate"),
         supported=is_curated(stored["connector"]),
     )
 
@@ -58,11 +60,40 @@ def _validated(connector: str, properties: dict[str, Any]) -> dict[str, str]:
         ) from exc
 
 
+def _certificate_usable(connector: str, properties: dict[str, str], certificate: str) -> None:
+    """Refuse a certificate Apchi cannot actually wire, rather than accepting it silently.
+
+    A `certificate` accepted and not wired is the worst outcome available: a Catalog that
+    connects, without the certificate the Operator asked it to present.
+    """
+    if connector not in WIRED:
+        raise UnprocessablePayload(
+            f"Apchi does not know how the {connector!r} connector names a client "
+            f"certificate. Reference it by hand instead: ${{cert:{certificate}}} and "
+            f"${{key:{certificate}}} expand to the paths, in whichever property "
+            f"{connector!r} documents for them.",
+            details=[{"property": "certificate", "problem": f"{connector!r} is not wired"}],
+        )
+    if not ssl_is_configured(connector, properties):
+        raise UnprocessablePayload(
+            "A client certificate does nothing until the connection is told to use TLS. "
+            "Set sslmode on the connection URL -- Apchi will not choose between `require` "
+            "and `verify-full` for you.",
+            details=[{"property": "properties", "problem": "no sslmode on the connection URL"}],
+        )
+
+
 def create_catalog(stored: Resources, write: CatalogWrite) -> Catalog:
     if write.name in stored:
         raise NameAlreadyTaken(f"A Catalog named {write.name!r} already exists.")
     properties = _validated(write.connector, write.properties)
-    stored[write.name] = {"connector": write.connector, "properties": properties}
+    if write.certificate:
+        _certificate_usable(write.connector, properties, write.certificate)
+    stored[write.name] = {
+        "connector": write.connector,
+        "properties": properties,
+        **({"certificate": write.certificate} if write.certificate else {}),
+    }
     return _as_catalog(write.name, stored[write.name])
 
 
@@ -72,7 +103,15 @@ def update_catalog(stored: Resources, name: str, update: CatalogUpdate) -> Catal
     current = stored[name]
     connector = update.connector or current["connector"]
     raw = current["properties"] if update.properties is None else update.properties
-    stored[name] = {"connector": connector, "properties": _validated(connector, raw)}
+    certificate = update.certificate or current.get("certificate")
+    properties = _validated(connector, raw)
+    if certificate:
+        _certificate_usable(connector, properties, certificate)
+    stored[name] = {
+        "connector": connector,
+        "properties": properties,
+        **({"certificate": certificate} if certificate else {}),
+    }
     return _as_catalog(name, stored[name])
 
 
@@ -179,7 +218,11 @@ class CatalogsSection:
         for name in sorted(desired):
             stored = desired[name]
             try:
-                await probe.create_catalog(name, stored["connector"], stored.get("properties", {}))
+                # The same properties the Cluster will get, certificate paths and all. The
+                # files are not in the probe and do not need to be: CREATE CATALOG does not
+                # open a connection, so a path to a file that is not there is accepted here
+                # exactly as it is on the Cluster -- verified against a real coordinator.
+                await probe.create_catalog(name, stored["connector"], effective(stored))
             except TrinoQueryError as exc:
                 failures.append(
                     ValidationFailure(section=SECTION, resource=name, reason=str(exc.message))

@@ -17,6 +17,7 @@ from typing import Any
 from app.adapters.trino import Trino
 from app.sections.base import ValidationFailure
 from app.sections.catalogs import SECTION as CATALOGS
+from app.sections.catalogs.generator import effective
 
 logger = logging.getLogger(__name__)
 
@@ -131,13 +132,13 @@ async def execute(trino: Trino, desired: dict[str, Any], plan_: CatalogPlan) -> 
     """
     for name in plan_.created:
         stored = desired[name]
-        await trino.create_catalog(name, stored["connector"], stored.get("properties", {}))
+        await trino.create_catalog(name, stored["connector"], effective(stored))
         logger.info("created catalog", extra={"catalog": name})
 
     for name in plan_.replaced:
         stored = desired[name]
         await trino.drop_catalog(name)
-        await trino.create_catalog(name, stored["connector"], stored.get("properties", {}))
+        await trino.create_catalog(name, stored["connector"], effective(stored))
         logger.info("replaced catalog", extra={"catalog": name})
 
     for name in plan_.dropped:
