@@ -455,8 +455,19 @@ A file written by Apchi does not reach Trino instantly. Two delays stack:
 **Do not sleep a fixed duration.** A fixed 65-second wait is both usually wrong and
 occasionally too short. Poll for the change to become observable, with a timeout:
 
-- **Permissions** — run a probe query as the reserved identity (§8) that the Candidate's
-  rules should newly allow or deny, until the answer matches.
+- **Permissions** — nothing to poll, and the reason is worth setting down because the obvious
+  design does not survive contact with Trino. Apchi cannot observe another identity's access:
+  it cannot impersonate one, and granting itself impersonation would make its identity the
+  most dangerous thing in the Cluster. Its *own* access does not change between Applies,
+  because its rules are generated and constant. A canary rule naming a catalog that does not
+  exist is invisible — `CATALOG_NOT_FOUND` is raised before the access check, verified against
+  a running coordinator. And there is no introspection surface for the loaded rules: Trino 483
+  has no `system.metadata.table_privileges`, and §8 already notes it reports no live file
+  version. So Apply delivers the rules and says so, and adoption is Trino's timer (§7.2).
+
+  What makes that safe rather than negligent is the precondition below: Apchi refuses to run
+  against a Cluster that would never re-read the file at all. The failure mode being guarded
+  is not "the change took a minute" but "the change will never arrive".
 - **Client certificates** — nothing to poll, and that is worth stating because the obvious
   mechanism does not work. `CREATE CATALOG` does **not** open a connection: a catalog whose
   `sslcert` names a file that is not there is created quite happily, and the failure appears
@@ -1091,8 +1102,15 @@ change reaches the Cluster without touching the pod (§7.2). It is the first Sec
 changes cost no queries at all.
 
 `security.refresh-period` must be set on the Cluster, or the rules file is read once at
-startup and never again. Apchi asserts this at Adoption and fails loudly if absent —
-otherwise Apchi will believe it applied permissions Trino never read.
+startup and never again. Apchi asserts this **before every Apply** and at Adoption, and fails
+loudly if absent — otherwise Apchi will believe it applied permissions Trino never read.
+
+It is the one precondition that reads the Admin's *configuration* rather than their pod
+template, and it finds it the same way Trino does: whichever volume is mounted at Trino's
+`access-control.properties` is the file in force, and its content is in the ConfigMap or
+Secret behind that volume. Nothing mounted there at all is also a failure — Trino would then
+not be reading Apchi's rules file, and every permission Apchi applied would be written and
+ignored. Apchi reads that one property and nothing else from a file that is not its own.
 
 **Permission observability** is a goal: explain what an identity can access, and which
 identities can access a given resource, without anyone reading access-control files.

@@ -85,4 +85,20 @@ async def test_the_real_deployment_meets_every_precondition(
 
     spec = pod_spec(await real_kubernetes.deployment_pod_spec(settings.coordinator_deployment_name))
 
-    check(spec, settings)
+    await check(real_kubernetes, spec, settings)
+
+
+async def test_the_deployed_cluster_is_told_to_reread_the_rules(
+    real_kubernetes: RealKubernetes,
+) -> None:
+    """The precondition that cannot be checked from the pod template alone, against the
+    manifests actually deployed. Apchi reads the Admin's access-control properties the way
+    Trino finds them: through whatever is mounted at Trino's own path."""
+    settings = Settings()
+    properties = await real_kubernetes.read_config_map("trino-config")
+
+    assert "security.refresh-period" in properties["access-control.properties"]
+    # And the whole precondition passes against the real deployment, which is what makes
+    # the tier 1 spec written by hand honest.
+    spec = pod_spec(await real_kubernetes.deployment_pod_spec(settings.coordinator_deployment_name))
+    await check(real_kubernetes, spec, settings)

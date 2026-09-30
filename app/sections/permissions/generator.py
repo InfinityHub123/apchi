@@ -27,6 +27,14 @@ _EVERY_PRIVILEGE = ("SELECT", "INSERT", "UPDATE", "DELETE", "OWNERSHIP", "GRANT_
 MOUNT_DIR = "/etc/trino/access-control"
 MOUNT_PATH = f"{MOUNT_DIR}/{RULES_KEY}"
 
+#: Where Trino reads which access control to use, and how often to re-read its rules. The
+#: Admin's file, not Apchi's -- but Apchi depends on one property in it, so it checks.
+PROPERTIES_PATH = "/etc/trino/access-control.properties"
+
+#: Without this, Trino reads the rules once at startup and never again -- and Apchi would
+#: report success for permissions the Cluster will never read. Section 13.4.
+REFRESH_PERIOD = "security.refresh-period"
+
 
 def reserved_table_rule(trino_user: str, verification_catalog: str) -> dict[str, Any]:
     """Apchi's own read access, and the reason the whole tables block is safe to write.
