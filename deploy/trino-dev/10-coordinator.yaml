@@ -47,6 +47,9 @@ spec:
             # rules are read once when the authenticator is built, so there is nothing for
             # the kubelet to keep current -- a Rollout is what makes a change take.
             - {name: apchi-user-mapping, mountPath: /etc/trino/user-mapping.json, subPath: user-mapping.json, readOnly: true}
+            # Whole-volume, never subPath: a certificate uploaded after this pod
+            # started has to appear here, and a subPath mount never updates.
+            - {name: client-certificates, mountPath: /etc/trino/certs, readOnly: true}
             - {name: catalog-store, mountPath: /data/trino/catalogs}
       volumes:
         - {name: config, configMap: {name: trino-config}}
@@ -55,6 +58,7 @@ spec:
         - {name: catalog-seed, secret: {secretName: trino-catalog-seed}}
         # Ephemeral by design. Durability lives in the Secret, not here.
         - {name: catalog-store, emptyDir: {}}
+        - {name: client-certificates, secret: {secretName: trino-client-certificates}}
 ---
 apiVersion: v1
 kind: Service

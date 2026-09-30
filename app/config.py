@@ -51,6 +51,17 @@ class Settings(BaseSettings):
     certificate_mapping_secret_name: str = "trino-user-mapping"
     certificate_mapping_volume_name: str = "apchi-user-mapping"
 
+    #: Holds every Client Certificate, two files each. Mounted once at a fixed directory on
+    #: the coordinator and on the workers, so adding one adds a file to a mount that already
+    #: exists: no pod spec change and no restart (ADR-0005).
+    client_certificate_secret_name: str = "trino-client-certificates"
+    #: How close to expiry a certificate has to be before Apchi calls it expiring. Renewal
+    #: is manual for now, so this is the warning an Operator acts on.
+    certificate_expiring_within_days: int = 30
+    #: What a Kubernetes Secret may hold. An upload that would exceed it is refused with
+    #: that reason rather than as a rejected write from the API server.
+    client_certificate_max_bytes: int = 1024 * 1024
+
     #: Holds both files the Resource Groups Section owns: the rules and the properties file
     #: that tells Trino to read them. One Secret, so they arrive and leave together.
     resource_groups_secret_name: str = "trino-resource-groups"

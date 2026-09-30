@@ -20,14 +20,15 @@ from app.sections import SectionName
 from app.sections.admin import AdminValues
 from app.sections.base import (
     Cluster,
-    CoordinatorFile,
+    CoordinatorDirectory,
+    Delivery,
     Resources,
     SectionPlan,
     SmokeQuery,
     ValidationFailure,
 )
 from app.sections.permissions import SECTION
-from app.sections.permissions.generator import MOUNT_PATH, render_rules
+from app.sections.permissions.generator import MOUNT_DIR, MOUNT_PATH, render_rules
 from app.sections.permissions.model import (
     Grant,
     GrantWrite,
@@ -141,20 +142,14 @@ class PermissionsSection:
     #: Trino re-reads the rules file on a timer. Section 7.2.
     requires_rollout = False
 
-    def coordinator_files(self, settings: Settings) -> tuple[CoordinatorFile, ...]:
+    def coordinator_files(self, settings: Settings) -> tuple[Delivery, ...]:
         """One file, and the Admin mounts it.
 
         It must be a whole-volume mount or the kubelet never projects an update, which
         would leave Trino reading the rules Apchi wrote at pod creation and no others
         (section 16). That rules Apchi out as the mounter: Apchi mounts single files.
         """
-        return (
-            CoordinatorFile(
-                secret=settings.access_control_secret_name,
-                volume=None,
-                path=MOUNT_PATH,
-            ),
-        )
+        return (CoordinatorDirectory(secret=settings.access_control_secret_name, path=MOUNT_DIR),)
 
     def render_files(
         self, desired: Resources, settings: Settings, admin: AdminValues

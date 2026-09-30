@@ -26,7 +26,13 @@ from app.adapters.trino import Trino
 from app.config import Settings
 from app.pipeline.files import probe_files
 from app.sections import SectionName
-from app.sections.base import Cluster, Resources, SectionPlan, ValidationFailure
+from app.sections.base import (
+    Cluster,
+    CoordinatorFile,
+    Resources,
+    SectionPlan,
+    ValidationFailure,
+)
 from app.sections.registry import REGISTERED
 
 logger = logging.getLogger(__name__)
@@ -320,7 +326,8 @@ async def validate_candidate(
         files.update(contributed)
         blame.update({path: sorted(staged)[0] for path in contributed if staged})
         for spec in section.coordinator_files(cluster.settings):
-            properties.update(spec.probe_config)
+            if isinstance(spec, CoordinatorFile):
+                properties.update(spec.probe_config)
     if files:
         files[_CONFIG_PATH] = "".join(f"{key}={value}\n" for key, value in properties.items())
 

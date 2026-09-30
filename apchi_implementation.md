@@ -842,17 +842,59 @@ Automatic renewal may follow later.
 The UI exposes: name, CN, subject, issuer, expiration, status. Expiry is first-class —
 `GET /api/v1/certificates?status=expiring`.
 
+**Members are identified by what they parse as, never by their extension.** One tool exports
+the key as `client-key.pem` and another as `privkey.pk8`; both are keys and neither name is
+worth trusting. A bundle often carries the issuing CA as well, and the pair check doubles as
+the way the leaf is chosen: the certificate Trino should present is the one whose public key
+matches the private key. Nothing else in the archive is stored — a chain is configuration of
+its own, and guessing at it would put key material in files nobody asked for.
+
+**The key is normalised to PKCS#8 PEM.** Uploads arrive as PKCS#1 (`BEGIN RSA PRIVATE KEY`),
+as PKCS#8 and as DER; storing each as it came would make every consumer handle all three. An
+**encrypted** key is refused rather than stored: it is not malformed, it is a key with a
+passphrase Apchi was not given, and saying "not a key" would send an Operator looking for the
+wrong problem.
+
+**PKCS#8 PEM is what the drivers want, so there is no DER to deliver.** The `.pk8` naming in
+older PostgreSQL guides comes from a real constraint that no longer applies: the pgjdbc that
+Trino 483 ships — 42.7.13 — carries a `Pk8OrPemKeyManager` that sniffs the file for a
+`BEGIN PRIVATE KEY` header and hands PEM to a `PEMKeyManager` and anything else to the old
+DER path. Read out of the jar in the image rather than out of documentation. Apchi therefore
+writes `<name>.crt` and `<name>.key`, both PEM, and needs no way to put binary into a Secret.
+
+The limit worth knowing instead is **driver-specific and not about encoding**: some drivers
+want a *keystore* rather than a key file — MySQL Connector/J takes
+`clientCertificateKeyStoreUrl` pointing at a JKS or PKCS#12. A Catalog needing mTLS to such a
+source is not reachable through this Section as it stands, and a keystore is binary, so it
+would need more than a format change.
+
+**Key material lives in the Candidate and in Snapshots, and is never returned.** It has to be
+in the Candidate, because a Section Revert rewrites the whole Secret and cannot do that from
+metadata alone (ADR-0005). The redaction filter keeps it out of the logs, and no response
+carries it: an API that hands back key material makes every reader of every response a place
+it can leak from. Everything an Operator sees is derived by parsing the stored certificate,
+so the metadata cannot drift from the bytes Trino will present.
+
+**An upload that would outgrow the Secret is refused with that reason.** Kubernetes caps a
+Secret at 1MB; a rejected write from the API server mid-Apply would be a much worse way to
+find out.
+
 ### Delivery
 
 Trino consumes these as **files on disk**, because connector properties reference paths:
 
 ```
 connection-url = jdbc:postgresql://host:5432/db
-  ?sslcert=/etc/trino/certs/finance.crt&sslkey=/etc/trino/certs/finance.pk8&sslmode=require
+  ?sslcert=/etc/trino/certs/finance.crt&sslkey=/etc/trino/certs/finance.key&sslmode=require
 ```
 
 **One Kubernetes Secret holds every client certificate**, mounted once at a fixed directory on
-the coordinator and on workers. See
+the coordinator and on workers — workers open their own connections to data sources, so a
+certificate only the coordinator can read is a catalog that works for metadata and fails for
+data. It is the second of the two shapes a Section's delivery can take: a *directory* the
+Admin mounts and Apchi fills, rather than a single file Apchi mounts. How many files are in it
+is the Candidate's business, which is the other reason it cannot be a list of declared
+files — Apchi cannot know in advance what an Operator will upload. See
 [ADR-0005](./docs/adr/0005-single-certificate-secret.md). Adding a certificate adds a key to
 that Secret, so the file
 appears in an already-mounted directory — the pod spec does not change, and **no restart is

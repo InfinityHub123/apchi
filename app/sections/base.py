@@ -43,6 +43,30 @@ class ValidationFailure(BaseModel):
 
 
 @dataclass(frozen=True)
+class CoordinatorDirectory:
+    """A directory of files Apchi fills and the **Admin** mounts.
+
+    The other half of the dichotomy, and the shape of every file Apchi cannot mount itself.
+    The access-control rules have to be a whole-volume mount or the kubelet never projects
+    an update (section 16); the client certificate directory has to be one or a certificate
+    added after the pod started never appears (ADR-0005). In both cases the mount is part of
+    the deployment, and in both cases what is *in* the directory changes while the pod
+    stays -- which is exactly what a subPath mount cannot do.
+
+    So Apchi owns the Secret's contents and nothing else. It never adds, removes or reasons
+    about the mount; it only insists, through the preconditions, that nobody mounts this
+    Secret with subPath. How many files are in here is the Section's business and may change
+    with the Candidate, which is the other reason this is a directory rather than a list of
+    files: a Section with a certificate per Operator upload cannot declare them in advance.
+    """
+
+    secret: str
+    #: The directory the Admin mounts the Secret at. Every file a Section renders must be
+    #: directly inside it.
+    path: str
+
+
+@dataclass(frozen=True)
 class SmokeQuery:
     """The query Verification ran against the Cluster, and how to find it again.
 
@@ -59,28 +83,22 @@ class SmokeQuery:
 
 @dataclass(frozen=True)
 class CoordinatorFile:
-    """A file Apchi delivers to the coordinator.
+    """One file, at one path, mounted by Apchi.
 
-    Who mounts it is the one question this answers, and there are two answers.
+    Owning the mount is not a detail. Trino refuses to start when a file it was told to
+    read is missing, and Kubernetes turns a subPath mount of an absent Secret key into a
+    *directory* it dies on -- so "this Section is empty" can only be expressed by the mount
+    not being there, which means Apchi adds and removes it on the Admin's pod template.
+    Everything else on that template belongs to the Admin, and a precondition rejects
+    anything of theirs mounted at a path declared here.
 
-    **Apchi mounts it** (`volume` names the volume it uses). Trino refuses to start when a
-    file it was told to read is missing, and Kubernetes turns a subPath mount of an absent
-    Secret key into a *directory* it dies on -- so "this Section is empty" can only be
-    expressed by the mount not being there, which means Apchi adds and removes it on the
-    Admin's pod template. A precondition rejects anything of the Admin's mounted there.
-
-    **The Admin mounts it** (`volume` is None). Some files cannot be mounted by Apchi at
-    all: the access-control rules have to be a whole-volume mount or the kubelet never
-    updates them, and the client certificate directory has to be one or files added after
-    the pod started never appear (ADR-0005). Both are part of the deployment. Apchi owns
-    what is in the Secret and nothing else, so it never adds, removes or reasons about the
-    mount -- it only insists, through the preconditions, that nobody mounts it with subPath.
+    Mounted with subPath, deliberately: Apchi replaces the mount when the file changes, and
+    the Rollout that follows is what makes the new content live. Nothing has to reach a pod
+    that is staying.
     """
 
     secret: str
-    #: The volume Apchi adds and removes for this file, or None when the mount belongs to
-    #: the Admin and Apchi only writes the Secret.
-    volume: str | None
+    volume: str
     path: str
     #: Configuration the validation probe needs before it will read this file at all. The
     #: Cluster's own copy of these properties belongs to the Admin; the probe is Apchi's,
@@ -92,6 +110,12 @@ class CoordinatorFile:
         """The Secret key, which is the filename. Derived rather than declared: two names
         for one thing is one of them waiting to be wrong."""
         return PurePosixPath(self.path).name
+
+
+#: What a Section declares about where its files go: single files Apchi mounts, and
+#: directories the Admin mounts. Nothing else; a Section that needed a third shape would be
+#: telling us something about Trino we do not yet know.
+Delivery = CoordinatorFile | CoordinatorDirectory
 
 
 @dataclass(frozen=True)
@@ -130,7 +154,7 @@ class Section(Protocol):
     #: consumes the configuration, never of when an Operator's edit takes effect.
     requires_rollout: bool
 
-    def coordinator_files(self, settings: Settings) -> tuple[CoordinatorFile, ...]:
+    def coordinator_files(self, settings: Settings) -> tuple[Delivery, ...]:
         """The files this Section delivers to the coordinator. Empty when it delivers none.
 
         Declaring them is all a Section does about delivery: the pipeline writes the Secret,

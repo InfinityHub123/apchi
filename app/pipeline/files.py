@@ -8,10 +8,18 @@ that grows a branch each time, the branch being the thing nobody notices is miss
 """
 
 import logging
+from pathlib import PurePosixPath
 
 from app.config import Settings
 from app.sections.admin import AdminValues
-from app.sections.base import Cluster, CoordinatorFile, Resources, Section
+from app.sections.base import (
+    Cluster,
+    CoordinatorDirectory,
+    CoordinatorFile,
+    Delivery,
+    Resources,
+    Section,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,19 +30,19 @@ async def deliver(section: Section, cluster: Cluster, desired: Resources) -> Non
     Nothing is adopted here. A Section whose files only take effect on a restart says so
     with `requires_rollout`, and the pipeline runs the Rollout.
     """
-    specs = section.coordinator_files(cluster.settings)
-    if not specs:
+    declared = section.coordinator_files(cluster.settings)
+    if not declared:
         return
 
     contents = section.render_files(desired, cluster.settings, cluster.admin)
-    for secret, data in _by_secret(specs, contents).items():
+    for secret, data in _by_secret(declared, contents).items():
         await cluster.kubernetes.write_secret(secret, data)
 
     # Grouped by volume, because a volume and the mounts that name it can only be removed
     # together: the API server rejects a volume removed while a mount still names it, and a
-    # volume left behind with no mounts is dead weight on the Admin's pod template. Files the
-    # Admin mounts are not in this at all -- writing the Secret is the whole of Apchi's part.
-    for volume, group in _by_volume(specs).items():
+    # volume left behind with no mounts is dead weight on the Admin's pod template.
+    # Directories are not in this at all -- writing the Secret is the whole of Apchi's part.
+    for volume, group in _by_volume(declared).items():
         present = [spec for spec in group if contents.get(spec.path)]
         absent = [spec for spec in group if not contents.get(spec.path)]
         for spec in present:
@@ -54,33 +62,51 @@ async def deliver(section: Section, cluster: Cluster, desired: Resources) -> Non
                 [spec.path for spec in absent],
                 drop_volume=not present,
             )
-        for spec in group:
-            logger.info("delivered %s", spec.path, extra={"section": section.name})
+    for path in sorted(contents):
+        logger.info("delivered %s", path, extra={"section": section.name})
 
 
-def _by_volume(specs: tuple[CoordinatorFile, ...]) -> dict[str, list[CoordinatorFile]]:
-    """Only the files Apchi mounts. The rest arrive by being in a Secret the Admin already
-    mounts, so there is no mount for Apchi to add and none for it to take away."""
+def _by_volume(declared: tuple[Delivery, ...]) -> dict[str, list[CoordinatorFile]]:
+    """Only the files Apchi mounts. A directory arrives by being in a Secret the Admin
+    already mounts, so there is no mount for Apchi to add and none to take away."""
     volumes: dict[str, list[CoordinatorFile]] = {}
-    for spec in specs:
-        if spec.volume is not None:
+    for spec in declared:
+        if isinstance(spec, CoordinatorFile):
             volumes.setdefault(spec.volume, []).append(spec)
     return volumes
 
 
 def _by_secret(
-    specs: tuple[CoordinatorFile, ...], contents: dict[str, str]
+    declared: tuple[Delivery, ...], contents: dict[str, str]
 ) -> dict[str, dict[str, str]]:
-    """One write per Secret, however many files a Section keeps in it.
+    """One write per Secret, holding exactly what the Section rendered into it.
 
-    Written whole rather than key by key: a Secret Apchi owns holds exactly what the Section
-    renders, so a file that stopped being rendered stops being in the Secret.
+    Written whole rather than key by key, so a file that stopped being rendered -- a removed
+    certificate, a Section emptied -- stops being in the Secret rather than lingering in the
+    durable copy and reappearing at the next pod start.
     """
-    secrets: dict[str, dict[str, str]] = {spec.secret: {} for spec in specs}
-    for spec in specs:
-        if content := contents.get(spec.path):
-            secrets[spec.secret][spec.key] = content
+    secrets: dict[str, dict[str, str]] = {spec.secret: {} for spec in declared}
+    unclaimed = dict(contents)
+    for spec in declared:
+        if isinstance(spec, CoordinatorFile):
+            if content := unclaimed.pop(spec.path, None):
+                secrets[spec.secret][spec.key] = content
+        else:
+            for path in [
+                p for p in unclaimed if PurePosixPath(p).parent == PurePosixPath(spec.path)
+            ]:
+                if content := unclaimed.pop(path):
+                    secrets[spec.secret][PurePosixPath(path).name] = content
+    if unclaimed:
+        raise ValueError(
+            f"{section_of(declared)} rendered files nowhere declared: {sorted(unclaimed)}"
+        )
     return secrets
+
+
+def section_of(declared: tuple[Delivery, ...]) -> str:
+    """Only for the error above: which Secrets were on offer when a path matched none."""
+    return f"a Section writing {sorted({spec.secret for spec in declared})}"
 
 
 async def would_change(section: Section, cluster: Cluster, resources: Resources) -> bool:
@@ -91,11 +117,11 @@ async def would_change(section: Section, cluster: Cluster, resources: Resources)
     plan: an Admin change moves no Section, and recovery after an Apchi restart has no plan
     because the process that made it is gone.
     """
-    specs = section.coordinator_files(cluster.settings)
-    if not specs:
+    declared = section.coordinator_files(cluster.settings)
+    if not declared:
         return False
     contents = section.render_files(resources, cluster.settings, cluster.admin)
-    for secret, data in _by_secret(specs, contents).items():
+    for secret, data in _by_secret(declared, contents).items():
         if await cluster.kubernetes.read_secret(secret) != data:
             return True
     return False
@@ -110,9 +136,13 @@ def probe_files(
     a file wherever it is, and starting the probe with it in place is how a file Trino will
     not accept becomes a pod that will not start rather than a Cluster that will not.
     """
-    declared = {spec.path for spec in section.coordinator_files(settings)}
-    contents = section.render_files(desired, settings, admin)
-    return {path: content for path, content in contents.items() if path in declared and content}
+    if not section.coordinator_files(settings):
+        return {}
+    return {
+        path: content
+        for path, content in section.render_files(desired, settings, admin).items()
+        if content
+    }
 
 
 def owned_paths(sections: tuple[Section, ...], settings: Settings) -> dict[str, str]:
@@ -126,7 +156,7 @@ def owned_paths(sections: tuple[Section, ...], settings: Settings) -> dict[str, 
         spec.path: spec.volume
         for section in sections
         for spec in section.coordinator_files(settings)
-        if spec.volume is not None
+        if isinstance(spec, CoordinatorFile)
     }
 
 
@@ -147,5 +177,5 @@ def admin_mounted_secrets(sections: tuple[Section, ...], settings: Settings) -> 
         spec.secret
         for section in sections
         for spec in section.coordinator_files(settings)
-        if spec.volume is None
+        if isinstance(spec, CoordinatorDirectory)
     }
