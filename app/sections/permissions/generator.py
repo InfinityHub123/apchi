@@ -49,6 +49,46 @@ def reserved_table_rule(trino_user: str, verification_catalog: str) -> dict[str,
     }
 
 
+def query_rules(trino_user: str, identities: list[str]) -> list[dict[str, Any]]:
+    """Who may run, see and kill queries.
+
+    By default any authenticated End User can view and kill any query -- the Web UI
+    documentation says so outright -- and query text routinely contains data. This block
+    closes that, and every part of it was checked against a running coordinator because the
+    format's behaviour is not what it looks like:
+
+    * **execute for everyone, last.** The block is all-or-nothing: once a `queries` section
+      exists, anything unmatched is denied, `execute` included. Without this rule the Cluster
+      stops serving queries at all -- which is why §13.4 insists an Operator can see it.
+    * **Nobody has to be granted sight of their own queries.** Trino gives a user their own
+      rows whatever the rules say: with only the catch-all above, alice saw her query and not
+      bob's. The rules are what stops her seeing *his*.
+    * **Killing your own query is not implicit, and cannot be expressed generically.** There
+      is no back-reference from `queryOwner` to the requesting user, and a rule carrying a
+      `queryOwner` may not carry `execute` at all ("A valid query rule cannot combine an
+      queryOwner condition with access mode 'execute'"). So it is a rule per identity, for
+      the identities Apchi knows -- the ones named in a grant.
+    * **Apchi's own rule comes first**, granting view over everyone's queries. Not vanity:
+      the running-query count Review shows before a Rollout reads
+      `system.runtime.queries`, and Trino filters those rows by who may view them. Without
+      this Apchi would count its own queries and report that a Rollout destroys nothing.
+    """
+    rules: list[dict[str, Any]] = [
+        {"user": f"^{re.escape(trino_user)}$", "allow": ["execute", "view", "kill"]}
+    ]
+    rules.extend(
+        {
+            "user": f"^{re.escape(identity)}$",
+            "queryOwner": f"^{re.escape(identity)}$",
+            "allow": ["view", "kill"],
+        }
+        for identity in identities
+        if identity != trino_user
+    )
+    rules.append({"allow": ["execute"]})
+    return rules
+
+
 def _grant_rule(grant: dict[str, Any]) -> dict[str, Any]:
     """One grant as Trino wants it.
 
@@ -101,5 +141,6 @@ def render_rules(
             # and it is not this file's to make.
             {"privileges": list(_EVERY_PRIVILEGE)},
         ],
+        "queries": query_rules(trino_user, sorted({staged[key]["identity"] for key in staged})),
     }
     return json.dumps(rules, indent=2) + "\n"

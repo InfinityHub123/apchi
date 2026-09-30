@@ -143,7 +143,7 @@ async def test_the_system_owned_rules_are_readable(client: AsyncClient) -> None:
     them, or why a grant does not narrow anyone's access yet."""
     system = (await client.get("/api/v1/permissions/system")).json()
 
-    assert len(system["rules"]) == 3
+    assert len(system["rules"]) == 5
     assert all(rule["rule"] and rule["why"] for rule in system["rules"])
 
 
@@ -219,3 +219,43 @@ def test_the_catch_all_table_rule_keeps_todays_posture() -> None:
     assert rules["tables"][-1] == {
         "privileges": ["SELECT", "INSERT", "UPDATE", "DELETE", "OWNERSHIP", "GRANT_SELECT"]
     }
+
+
+def test_everyone_may_still_run_a_query() -> None:
+    """The block is all-or-nothing: once a queries section exists, anything unmatched is
+    denied, `execute` included. Without the last rule the Cluster stops serving queries."""
+    rules = json.loads(render_rules("apchi", {}, "system"))
+
+    assert rules["queries"][-1] == {"allow": ["execute"]}
+
+
+def test_apchi_may_see_every_query() -> None:
+    """Trino filters system.runtime.queries by who may view a query, so without this the
+    running-query count Review shows before a Rollout would always be Apchi's own."""
+    rules = json.loads(render_rules("apchi", {}, "system"))
+
+    assert rules["queries"][0] == {
+        "user": "^apchi$",
+        "allow": ["execute", "view", "kill"],
+    }
+
+
+def test_an_identity_with_a_grant_may_kill_its_own_queries() -> None:
+    """Killing your own query is not implicit and cannot be expressed generically -- there
+    is no back-reference from queryOwner to the requesting user -- so it is a rule per
+    identity Apchi knows about."""
+    rules = json.loads(render_rules("apchi", {"k": READ_NATION}, "system"))
+
+    assert rules["queries"][1] == {
+        "user": "^acme_finance$",
+        "queryOwner": "^acme_finance$",
+        "allow": ["view", "kill"],
+    }
+
+
+def test_nobody_is_granted_sight_of_their_own_queries() -> None:
+    """Trino gives a user their own rows whatever the rules say, verified against a running
+    coordinator, so a Candidate with no grants needs only two rules."""
+    rules = json.loads(render_rules("apchi", {}, "system"))
+
+    assert len(rules["queries"]) == 2

@@ -37,5 +37,20 @@ stringData:
             "GRANT_SELECT"
           ]
         }
+      ],
+      "queries": [
+        {
+          "user": "^apchi$",
+          "allow": [
+            "execute",
+            "view",
+            "kill"
+          ]
+        },
+        {
+          "allow": [
+            "execute"
+          ]
+        }
       ]
     }
