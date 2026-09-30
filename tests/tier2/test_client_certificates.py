@@ -14,7 +14,7 @@ from httpx import AsyncClient
 from app.pipeline.applies import TERMINAL
 from app.sections.client_certificates.generator import MOUNT_DIR
 from tests.certificates import bundle
-from tests.tier2.conftest import kubectl
+from tests.tier2.conftest import file_appears, kubectl
 
 pytestmark = pytest.mark.tier2
 
@@ -35,22 +35,6 @@ async def _apply(client: AsyncClient, timeout: float = 900.0) -> dict:
     raise AssertionError("Apply never settled")
 
 
-async def _appears(path: str, deployment: str = "deploy/trino-coordinator") -> bool:
-    """Polls the pod's own filesystem until the file is there.
-
-    Read from outside the product, like the coordinator log in the Event Listener tests:
-    Apchi cannot see the pod's filesystem, which is exactly why the Catalog DDL that uses a
-    certificate has to be retried rather than issued once.
-    """
-    deadline = asyncio.get_running_loop().time() + _PROJECTED_WITHIN
-    while asyncio.get_running_loop().time() < deadline:
-        listed = kubectl("exec", deployment, "-c", "trino", "--", "ls", MOUNT_DIR)
-        if path in listed.split():
-            return True
-        await asyncio.sleep(3)
-    return False
-
-
 async def test_a_certificate_appears_on_a_pod_that_is_never_replaced(
     e2e_client: AsyncClient, real_kubernetes
 ) -> None:
@@ -69,8 +53,10 @@ async def test_a_certificate_appears_on_a_pod_that_is_never_replaced(
     assert record["stage"] == "succeeded", record
     after = await real_kubernetes.rollout_state("trino-coordinator")
     assert after.generation == before.generation, "the pod template was never patched"
-    assert await _appears("finance.crt"), "the certificate never reached the coordinator"
-    assert await _appears("finance.key")
+    assert await file_appears(MOUNT_DIR, "finance.crt"), (
+        "the certificate never reached the coordinator"
+    )
+    assert await file_appears(MOUNT_DIR, "finance.key")
 
 
 async def test_a_certificate_reaches_the_workers_too(e2e_client: AsyncClient) -> None:
@@ -85,7 +71,7 @@ async def test_a_certificate_reaches_the_workers_too(e2e_client: AsyncClient) ->
     record = await _apply(e2e_client)
 
     assert record["stage"] == "succeeded", record
-    assert await _appears("finance.crt", "deploy/trino-worker")
+    assert await file_appears(MOUNT_DIR, "finance.crt", "deploy/trino-worker")
 
 
 async def test_removing_a_certificate_takes_the_files_away(e2e_client: AsyncClient) -> None:
@@ -97,7 +83,7 @@ async def test_removing_a_certificate_takes_the_files_away(e2e_client: AsyncClie
         files={"archive": ("finance.zip", bundle(), "application/zip")},
     )
     await _apply(e2e_client)
-    assert await _appears("finance.crt")
+    assert await file_appears(MOUNT_DIR, "finance.crt")
 
     await e2e_client.delete("/api/v1/certificates/finance")
     record = await _apply(e2e_client)

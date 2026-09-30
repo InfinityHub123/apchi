@@ -18,8 +18,9 @@ from app.api.deps import (
     SettingsDep,
     SnapshotStoreDep,
 )
-from app.api.errors import UnprocessablePayload
+from app.api.errors import Conflict, UnprocessablePayload
 from app.pipeline.recovery import RevertEffect, RevertRequest, section_revert
+from app.pipeline.references import certificates_in_use
 from app.sections.client_certificates import SECTION as CERTIFICATES
 from app.sections.client_certificates import section
 from app.sections.client_certificates.bundle import BundleProblem
@@ -103,7 +104,17 @@ async def get_certificate(
     dependencies=[OperatorMutationAllowed],
 )
 async def delete_certificate(name: str, store: CandidateStoreDep) -> None:
+    """Refused while a Catalog still presents it. Removing it would leave that Catalog
+    pointing at a file that is about to disappear, and the failure would surface as a
+    connection error with nothing pointing back at this request."""
     candidate = await store.load()
+    section.get_certificate(candidate.resources(CERTIFICATES), name, 0)
+    if used_by := certificates_in_use(candidate.sections, name):
+        raise Conflict(
+            f"Client certificate {name!r} is still presented by {', '.join(used_by)}. "
+            "Change those Catalogs first, or they would be left pointing at a file that "
+            "is no longer there."
+        )
     section.delete_certificate(candidate.resources(CERTIFICATES), name)
     await store.save(candidate)
 

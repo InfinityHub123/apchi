@@ -20,8 +20,11 @@ restart, no query loss.
 
 - **"No restart" is not "immediate".** The file appears only after the kubelet projects the
   updated Secret — normally seconds, bounded by `syncFrequency` (default 1 minute). Apply
-  writes the Secret first and then retries the catalog DDL that references it, rather than
-  sleeping a fixed duration.
+  writes the Secret before issuing the catalog DDL, so the file is on its way before the
+  catalog exists. It does not wait for it. An earlier wording of this consequence said Apply
+  retries the DDL until it succeeds; that was wrong, because `CREATE CATALOG` does not open a
+  connection and succeeds whether or not the file is there — verified against a running
+  coordinator. There is nothing in the DDL to poll on.
 - **A `subPath` mount would break this silently.** A `subPath`-mounted Secret never receives
   updates, so every certificate added after pod creation would fail to appear with no error.
   This is the second reason the `subPath` precondition is checked before every Apply.

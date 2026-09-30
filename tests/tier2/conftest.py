@@ -7,6 +7,7 @@ MongoDB still comes from testcontainers: what tier 2 adds is a real Kubernetes a
 a real in-cluster Trino, not a different database.
 """
 
+import asyncio
 import json
 import socket
 import subprocess
@@ -201,6 +202,26 @@ def _coordinator_pods() -> int:
     """How many coordinator pods exist, Terminating included."""
     listed = kubectl("get", "pods", "-l", "app=trino,component=coordinator", "--no-headers")
     return len([line for line in listed.splitlines() if line.strip()])
+
+
+async def file_appears(
+    directory: str, filename: str, deployment: str = COORDINATOR, within: float = 150.0
+) -> bool:
+    """Polls a pod's own filesystem until the file is there.
+
+    Read from outside the product, like the coordinator log below. Apchi cannot see the
+    pod's filesystem -- which is why nothing in Apply waits for a certificate to land, and
+    why a test that wants to see one arrive has to look for itself.
+
+    The bound is the kubelet's `syncFrequency`, a minute by default, with room to spare:
+    projection is normally seconds, but the worst case is what a test must tolerate.
+    """
+    deadline = asyncio.get_running_loop().time() + within
+    while asyncio.get_running_loop().time() < deadline:
+        if filename in kubectl("exec", deployment, "-c", "trino", "--", "ls", directory).split():
+            return True
+        await asyncio.sleep(3)
+    return False
 
 
 def coordinator_log(lines: int = 400) -> str:

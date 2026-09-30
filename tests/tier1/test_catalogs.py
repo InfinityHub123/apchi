@@ -89,3 +89,56 @@ async def test_a_rejected_payload_never_enters_the_candidate(client: AsyncClient
     await client.post("/api/v1/catalogs", json={**PG, "name": "Not A Name"})
 
     assert (await client.get("/api/v1/catalogs")).json() == []
+
+
+async def test_a_catalog_can_present_a_client_certificate(client: AsyncClient) -> None:
+    """The Operator names the certificate; Apchi puts it into the properties the way this
+    connector expects, so nobody types a path."""
+    created = await client.post(
+        "/api/v1/catalogs",
+        json={
+            "name": "finance",
+            "connector": "postgresql",
+            "properties": {"connection-url": "jdbc:postgresql://db:5432/x?sslmode=verify-full"},
+            "certificate": "finance",
+        },
+    )
+
+    assert created.status_code == 201, created.json()
+    assert created.json()["certificate"] == "finance"
+
+
+async def test_a_certificate_on_a_connector_apchi_cannot_wire_is_refused(
+    client: AsyncClient,
+) -> None:
+    """Accepted and not wired would be the worst outcome available: a Catalog that connects
+    without the certificate the Operator asked it to present."""
+    refused = await client.post(
+        "/api/v1/catalogs",
+        json={
+            "name": "events",
+            "connector": "kafka",
+            "properties": {"kafka.table-names": "t", "kafka.nodes": "k:9092"},
+            "certificate": "finance",
+        },
+    )
+
+    assert refused.status_code == 422
+    assert "${cert:finance}" in refused.json()["message"], "the escape hatch is named"
+
+
+async def test_a_certificate_without_tls_configured_is_refused(client: AsyncClient) -> None:
+    """A client certificate does nothing until the connection is told to use TLS, and Apchi
+    will not choose between `require` and `verify-full` on an Operator's behalf."""
+    refused = await client.post(
+        "/api/v1/catalogs",
+        json={
+            "name": "finance",
+            "connector": "postgresql",
+            "properties": {"connection-url": "jdbc:postgresql://db:5432/x"},
+            "certificate": "finance",
+        },
+    )
+
+    assert refused.status_code == 422
+    assert "sslmode" in refused.json()["message"]
