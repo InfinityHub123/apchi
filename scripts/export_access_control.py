@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from app.config import Settings
-from app.pipeline.access_control import RULES_KEY, render_rules
+from app.sections.permissions.generator import RULES_KEY, render_rules
 
 TARGET = Path(__file__).resolve().parent.parent / "deploy" / "trino-dev" / "05-access-control.yaml"
 

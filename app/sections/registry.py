@@ -10,12 +10,14 @@ from app.sections.base import Section
 from app.sections.catalogs.section import CatalogsSection
 from app.sections.certificate_mapping.section import CertificateMappingSection
 from app.sections.event_listeners.section import EventListenersSection
+from app.sections.permissions.section import PermissionsSection
 from app.sections.resource_groups.section import ResourceGroupsSection
 
 REGISTERED: tuple[Section, ...] = (
     CatalogsSection(),
     CertificateMappingSection(),
     EventListenersSection(),
+    PermissionsSection(),
     ResourceGroupsSection(),
 )
 
