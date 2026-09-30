@@ -6,6 +6,7 @@ from fastapi import Depends, Request
 
 from app.adapters.trino import Trino
 from app.api.errors import Conflict, MaintenanceModeEngaged
+from app.config import Settings
 from app.pipeline.admin_values import AdminStore
 from app.pipeline.applies import ApplyStore
 from app.pipeline.candidate import CandidateStore
@@ -21,6 +22,14 @@ def trino(request: Request) -> Trino:
 
 
 TrinoDep = Annotated[Trino, Depends(trino)]
+
+
+def settings_of(request: Request) -> Settings:
+    settings: Settings = request.app.state.settings
+    return settings
+
+
+SettingsDep = Annotated[Settings, Depends(settings_of)]
 
 
 def admin_store(request: Request) -> AdminStore:

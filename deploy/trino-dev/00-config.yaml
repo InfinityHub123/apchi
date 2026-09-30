@@ -56,6 +56,15 @@ stringData:
 apiVersion: v1
 kind: Secret
 metadata:
+  name: trino-client-certificates
+# Apchi fills this; the Admin mounts it, on the coordinator and on the workers. One Secret
+# for every certificate, mounted once at a fixed directory, so uploading one adds a file to
+# a mount that already exists -- no pod spec change and no restart. See ADR-0005.
+stringData: {}
+---
+apiVersion: v1
+kind: Secret
+metadata:
   name: trino-resource-groups
 # Apchi writes both files it holds -- the rules and the resource-groups.properties that
 # points at them -- and mounts them on the coordinator when a group or selector is

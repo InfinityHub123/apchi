@@ -31,6 +31,7 @@ ACCESS_CONTROL_SECRET = "trino-access-control"
 EVENT_LISTENER_SECRET = "trino-event-listener"
 USER_MAPPING_SECRET = "trino-user-mapping"
 RESOURCE_GROUPS_SECRET = "trino-resource-groups"
+CLIENT_CERTIFICATE_SECRET = "trino-client-certificates"
 
 #: The mounts Apchi adds and removes on the coordinator, by the volume that carries
 #: them. What the reset has to take back off between tests.
@@ -385,6 +386,7 @@ async def cluster_state(
         EVENT_LISTENER_SECRET,
         USER_MAPPING_SECRET,
         RESOURCE_GROUPS_SECRET,
+        CLIENT_CERTIFICATE_SECRET,
     )
     originals = {name: await real_kubernetes.read_secret(name) for name in secrets}
 

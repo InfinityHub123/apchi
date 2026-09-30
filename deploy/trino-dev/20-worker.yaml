@@ -23,5 +23,9 @@ spec:
             - {name: config, mountPath: /etc/trino/config.properties, subPath: worker-config.properties}
             - {name: config, mountPath: /etc/trino/node.properties, subPath: node.properties}
             - {name: config, mountPath: /etc/trino/jvm.config, subPath: jvm.config}
+            # Whole-volume, never subPath: a certificate uploaded after this pod
+            # started has to appear here, and a subPath mount never updates.
+            - {name: client-certificates, mountPath: /etc/trino/certs, readOnly: true}
       volumes:
         - {name: config, configMap: {name: trino-config}}
+        - {name: client-certificates, secret: {secretName: trino-client-certificates}}

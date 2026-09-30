@@ -152,6 +152,30 @@
         "title": "ApplyRecord",
         "type": "object"
       },
+      "Body_upload_certificate_api_v1_certificates_post": {
+        "properties": {
+          "archive": {
+            "contentMediaType": "application/octet-stream",
+            "description": "A ZIP holding the certificate and key.",
+            "title": "Archive",
+            "type": "string"
+          },
+          "name": {
+            "description": "What Catalogs will reference it by.",
+            "maxLength": 63,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "archive"
+        ],
+        "title": "Body_upload_certificate_api_v1_certificates_post",
+        "type": "object"
+      },
       "Catalog": {
         "description": "A Catalog as it is stored and returned.",
         "properties": {
@@ -317,6 +341,79 @@
           "pattern"
         ],
         "title": "CertificateMappingWrite",
+        "type": "object"
+      },
+      "ClientCertificate": {
+        "additionalProperties": false,
+        "description": "A certificate as it is listed and returned.",
+        "properties": {
+          "common_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The subject's CN, if it has one.",
+            "title": "Common Name"
+          },
+          "fingerprint": {
+            "description": "SHA-256 of the certificate, for matching it elsewhere.",
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "issuer": {
+            "description": "Who signed it.",
+            "title": "Issuer",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 63,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "title": "Name",
+            "type": "string"
+          },
+          "not_after": {
+            "description": "When it stops being accepted.",
+            "format": "date-time",
+            "title": "Not After",
+            "type": "string"
+          },
+          "not_before": {
+            "format": "date-time",
+            "title": "Not Before",
+            "type": "string"
+          },
+          "status": {
+            "description": "valid, expiring within the configured window, or already expired.",
+            "enum": [
+              "valid",
+              "expiring",
+              "expired"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "subject": {
+            "description": "Who the certificate identifies.",
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "common_name",
+          "subject",
+          "issuer",
+          "not_before",
+          "not_after",
+          "status",
+          "fingerprint"
+        ],
+        "title": "ClientCertificate",
         "type": "object"
       },
       "EngagedBy": {
@@ -2446,6 +2543,223 @@
         "summary": "Stage this Section's content from an earlier Snapshot",
         "tags": [
           "certificate mapping"
+        ]
+      }
+    },
+    "/api/v1/certificates": {
+      "get": {
+        "description": "Expiry is first-class: `?status=expiring` is how an Operator finds what to renew\nbefore a Catalog stops connecting.",
+        "operationId": "list_certificates_api_v1_certificates_get",
+        "parameters": [
+          {
+            "description": "Only certificates in this state.",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "valid",
+                    "expiring",
+                    "expired"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only certificates in this state.",
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ClientCertificate"
+                  },
+                  "title": "Response List Certificates Api V1 Certificates Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The staged certificates",
+        "tags": [
+          "client certificates"
+        ]
+      },
+      "post": {
+        "description": "Uploading under a name that is already staged replaces it, which is how renewal\nworks: the Catalogs referencing it reference the name.",
+        "operationId": "upload_certificate_api_v1_certificates_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_certificate_api_v1_certificates_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientCertificate"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload a certificate and its key as a ZIP",
+        "tags": [
+          "client certificates"
+        ]
+      }
+    },
+    "/api/v1/certificates/revert": {
+      "post": {
+        "operationId": "revert_api_v1_certificates_revert_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevertEffect"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stage this Section's content from an earlier Snapshot",
+        "tags": [
+          "client certificates"
+        ]
+      }
+    },
+    "/api/v1/certificates/{name}": {
+      "delete": {
+        "operationId": "delete_certificate_api_v1_certificates__name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove a certificate",
+        "tags": [
+          "client certificates"
+        ]
+      },
+      "get": {
+        "operationId": "get_certificate_api_v1_certificates__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientCertificate"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "One certificate",
+        "tags": [
+          "client certificates"
         ]
       }
     },
