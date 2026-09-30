@@ -19,7 +19,13 @@ from tests.tier2.conftest import PortForward
 pytestmark = pytest.mark.tier2
 
 #: A grant is what makes Apchi know an identity, which is what earns it a kill rule.
-GRANT = {"identity": "alice", "catalog": "tpch", "schema": "tiny", "privileges": ["SELECT"]}
+GRANT = {"identity": "alice", "catalog": "bench", "schema": "tiny", "privileges": ["SELECT"]}
+
+#: Staged by the test rather than assumed. An Apply renders the catalog seed Secret from the
+#: Candidate, so a Cluster whose coordinator has restarted since some earlier Apply has only
+#: the catalogs the Candidate names -- which is exactly what it should have, and why a test
+#: that wants a catalog has to bring it.
+BENCH = {"name": "bench", "connector": "tpch", "properties": {}}
 
 
 async def _apply(client: AsyncClient, timeout: float = 900.0) -> dict:
@@ -98,10 +104,12 @@ async def test_an_identity_apchi_knows_can_kill_its_own_query_and_nobody_elses(
     access-control file.
     """
     await e2e_client.post("/api/v1/permissions", json=GRANT)
+    created = await e2e_client.post("/api/v1/catalogs", json=BENCH)
+    assert created.status_code == 201, created.json()
     await _apply(e2e_client)
 
     alice = Trino(host="127.0.0.1", port=forward.port, user="alice")
-    long_query = asyncio.create_task(alice.query("SELECT count(*) FROM tpch.sf100.lineitem"))
+    long_query = asyncio.create_task(alice.query("SELECT count(*) FROM bench.sf100.lineitem"))
     await asyncio.sleep(8)
     running = await Trino(host="127.0.0.1", port=forward.port).query(
         "SELECT query_id FROM system.runtime.queries WHERE \"user\" = 'alice' AND state = 'RUNNING'"
