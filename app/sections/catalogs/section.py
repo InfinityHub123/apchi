@@ -18,6 +18,7 @@ from app.sections.base import (
     CoordinatorFile,
     Resources,
     SectionPlan,
+    SmokeQuery,
     ValidationFailure,
 )
 from app.sections.catalogs import SECTION, apply
@@ -188,7 +189,7 @@ class CatalogsSection:
                 failures.append(ValidationFailure(section=SECTION, resource=name, reason=str(exc)))
         return failures
 
-    async def verify(self, cluster: Cluster, desired: Resources) -> list[str]:
+    async def verify(self, cluster: Cluster, desired: Resources, smoke: SmokeQuery) -> list[str]:
         """What distinguishes "the coordinator came back up" from "the coordinator came
         back up running the configuration we just applied"."""
         missing = sorted(set(desired) - await cluster.trino.catalogs())

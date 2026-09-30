@@ -10,8 +10,9 @@ nothing about whether it is running what was asked for.
 
 import logging
 
+from app.adapters.trino import SOURCE
 from app.sections import SectionName
-from app.sections.base import Cluster, Resources
+from app.sections.base import Cluster, Resources, SmokeQuery
 from app.sections.registry import REGISTERED
 
 logger = logging.getLogger(__name__)
@@ -47,20 +48,27 @@ async def verify(
             f"Only {actual} of {expected} workers have registered with the coordinator."
         )
 
-    # 3. Every Section confirms the Cluster adopted it. For catalogs this is what
+    # 3. The Cluster can actually serve work. "Healthy" should not mean an endpoint
+    #    returned 200. Run before the Sections rather than after, because what became of
+    #    this query is evidence some of them need: Trino records the resource group a query
+    #    ran in, and a Section proving its configuration is in force asks about a query that
+    #    really ran rather than issuing one of its own.
+    sql = f'SELECT 1 FROM "{verification_catalog}".runtime.nodes LIMIT 1'
+    try:
+        ran = await trino.run(sql)
+    except Exception as exc:
+        raise VerificationFailed(f"The smoke query failed: {exc}") from exc
+    smoke = SmokeQuery(
+        sql=sql, query_id=ran.query_id, user=cluster.settings.trino_user, source=SOURCE
+    )
+
+    # 4. Every Section confirms the Cluster adopted it. For catalogs this is what
     #    catches divergence between the Secret and Trino's store while the Apply is still
     #    in flight, rather than leaving it to surface at the next restart. Each Section
     #    knows what adoption means for itself; the pipeline only knows that a reason
     #    returned here fails the Apply.
     for section in REGISTERED:
-        for reason in await section.verify(cluster, desired.get(section.name, {})):
+        for reason in await section.verify(cluster, desired.get(section.name, {}), smoke):
             raise VerificationFailed(reason)
-
-    # 4. The Cluster can actually serve work. "Healthy" should not mean an endpoint
-    #    returned 200.
-    try:
-        await trino.query(f'SELECT 1 FROM "{verification_catalog}".runtime.nodes LIMIT 1')
-    except Exception as exc:
-        raise VerificationFailed(f"The smoke query failed: {exc}") from exc
 
     logger.info("verification passed", extra={"workers": actual})

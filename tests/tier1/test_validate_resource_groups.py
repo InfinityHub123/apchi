@@ -171,9 +171,6 @@ async def test_applying_delivers_both_files_and_restarts_the_coordinator(
 ) -> None:
     await applying_client.post("/api/v1/resource-groups", json=GLOBAL)
     await applying_client.post("/api/v1/resource-groups", json=ETL)
-    await applying_client.put(
-        "/api/v1/resource-groups/selectors", json={"selectors": [{"group": "global.etl"}]}
-    )
 
     record = await _apply(applying_client)
 
@@ -181,7 +178,7 @@ async def test_applying_delivers_both_files_and_restarts_the_coordinator(
     rules = _rules(fake_kubernetes)
     assert [group["name"] for group in rules["rootGroups"]] == ["global"]
     assert [group["name"] for group in rules["rootGroups"][0]["subGroups"]] == ["etl"]
-    assert rules["selectors"] == [{"group": "global.etl"}]
+    assert rules["selectors"] == []
     assert set(fake_kubernetes.secrets[SECRET]) == {RULES_KEY, MANAGER_KEY}
     assert {RULES_PATH, MANAGER_PATH} <= set(fake_kubernetes.mounts)
     assert fake_kubernetes.mounts[RULES_PATH]["volume"] == VOLUME

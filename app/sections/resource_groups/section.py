@@ -17,9 +17,10 @@ from app.sections.base import (
     CoordinatorFile,
     Resources,
     SectionPlan,
+    SmokeQuery,
     ValidationFailure,
 )
-from app.sections.resource_groups import SECTION, SELECTORS, SETTINGS
+from app.sections.resource_groups import SECTION, SELECTORS, SEPARATOR, SETTINGS
 from app.sections.resource_groups.generator import (
     MANAGER_PATH,
     RULES_PATH,
@@ -37,6 +38,7 @@ from app.sections.resource_groups.model import (
     Selector,
     Selectors,
 )
+from app.sections.resource_groups.selectors import Unpredictable, group_for
 
 logger = logging.getLogger(__name__)
 
@@ -252,10 +254,66 @@ class ResourceGroupsSection:
         """Starting is the check: a file Trino cannot parse is a pod that will not start."""
         return []
 
-    async def verify(self, cluster: Cluster, desired: Resources) -> list[str]:
-        """Nothing to assert here.
+    async def verify(self, cluster: Cluster, desired: Resources, smoke: SmokeQuery) -> list[str]:
+        """Did the query Verification just ran land where the selectors say it should?
 
-        That a query lands in the group the selectors name is a stronger claim than "the
-        Cluster came back", and it is the next ticket's.
+        The first functional check a file-based Section has been able to have. An Event
+        Listener's output goes to a sink Apchi cannot read and a mapping pattern would need
+        a certificate Apchi does not hold, but Trino records the resource group a query ran
+        in -- so the smoke query is evidence, and this asks the Cluster what happened rather
+        than reading configuration back (§8).
+
+        Three ways this declines to judge rather than inventing a failure: no selectors, so
+        nothing claims where anything goes; a prediction Apchi cannot make with certainty;
+        and a Cluster that reports no group at all, which is not something Trino does while
+        a manager is loaded.
         """
+        if not selectors_of(desired):
+            return []
+        try:
+            expected = group_for(
+                selectors_of(desired),
+                user=smoke.user,
+                source=smoke.source,
+                query=smoke.sql,
+            )
+        except Unpredictable as exc:
+            logger.info("resource group not verified", extra={"why": str(exc)})
+            return []
+        if expected is None:
+            # No selector claims this query, so there is nothing for the Cluster to
+            # contradict. Where Trino puts it instead is Trino's business.
+            return []
+
+        reached = await _group_of(cluster, smoke.query_id)
+        if reached is None:
+            logger.info("resource group not verified", extra={"why": "the Cluster reported none"})
+            return []
+        if reached != expected:
+            return [
+                f"The verification query ran in resource group {reached!r}, but the "
+                f"selectors put it in {expected!r}. The coordinator is not running the "
+                "resource group configuration this Apply delivered."
+            ]
+        logger.info("resource group verified", extra={"group": expected})
         return []
+
+
+async def _group_of(cluster: Cluster, query_id: str) -> str | None:
+    """The group Trino filed a query under, as a dotted path.
+
+    `system.runtime.queries.resource_group_id` is the path in segments -- `['global','etl']`
+    -- so joining it is what makes it comparable with the paths the Candidate is keyed by.
+    """
+    rows = await cluster.trino.query(
+        "SELECT resource_group_id FROM system.runtime.queries "
+        f"WHERE query_id = {_literal(query_id)}"
+    )
+    if not rows or not rows[0][0]:
+        return None
+    segments: list[str] = list(rows[0][0])
+    return SEPARATOR.join(segments)
+
+
+def _literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
