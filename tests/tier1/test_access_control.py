@@ -73,6 +73,18 @@ def test_the_identity_is_anchored_so_a_lookalike_does_not_match() -> None:
     assert rules["catalogs"][0]["user"] == "^apchi$"
 
 
+def _remount(spec: dict, path: str, mount: dict) -> dict:
+    """Replace the mount at a path, rather than at an index.
+
+    By position was how this used to be written, and it broke the moment the fixture grew a
+    mount: the test went on editing slot 1 and started breaking something else, which showed
+    up as an extra precondition failure rather than as a wrong test.
+    """
+    mounts = spec["containers"][0]["volumeMounts"]
+    spec["containers"][0]["volumeMounts"] = [m for m in mounts if m["mountPath"] != path] + [mount]
+    return spec
+
+
 async def test_an_apply_delivers_the_rules(
     applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
 ) -> None:
@@ -99,40 +111,51 @@ async def test_rules_changed_outside_apchi_are_corrected_by_the_next_apply(
     )
 
 
-def test_the_dev_deployment_meets_every_precondition(settings: Settings) -> None:
-    check(pod_spec(healthy_pod_spec()), settings)
+async def test_the_dev_deployment_meets_every_precondition(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    await check(fake_kubernetes, pod_spec(healthy_pod_spec()), settings)
 
 
-def test_a_subpath_mount_of_an_apchi_managed_secret_is_refused(settings: Settings) -> None:
+async def test_a_subpath_mount_of_an_apchi_managed_secret_is_refused(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
     """A subPath mount never receives updates. Apchi would write the file, the write
     would succeed, and Trino would never see the change."""
-    spec = healthy_pod_spec()
-    spec["containers"][0]["volumeMounts"][1] = {
-        "name": "access-control",
-        "mountPath": "/etc/trino/access-control/rules.json",
-        "subPath": RULES_KEY,
-    }
+    spec = _remount(
+        healthy_pod_spec(),
+        "/etc/trino/access-control",
+        {
+            "name": "access-control",
+            "mountPath": "/etc/trino/access-control/rules.json",
+            "subPath": RULES_KEY,
+        },
+    )
 
     with pytest.raises(PreconditionFailed) as raised:
-        check(pod_spec(spec), settings)
+        await check(fake_kubernetes, pod_spec(spec), settings)
 
     assert "subPath" in str(raised.value)
     assert "trino-access-control" in str(raised.value)
 
 
-def test_a_missing_seed_init_container_is_refused(settings: Settings) -> None:
+async def test_a_missing_seed_init_container_is_refused(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
     """Without it the coordinator starts with an empty store and every catalog in the
     latest Snapshot is missing."""
     spec = healthy_pod_spec()
     spec["initContainers"] = []
 
     with pytest.raises(PreconditionFailed) as raised:
-        check(pod_spec(spec), settings)
+        await check(fake_kubernetes, pod_spec(spec), settings)
 
     assert "initContainer" in str(raised.value)
 
 
-def test_a_read_only_volume_over_the_catalog_store_is_refused(settings: Settings) -> None:
+async def test_a_read_only_volume_over_the_catalog_store_is_refused(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
     """Trino writes that directory itself. A Secret mount there is read-only, which is
     the finding the whole seed design rests on."""
     spec = healthy_pod_spec()
@@ -144,12 +167,14 @@ def test_a_read_only_volume_over_the_catalog_store_is_refused(settings: Settings
     ]
 
     with pytest.raises(PreconditionFailed) as raised:
-        check(pod_spec(spec), settings)
+        await check(fake_kubernetes, pod_spec(spec), settings)
 
     assert "CREATE CATALOG would fail" in str(raised.value)
 
 
-def test_a_read_only_volume_above_the_catalog_store_is_refused(settings: Settings) -> None:
+async def test_a_read_only_volume_above_the_catalog_store_is_refused(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
     """Mounting over the parent breaks it just as thoroughly."""
     spec = healthy_pod_spec()
     spec["containers"][0]["volumeMounts"].append(
@@ -157,29 +182,36 @@ def test_a_read_only_volume_above_the_catalog_store_is_refused(settings: Setting
     )
 
     with pytest.raises(PreconditionFailed) as raised:
-        check(pod_spec(spec), settings)
+        await check(fake_kubernetes, pod_spec(spec), settings)
 
     assert "/data/trino" in str(raised.value)
 
 
-def test_an_empty_dir_over_the_catalog_store_is_accepted(settings: Settings) -> None:
+async def test_an_empty_dir_over_the_catalog_store_is_accepted(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
     """The positive case, because it is the one the design actually asks for: an
     emptyDir there is writable and is what the initContainer seeds."""
-    check(pod_spec(healthy_pod_spec()), settings)
+    await check(fake_kubernetes, pod_spec(healthy_pod_spec()), settings)
 
 
-def test_every_problem_is_reported_not_just_the_first(settings: Settings) -> None:
+async def test_every_problem_is_reported_not_just_the_first(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
     """An Admin fixing a manifest should see the whole list."""
-    spec = healthy_pod_spec()
+    spec = _remount(
+        healthy_pod_spec(),
+        "/etc/trino/access-control",
+        {
+            "name": "access-control",
+            "mountPath": "/etc/trino/access-control/rules.json",
+            "subPath": RULES_KEY,
+        },
+    )
     spec["initContainers"] = []
-    spec["containers"][0]["volumeMounts"][1] = {
-        "name": "access-control",
-        "mountPath": "/etc/trino/access-control/rules.json",
-        "subPath": RULES_KEY,
-    }
 
     with pytest.raises(PreconditionFailed) as raised:
-        check(pod_spec(spec), settings)
+        await check(fake_kubernetes, pod_spec(spec), settings)
 
     assert len(raised.value.problems) == 2
 
@@ -200,7 +232,9 @@ async def test_an_apply_is_refused_when_a_precondition_is_broken(
     assert record["rollback"] is None, "nothing was touched, so there is nothing to undo"
 
 
-def test_every_file_a_section_declares_is_guarded(settings: Settings) -> None:
+async def test_every_file_a_section_declares_is_guarded(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
     """The precondition reads the registry rather than naming a path.
 
     This is the property worth having: a Section added later is guarded without anyone
@@ -219,7 +253,7 @@ def test_every_file_a_section_declares_is_guarded(settings: Settings) -> None:
         spec["containers"][0]["volumeMounts"].append({"name": "someone-elses", "mountPath": path})
 
         with pytest.raises(PreconditionFailed) as raised:
-            check(pod_spec(spec), settings)
+            await check(fake_kubernetes, pod_spec(spec), settings)
 
         assert path in str(raised.value)
         assert volume in str(raised.value)
@@ -258,7 +292,9 @@ async def test_permissions_appears_in_review_and_costs_no_restart(client: AsyncC
     assert review["cost"]["restarts_coordinator"] is False
 
 
-def test_a_subpath_mount_of_a_file_apchi_mounts_itself_is_allowed(settings: Settings) -> None:
+async def test_a_subpath_mount_of_a_file_apchi_mounts_itself_is_allowed(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
     """The precondition must not over-reach. Apchi mounts single keys with subPath on
     purpose -- the user-mapping file is one -- and replaces the mount when the file changes,
     with a Rollout making the new content live. Rejecting those would refuse every
@@ -267,4 +303,67 @@ def test_a_subpath_mount_of_a_file_apchi_mounts_itself_is_allowed(settings: Sett
     mounts = [m["mountPath"] for m in spec["containers"][0]["volumeMounts"]]
 
     assert MAPPING_PATH in mounts, "the fixture mounts it the way Apchi does"
-    check(pod_spec(spec), settings)
+    await check(fake_kubernetes, pod_spec(spec), settings)
+
+
+async def test_a_cluster_that_never_rereads_the_rules_is_refused(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """Without `security.refresh-period` Trino reads the rules once at startup and never
+    again, so Apchi would write a permission change, report success, and the Cluster would
+    never see it. The one precondition that reads the Admin's configuration rather than
+    their pod template."""
+    fake_kubernetes.config_maps["trino-config"]["access-control.properties"] = (
+        "access-control.name=file\nsecurity.config-file=/etc/trino/access-control/rules.json\n"
+    )
+
+    with pytest.raises(PreconditionFailed) as raised:
+        await check(fake_kubernetes, pod_spec(healthy_pod_spec()), settings)
+
+    assert "security.refresh-period" in str(raised.value)
+    assert "never see it" in str(raised.value)
+
+
+async def test_a_cluster_told_to_read_no_rules_at_all_is_refused(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """Every permission Apchi applies would be written and ignored."""
+    spec = healthy_pod_spec()
+    spec["containers"][0]["volumeMounts"] = [
+        mount
+        for mount in spec["containers"][0]["volumeMounts"]
+        if mount["mountPath"] != "/etc/trino/access-control.properties"
+    ]
+
+    with pytest.raises(PreconditionFailed) as raised:
+        await check(fake_kubernetes, pod_spec(spec), settings)
+
+    assert "written and ignored" in str(raised.value)
+
+
+async def test_properties_apchi_cannot_read_are_reported_rather_than_assumed(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """A mount Apchi cannot follow is not the same as a missing property, and saying "no
+    refresh period" would send an Admin looking for the wrong thing."""
+    fake_kubernetes.config_maps.pop("trino-config")
+
+    with pytest.raises(PreconditionFailed) as raised:
+        await check(fake_kubernetes, pod_spec(healthy_pod_spec()), settings)
+
+    assert "cannot read what is in it" in str(raised.value)
+
+
+async def test_an_apply_is_refused_when_the_rules_would_never_be_reread(
+    applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
+) -> None:
+    """Checked before every Apply, so a chart change that drops the refresh period stops
+    Apchi rather than making it lie about what it applied."""
+    fake_kubernetes.config_maps["trino-config"]["access-control.properties"] = (
+        "access-control.name=file\n"
+    )
+
+    record = await _apply(applying_client)
+
+    assert record["stage"] == "failed"
+    assert "security.refresh-period" in (record["failure_reason"] or "")

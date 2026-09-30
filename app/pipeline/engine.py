@@ -115,7 +115,7 @@ class Engine:
         spec = preconditions.pod_spec(
             await self._kubernetes.deployment_pod_spec(self._settings.coordinator_deployment_name)
         )
-        preconditions.check(spec, self._settings)
+        await preconditions.check(self._kubernetes, spec, self._settings)
 
     async def apply(self) -> None:
         """Patch the Secret, then issue the DDL.

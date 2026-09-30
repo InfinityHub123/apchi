@@ -78,6 +78,8 @@ _HOPELESS = frozenset(
 class KubernetesAdapter(Protocol):
     async def read_secret(self, name: str) -> dict[str, str]: ...
 
+    async def read_config_map(self, name: str) -> dict[str, str]: ...
+
     async def write_secret(self, name: str, data: dict[str, str]) -> None: ...
 
     async def ready_replicas(self, deployment: str) -> int: ...
@@ -157,6 +159,17 @@ class RealKubernetes:
 
         secret = await run_in_threadpool(self._core.read_namespaced_secret, name, self._namespace)
         return {k: base64.b64decode(v).decode() for k, v in (secret.data or {}).items()}
+
+    async def read_config_map(self, name: str) -> dict[str, str]:
+        """A ConfigMap's contents, for reading the Admin's configuration.
+
+        Apchi writes no ConfigMap. It reads one to check a precondition it cannot check any
+        other way: whether Trino was told to re-read the rules file Apchi writes.
+        """
+        config_map = await run_in_threadpool(
+            self._core.read_namespaced_config_map, name, self._namespace
+        )
+        return dict(config_map.data or {})
 
     async def write_secret(self, name: str, data: dict[str, str]) -> None:
         """The Secret's contents become exactly `data`.

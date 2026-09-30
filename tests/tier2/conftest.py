@@ -271,6 +271,9 @@ class ForwardedKubernetes:
         #: Every pod Apchi asked for, so a test can prove one was really created.
         self.created_pods: list[str] = []
 
+    async def read_config_map(self, name: str) -> dict[str, str]:
+        return await self._real.read_config_map(name)
+
     async def read_secret(self, name: str) -> dict[str, str]:
         return await self._real.read_secret(name)
 

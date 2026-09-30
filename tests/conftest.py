@@ -126,6 +126,11 @@ def healthy_pod_spec() -> dict[str, Any]:
                         "mountPath": "/etc/trino/config.properties",
                         "subPath": "coordinator-config.properties",
                     },
+                    {
+                        "name": "config",
+                        "mountPath": "/etc/trino/access-control.properties",
+                        "subPath": "access-control.properties",
+                    },
                     {"name": "access-control", "mountPath": "/etc/trino/access-control"},
                     {
                         "name": "apchi-user-mapping",
@@ -160,6 +165,17 @@ class FakeKubernetes:
 
     def __init__(self, validation: DockerContainer | None = None) -> None:
         self.secrets: dict[str, dict[str, str]] = bootstrap_secrets()
+        #: The Admin's ConfigMaps, seeded the way deploy/trino-dev seeds them. Apchi writes
+        #: none; it reads this one to check that Trino was told to re-read the rules.
+        self.config_maps: dict[str, dict[str, str]] = {
+            "trino-config": {
+                "access-control.properties": (
+                    "access-control.name=file\n"
+                    "security.config-file=/etc/trino/access-control/rules.json\n"
+                    "security.refresh-period=1s\n"
+                )
+            }
+        }
         self.replicas: dict[str, int] = {}
         self.image = TRINO_IMAGE
         #: What the coordinator Deployment looks like. Defaults to a spec that satisfies
@@ -205,6 +221,9 @@ class FakeKubernetes:
 
     async def read_secret(self, name: str) -> dict[str, str]:
         return dict(self.secrets.get(name, {}))
+
+    async def read_config_map(self, name: str) -> dict[str, str]:
+        return dict(self.config_maps.get(name, {}))
 
     async def write_secret(self, name: str, data: dict[str, str]) -> None:
         self.secrets[name] = dict(data)

@@ -12,12 +12,15 @@ never sees the change.
 """
 
 import logging
+from pathlib import PurePosixPath
 from typing import Any
 
 from pydantic import AliasPath, BaseModel, ConfigDict, Field
 
+from app.adapters.kubernetes import KubernetesAdapter
 from app.config import Settings
 from app.pipeline.files import admin_mounted_secrets, owned_paths
+from app.sections.permissions.generator import PROPERTIES_PATH, REFRESH_PERIOD
 from app.sections.registry import REGISTERED
 
 logger = logging.getLogger(__name__)
@@ -82,8 +85,13 @@ def _covers(mount_path: str, directory: str) -> bool:
     return directory == normalised or directory.startswith(f"{normalised}/")
 
 
-def check(spec: PodSpec, settings: Settings) -> None:
-    """Raises PreconditionFailed listing everything wrong, not just the first thing."""
+async def check(kubernetes: KubernetesAdapter, spec: PodSpec, settings: Settings) -> None:
+    """Raises PreconditionFailed listing everything wrong, not just the first thing.
+
+    Takes the adapter because one of these cannot be answered from the pod template alone:
+    whether Trino was told to re-read the rules file Apchi writes is in the Admin's
+    configuration, which has to be read.
+    """
     volumes = {volume.name: volume for volume in spec.volumes}
     # Read from the registry rather than named here, so a Section that starts writing a
     # whole-volume Secret is guarded without anyone remembering to add it. The catalog seed
@@ -157,9 +165,68 @@ def check(spec: PodSpec, settings: Settings) -> None:
                     f"removes its own volume {expected!r} there; remove this mount."
                 )
 
+    # 5. Trino must be told to re-read the rules. Without `security.refresh-period` it reads
+    #    them once at startup and never again, so Apchi would write a permission change,
+    #    report success, and the Cluster would never see it (§13.4). The one precondition
+    #    that reads the Admin's configuration rather than their pod template.
+    problems.extend(await _refresh_period_problems(kubernetes, spec, volumes))
+
     if problems:
         raise PreconditionFailed(problems)
     logger.debug("deployment preconditions hold")
+
+
+async def _refresh_period_problems(
+    kubernetes: KubernetesAdapter, spec: PodSpec, volumes: dict[str, Volume]
+) -> list[str]:
+    """Whether the access-control properties Trino reads set a refresh period.
+
+    Found through the pod template rather than configured in Apchi: whichever volume is
+    mounted at Trino's `access-control.properties` is the file in force, and its content is
+    in the ConfigMap or Secret behind that volume. Apchi reads it and nothing else from
+    there -- the rest of that file is the Admin's business.
+    """
+    for container in spec.containers:
+        for mount in container.volume_mounts:
+            if mount.mount_path != PROPERTIES_PATH:
+                continue
+            volume = volumes.get(mount.name)
+            if volume is None:
+                continue
+            content = await _content_of(kubernetes, volume, mount.sub_path)
+            if content is None:
+                return [
+                    f"Container {container.name!r} mounts {mount.name!r} at "
+                    f"{PROPERTIES_PATH}, but Apchi cannot read what is in it, so it cannot "
+                    f"tell whether {REFRESH_PERIOD} is set."
+                ]
+            if any(line.strip().startswith(f"{REFRESH_PERIOD}=") for line in content.splitlines()):
+                return []
+            return [
+                f"{PROPERTIES_PATH} does not set {REFRESH_PERIOD}. Without it Trino reads "
+                "the access-control rules once at startup and never again, so Apchi would "
+                "write a permission change, report success, and the Cluster would never "
+                "see it."
+            ]
+    return [
+        f"Nothing is mounted at {PROPERTIES_PATH}, so Trino is not configured to read the "
+        "access-control rules Apchi writes. Every permission Apchi applies would be "
+        "written and ignored."
+    ]
+
+
+async def _content_of(kubernetes: KubernetesAdapter, volume: Volume, key: str | None) -> str | None:
+    """The file behind a mount, from whichever kind of volume carries it."""
+    if volume.config_map_name is not None:
+        data = await kubernetes.read_config_map(volume.config_map_name)
+    elif volume.secret_name is not None:
+        data = await kubernetes.read_secret(volume.secret_name)
+    else:
+        return None
+    if key is not None:
+        return data.get(key)
+    # A whole-volume mount: the file is the key named like it.
+    return data.get(PurePosixPath(PROPERTIES_PATH).name)
 
 
 def pod_spec(raw: dict[str, Any]) -> PodSpec:
