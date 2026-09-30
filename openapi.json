@@ -420,6 +420,164 @@
         "title": "EventListenerWrite",
         "type": "object"
       },
+      "Grant": {
+        "additionalProperties": false,
+        "description": "A grant as it is stored and returned, with the key that addresses it.",
+        "properties": {
+          "catalog": {
+            "description": "The catalog the grant applies to.",
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[^:]+$",
+            "title": "Catalog",
+            "type": "string"
+          },
+          "identity": {
+            "description": "The Trino Identity being granted access.",
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[^:]+$",
+            "title": "Identity",
+            "type": "string"
+          },
+          "key": {
+            "description": "The identifier this grant is addressed by.",
+            "title": "Key",
+            "type": "string"
+          },
+          "privileges": {
+            "description": "What the identity may do. At least one.",
+            "items": {
+              "enum": [
+                "SELECT",
+                "INSERT",
+                "UPDATE",
+                "DELETE",
+                "OWNERSHIP",
+                "GRANT_SELECT"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Privileges",
+            "type": "array"
+          },
+          "schema": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[^:]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The schema, or omitted for every schema in the catalog.",
+            "title": "Schema"
+          },
+          "table": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[^:]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The table, or omitted for every table in the schema.",
+            "title": "Table"
+          }
+        },
+        "required": [
+          "identity",
+          "catalog",
+          "privileges",
+          "key"
+        ],
+        "title": "Grant",
+        "type": "object"
+      },
+      "GrantWrite": {
+        "additionalProperties": false,
+        "description": "A grant as an Operator sends it.",
+        "properties": {
+          "catalog": {
+            "description": "The catalog the grant applies to.",
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[^:]+$",
+            "title": "Catalog",
+            "type": "string"
+          },
+          "identity": {
+            "description": "The Trino Identity being granted access.",
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[^:]+$",
+            "title": "Identity",
+            "type": "string"
+          },
+          "privileges": {
+            "description": "What the identity may do. At least one.",
+            "items": {
+              "enum": [
+                "SELECT",
+                "INSERT",
+                "UPDATE",
+                "DELETE",
+                "OWNERSHIP",
+                "GRANT_SELECT"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Privileges",
+            "type": "array"
+          },
+          "schema": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[^:]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The schema, or omitted for every schema in the catalog.",
+            "title": "Schema"
+          },
+          "table": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[^:]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The table, or omitted for every table in the schema.",
+            "title": "Table"
+          }
+        },
+        "required": [
+          "identity",
+          "catalog",
+          "privileges"
+        ],
+        "title": "GrantWrite",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -518,6 +676,33 @@
           }
         },
         "title": "PreservedMappings",
+        "type": "object"
+      },
+      "PrivilegesWrite": {
+        "additionalProperties": false,
+        "description": "What a staged grant can be changed to.",
+        "properties": {
+          "privileges": {
+            "items": {
+              "enum": [
+                "SELECT",
+                "INSERT",
+                "UPDATE",
+                "DELETE",
+                "OWNERSHIP",
+                "GRANT_SELECT"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Privileges",
+            "type": "array"
+          }
+        },
+        "required": [
+          "privileges"
+        ],
+        "title": "PrivilegesWrite",
         "type": "object"
       },
       "ResourceChange": {
@@ -1388,6 +1573,44 @@
           "at"
         ],
         "title": "StageEvent",
+        "type": "object"
+      },
+      "SystemRule": {
+        "description": "One rule Apchi owns, shown to Operators and editable by nobody.",
+        "properties": {
+          "rule": {
+            "description": "What the rule does, in Apchi's words.",
+            "title": "Rule",
+            "type": "string"
+          },
+          "why": {
+            "description": "Why it exists, and what breaks without it.",
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule",
+          "why"
+        ],
+        "title": "SystemRule",
+        "type": "object"
+      },
+      "SystemRules": {
+        "description": "The rules Apchi generates for itself.\n\nVisible on purpose. An Operator who cannot see them cannot understand why catalog DDL is\nrefused to them, and \u00a713.4 asks for the same of the queries block: a system-owned rule an\nOperator can read and reason about, not a silent default.",
+        "properties": {
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/SystemRule"
+            },
+            "title": "Rules",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "title": "SystemRules",
         "type": "object"
       },
       "ValidationError": {
@@ -2475,6 +2698,259 @@
         "summary": "Apchi's own liveness",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/api/v1/permissions": {
+      "get": {
+        "operationId": "list_grants_api_v1_permissions_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Grant"
+                  },
+                  "title": "Response List Grants Api V1 Permissions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "The staged grants",
+        "tags": [
+          "permissions"
+        ]
+      },
+      "post": {
+        "operationId": "add_grant_api_v1_permissions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Grant"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Grant an identity privileges",
+        "tags": [
+          "permissions"
+        ]
+      }
+    },
+    "/api/v1/permissions/revert": {
+      "post": {
+        "operationId": "revert_api_v1_permissions_revert_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevertEffect"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stage this Section's content from an earlier Snapshot",
+        "tags": [
+          "permissions"
+        ]
+      }
+    },
+    "/api/v1/permissions/system": {
+      "get": {
+        "description": "Visible on purpose. An Operator who cannot see these cannot understand why catalog\nDDL is refused to them, or why a grant does not narrow anyone's access yet.",
+        "operationId": "get_system_rules_api_v1_permissions_system_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemRules"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "The rules Apchi owns and nobody may edit",
+        "tags": [
+          "permissions"
+        ]
+      }
+    },
+    "/api/v1/permissions/{key}": {
+      "delete": {
+        "operationId": "delete_grant_api_v1_permissions__key__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove a grant",
+        "tags": [
+          "permissions"
+        ]
+      },
+      "get": {
+        "operationId": "get_grant_api_v1_permissions__key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Grant"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "One grant",
+        "tags": [
+          "permissions"
+        ]
+      },
+      "put": {
+        "description": "The privileges are what changes. Where a grant applies is its identity -- moving it\nis removing one grant and adding another, which is what an Operator means anyway.",
+        "operationId": "set_privileges_api_v1_permissions__key__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivilegesWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Grant"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Change what a grant allows",
+        "tags": [
+          "permissions"
         ]
       }
     },

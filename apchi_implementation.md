@@ -527,6 +527,10 @@ verification catalog. Its rule is injected at configuration-generation time, sho
 Permissions UI as a system-owned row that Operators can see but not edit, and Validation
 rejects any Candidate whose rules would shadow it.
 
+That injection is now real, and it is two rules rather than one: `owner` on catalogs, which
+is what restricts catalog DDL to Apchi, and SELECT on the verification catalog, which is what
+survives a `tables` block denying everything it does not name (§13.4).
+
 Without this, the first Operator who tightens their permission matrix breaks Verification
 for every future Apply with no indication why.
 
@@ -983,8 +987,40 @@ be able to widen it deliberately; and the block is all-or-nothing — the moment
 section exists, anything unmatched is denied, *including `execute`*. A mistake here does not
 leak data, it stops the Cluster serving queries.
 
+**A grant is an identity, a place, and a set of privileges**, and every name in it is
+literal. Trino matches these fields as regular expressions, so the generator anchors them:
+granting on `finance` grants on `finance` and not on `finance_archive`. Patterns may follow
+if anyone needs them, but a pattern an Operator did not know they were writing is a data
+leak. The privileges are Trino's own six — SELECT, INSERT, UPDATE, DELETE, OWNERSHIP,
+GRANT_SELECT — and an unknown one fails the coordinator's startup, so Apchi refuses it at
+the keyboard instead.
+
+A grant is addressed by a key Apchi derives from the identity and the place it applies to,
+with `*` for the levels it does not name. Derived rather than chosen, so the same grant is
+always the same resource — which is what lets Review name the grant that changed rather than
+saying the permissions changed.
+
+**A `tables` block denies every table it does not match, to everyone.** Verified against a
+running coordinator: with one grant in the file, `apchi` was refused a table in a catalog it
+plainly held `owner` on. This has two consequences and both are load-bearing.
+
+The first is a **reserved table rule**: Apchi grants itself SELECT on the verification
+catalog, first, for the same reason §8 reserves an identity and §13.3 reserves a mapping
+rule. Verification's smoke query reads a table, the running-query count reads another and
+§13.5's group read-back reads a third, all in that catalog — so without this rule the first
+Apply carrying a grant would pass only by luck, and the day the catch-all below is removed
+Apchi would lose the connection it needs to recover.
+
+The second is that **writing a grant must not be an act of revocation**. Before Apchi wrote
+a `tables` block at all, every End User could reach every table; emitting one flips that to
+deny-by-default in a single Apply. So the generated block ends with a catch-all allowing
+everything to everyone, and staging a grant records intent without taking anything away.
+Narrowing that — which is what makes grants mean something — is a separate and deliberate
+decision, because on a Cluster already serving users it locks every one of them out.
+
 **No restart required** — Trino re-reads the rules file on its own timer, so a permission
-change reaches the Cluster without touching the pod (§7.2).
+change reaches the Cluster without touching the pod (§7.2). It is the first Section whose
+changes cost no queries at all.
 
 `security.refresh-period` must be set on the Cluster, or the rules file is read once at
 startup and never again. Apchi asserts this at Adoption and fails loudly if absent —
