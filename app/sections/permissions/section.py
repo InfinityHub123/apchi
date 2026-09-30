@@ -62,6 +62,28 @@ SYSTEM_RULES = SystemRules(
             ),
         ),
         SystemRule(
+            rule="Everyone may run queries; only you may see yours.",
+            why=(
+                "By default any authenticated End User can view and kill any query, and query "
+                "text routinely contains data. This block closes that. It is all-or-nothing: "
+                "once it exists, anything it does not match is denied, including the right to "
+                "run a query at all -- so the rule letting everyone execute is what keeps the "
+                "Cluster serving, and widening this block carelessly stops queries rather "
+                "than leaking data. Seeing your own queries needs no rule: Trino gives you "
+                "those whatever the rules say. Killing your own does, so Apchi writes one per "
+                "identity it knows about -- the identities named in a grant."
+            ),
+        ),
+        SystemRule(
+            rule="Apchi may see everyone's queries.",
+            why=(
+                "The running-query count Review shows before a Rollout reads "
+                "system.runtime.queries, and Trino filters those rows by who may view them. "
+                "Without this Apchi would count only its own queries and report that a "
+                "Rollout destroys nothing."
+            ),
+        ),
+        SystemRule(
             rule="Everything no grant names is allowed, for everyone.",
             why=(
                 "What the Cluster did before Apchi wrote a tables block at all. Staging a "

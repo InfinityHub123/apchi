@@ -1024,8 +1024,30 @@ SQL — the Web UI docs state "If no system access control is installed, then al
 able to view and kill any query", and `/v1/query` is annotated `@ResourceSecurity(AUTHENTICATED_USER)`
 and returns unredacted query text. Query text routinely contains data.
 
-Apchi therefore injects a `queries` rules block: `execute` for everyone, `view` and `kill`
-restricted to the query owner, plus the reserved verification identity.
+Apchi therefore injects a `queries` rules block. What it can and cannot say was settled
+against a running coordinator, and it is not what the format looks like:
+
+- **`execute` for everyone, last.** The block is all-or-nothing, so this rule is what keeps
+  the Cluster serving at all.
+- **Nobody is granted sight of their own queries, because Trino grants it anyway.** With only
+  a catch-all allowing `execute`, alice saw her own query and not bob's. The rules are what
+  stops her seeing *his*.
+- **Killing your own query is not implicit, and cannot be expressed generically.** There is no
+  back-reference from `queryOwner` to the requesting user, and a rule carrying a `queryOwner`
+  may not carry `execute` at all — Trino refuses to start on one ("A valid query rule cannot
+  combine an queryOwner condition with access mode 'execute'"). So it is **a rule per identity
+  Apchi knows**: every identity named in a grant gets `view` and `kill` over its own queries.
+- **The reserved identity gets `view` over everyone's queries**, and that is load-bearing
+  rather than ceremonial: the running-query count Review shows before a Rollout reads
+  `system.runtime.queries`, and Trino filters those rows by who may view them. Without it
+  Apchi would count its own queries and report that a Rollout destroys nothing.
+
+**The kill this block governs is Trino's own endpoint**, not `system.runtime.kill_query`. The
+procedure is a separate permission — `procedures` rules, which Apchi does not generate — and
+it is denied to everyone as soon as *any* file-based access control is installed. Apchi has
+written one since slice 1, so Apchi already took `kill_query` away from every End User,
+including from an owner killing their own query. Verified by contrast: with no access control
+at all, that same kill succeeds. That is a regression to fix, not a property to keep.
 
 This must be **visible** in the Permissions UI as a system-owned rule, not a silent default,
 for two reasons: Operators need to understand why they cannot see each other's queries and
