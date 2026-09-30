@@ -27,9 +27,12 @@ async def test_the_mounted_rules_are_what_apchi_generates(
 ) -> None:
     """The committed manifest is generated output, so the cluster and the generator must
     agree. CI checks the file; this checks the cluster."""
+    settings = Settings()
     mounted = await real_kubernetes.read_secret(ACCESS_CONTROL_SECRET)
 
-    assert mounted[RULES_KEY] == render_rules(Settings().trino_user)
+    assert mounted[RULES_KEY] == render_rules(
+        settings.trino_user, {}, settings.verification_catalog
+    )
 
 
 async def test_a_non_apchi_identity_cannot_create_a_catalog(forward: PortForward) -> None:

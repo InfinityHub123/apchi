@@ -18,5 +18,24 @@ stringData:
         {
           "allow": "all"
         }
+      ],
+      "tables": [
+        {
+          "user": "^apchi$",
+          "catalog": "^system$",
+          "privileges": [
+            "SELECT"
+          ]
+        },
+        {
+          "privileges": [
+            "SELECT",
+            "INSERT",
+            "UPDATE",
+            "DELETE",
+            "OWNERSHIP",
+            "GRANT_SELECT"
+          ]
+        }
       ]
     }
