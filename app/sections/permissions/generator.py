@@ -105,6 +105,34 @@ def query_rules(trino_user: str, identities: list[str]) -> list[dict[str, Any]]:
     return rules
 
 
+#: The one procedure Apchi grants, and the only one it took away that anybody noticed. A
+#: file-based access control denies procedure execution unless a rule allows it, so Apchi's
+#: own file removed `CALL system.runtime.kill_query(...)` from every End User the day it was
+#: installed -- including from an owner killing their own query. Verified by contrast: with
+#: no access control at all, that same kill succeeds.
+_KILL_QUERY = {
+    "catalog": "^system$",
+    "schema": "^runtime$",
+    "procedure": "^kill_query$",
+    "privileges": ["EXECUTE"],
+}
+
+
+def procedure_rules() -> list[dict[str, Any]]:
+    """Who may execute which procedure.
+
+    Everyone, and only this one. Granting the procedure does not decide *whose* query may be
+    killed -- the queries block above still does that, verified against a running
+    coordinator: with this rule in place, one End User was still refused another's query and
+    allowed their own. So this restores a capability without widening an authority.
+
+    Nothing else is granted. Trino's own runtime schema has neighbours and every connector
+    brings procedures of its own, and handing out execute on all of them would be granting
+    what nobody has asked for or tested.
+    """
+    return [_KILL_QUERY]
+
+
 def _grant_rule(grant: dict[str, Any]) -> dict[str, Any]:
     """One grant as Trino wants it.
 
@@ -160,6 +188,7 @@ def render_rules(
             # is granted by its own rule above rather than by this one.
             *([] if enforced else [{"privileges": list(_EVERY_PRIVILEGE)}]),
         ],
+        "procedures": procedure_rules(),
         "queries": query_rules(trino_user, sorted({staged[key]["identity"] for key in staged})),
     }
     return json.dumps(rules, indent=2) + "\n"
