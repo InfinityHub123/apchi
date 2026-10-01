@@ -122,3 +122,37 @@ async def test_a_grant_that_changes_nothing_else_restarts_nothing(
 
     assert record["stage"] == "succeeded", record
     assert len(fake_kubernetes.restarts) == restarts, "the listener did not change"
+
+
+async def test_the_probe_is_given_the_rules_and_told_to_read_them(
+    applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
+) -> None:
+    """A file Trino was not told to read is a file Trino never rejects, so holding the rules
+    without the properties pointing at them would prove nothing.
+
+    What this catches is the failure a running Cluster hides: Trino keeps the old rules when
+    a refresh fails, so a malformed file changes nothing today and stops the coordinator
+    starting whenever it next restarts.
+    """
+    await applying_client.post("/api/v1/permissions", json=GRANT)
+
+    record = await _apply(applying_client)
+
+    assert record["stage"] == "succeeded", record
+    delivered = fake_kubernetes.secret_history[fake_kubernetes.pod_history[-1]]
+    assert "^acme_finance$" in delivered[RULES_KEY]
+    assert (
+        "security.config-file=/etc/trino/access-control/rules.json"
+        in (delivered["access-control.properties"])
+    )
+
+
+async def test_a_candidate_with_no_grants_still_needs_no_pod(
+    applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
+) -> None:
+    """The file is then entirely generated and constant, so there is nothing a coordinator
+    could reject that has not been rejected before."""
+    record = await _apply(applying_client)
+
+    assert record["stage"] == "succeeded", record
+    assert fake_kubernetes.pod_history == []

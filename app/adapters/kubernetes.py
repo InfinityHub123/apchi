@@ -372,14 +372,21 @@ class RealKubernetes:
         from kubernetes.client.exceptions import ApiException
 
         try:
-            logs = await run_in_threadpool(
-                self._core.read_namespaced_pod_log, name, self._namespace, tail_lines=tail
+            # `_preload_content=False` because the client's own deserialisation of this
+            # endpoint is `str(response.data)` -- a `b'...'` repr with the newlines
+            # escaped, which arrives as one enormous line that no error can be picked out
+            # of. Taking the raw body and decoding it is the only way to get a log back.
+            # An earlier attempt at this guarded on `isinstance(logs, bytes)`, which never
+            # fires: what comes back is a str that *contains* the repr.
+            response = await run_in_threadpool(
+                self._core.read_namespaced_pod_log,
+                name,
+                self._namespace,
+                tail_lines=tail,
+                _preload_content=False,
             )
-            # The client hands back bytes unless it is asked not to, and `str(bytes)` is a
-            # `b'...'` repr with the newlines escaped -- one enormous line, from which the
-            # error lines cannot be picked out. The whole point of reading this is to quote
-            # three of its lines back to an Operator.
-            return logs.decode(errors="replace") if isinstance(logs, bytes) else str(logs)
+            raw = response.data
+            return raw.decode(errors="replace") if isinstance(raw, bytes) else str(raw)
         except ApiException:
             return ""
 

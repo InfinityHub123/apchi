@@ -528,6 +528,18 @@ Listeners and Certificate Mapping still have nothing of the kind — a listener'
 to a sink Apchi cannot read, and proving a mapping pattern would mean holding a client
 certificate Apchi does not have.
 
+**What Verification cannot say about Permissions.** Nothing beyond what it already says. The
+only access Apchi can observe is its own, and its own rules are generated and constant -- so
+the smoke query (step 4) and the catalog DDL already prove everything there is to prove. It
+cannot check an Operator's grant, because it cannot act as the identity the grant is for:
+impersonation is denied, and granting Apchi impersonation would make its identity the most
+dangerous thing in the Cluster. §7.5 records the other three dead ends. What guards this
+Section instead is a precondition (§16, the refresh period) and Validation: the probe is
+started with the rules *and* the properties that make Trino read them, so a file Trino will
+not parse fails before the Cluster is touched. That matters because a running Cluster hides
+it -- Trino keeps the old rules when a refresh fails, and the coordinator then fails to start
+whenever it next restarts.
+
 **A check that cannot be certain says nothing.** Predicting where a query lands means
 evaluating the selectors the way Trino does, and a wrong prediction fails Verification on a
 healthy Cluster and rolls a good Apply back. So the prediction stops rather than guesses
