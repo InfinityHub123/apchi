@@ -20,10 +20,16 @@ from tests.tier2.conftest import PortForward
 
 pytestmark = pytest.mark.tier2
 
-#: A grant on a table that exists on the dev cluster, so it can be read for real.
+#: Staged by the test rather than assumed. An Apply renders the catalog seed Secret from the
+#: Candidate, so a coordinator that has restarted since an Apply carrying no catalogs comes
+#: back without the dev cluster's own catalogs -- which is correct, and is why a test that
+#: wants a catalog has to bring it.
+BENCH = {"name": "bench", "connector": "tpch", "properties": {}}
+
+#: A grant on a table in that catalog, so it can be read for real.
 READ_NATION = {
     "identity": "alice",
-    "catalog": "tpch",
+    "catalog": "bench",
     "schema": "tiny",
     "table": "nation",
     "privileges": ["SELECT"],
@@ -71,6 +77,7 @@ async def test_a_grant_is_enforced_without_restarting_the_coordinator(
     """The whole point of this Section's engine: Trino re-reads the rules on a timer, so a
     permission change reaches a busy Cluster without destroying a single query."""
     before = await real_kubernetes.rollout_state("trino-coordinator")
+    assert (await e2e_client.post("/api/v1/catalogs", json=BENCH)).status_code == 201
     await e2e_client.post("/api/v1/permissions", json=READ_NATION)
 
     record = await _apply(e2e_client)
@@ -80,7 +87,7 @@ async def test_a_grant_is_enforced_without_restarting_the_coordinator(
     assert after.generation == before.generation, "the pod template was never touched"
 
     alice = Trino(host="127.0.0.1", port=forward.port, user="alice")
-    assert await _until(alice, "SELECT count(*) FROM tpch.tiny.nation", allowed=True)
+    assert await _until(alice, "SELECT count(*) FROM bench.tiny.nation", allowed=True)
 
 
 async def test_the_generated_file_is_one_a_real_trino_enforces_as_written(
@@ -88,16 +95,17 @@ async def test_the_generated_file_is_one_a_real_trino_enforces_as_written(
 ) -> None:
     """A grant on one table is a grant on that table. The names Apchi anchors are why: an
     unanchored pattern would have granted more than the Operator wrote."""
+    assert (await e2e_client.post("/api/v1/catalogs", json=BENCH)).status_code == 201
     await e2e_client.post("/api/v1/permissions", json=READ_NATION)
 
     record = await _apply(e2e_client)
 
     assert record["stage"] == "succeeded", record
     alice = Trino(host="127.0.0.1", port=forward.port, user="alice")
-    assert await _until(alice, "SELECT count(*) FROM tpch.tiny.nation", allowed=True)
+    assert await _until(alice, "SELECT count(*) FROM bench.tiny.nation", allowed=True)
     # Still allowed on everything else, because the catch-all is still there: staging a
     # grant records intent, it does not revoke anyone's access.
-    assert await _answers(alice, "SELECT count(*) FROM tpch.tiny.region")
+    assert await _answers(alice, "SELECT count(*) FROM bench.tiny.region")
     # And Apchi can still read what Verification needs, which is the reserved rule's job.
     apchi = Trino(host="127.0.0.1", port=forward.port, user=settings.trino_user)
     assert await _answers(apchi, "SELECT 1 FROM system.runtime.nodes LIMIT 1")
