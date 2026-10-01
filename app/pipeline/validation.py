@@ -78,9 +78,13 @@ _PROBE_CONFIG = {
 
 _CONFIG_PATH = "/etc/trino/config.properties"
 
-#: How much of a failed probe's log to quote back. Enough to carry Trino's error, little
-#: enough not to put a wall of startup output in an API response.
-_LOG_LINES = 40
+#: How much of a failed probe's log to read. Large because the interesting part is not at
+#: the end: a bootstrap failure prints its error block and then dumps every configuration
+#: property Trino knows, which on a coordinator is thousands of lines. Measured on a real
+#: probe -- the cause sat at line 705 of 4026, over three thousand lines from the end -- so
+#: a tail of any sane size finds the dump and misses the reason. What gets quoted back is
+#: still only the few lines that say what went wrong.
+_LOG_SCAN_LINES = 10_000
 
 LABELS = {ROLE_LABEL: VALIDATION_ROLE, "app.kubernetes.io/managed-by": "apchi"}
 
@@ -217,9 +221,12 @@ async def ephemeral_trino(
 def _why(logs: str) -> str:
     """The lines of a failed probe's log that say what went wrong."""
     interesting = [
-        line.strip()
+        stripped
         for line in logs.splitlines()
-        if "ERROR" in line or "Caused by" in line or "Configuration is invalid" in line
+        if ("ERROR" in line or "Caused by" in line or "Configuration is invalid" in line)
+        # Guice points at its own wiki beside the real cause, which is a line of the quote
+        # spent telling an Operator to read about dependency injection.
+        and not (stripped := line.strip()).startswith("http")
     ]
     return " / ".join(interesting[-3:])
 
@@ -250,7 +257,7 @@ async def _await_serving(
             # A probe that will not start is how a file-based Section fails Validation, and
             # its log is the only place the reason exists: Trino writes nothing to the
             # termination-log file Kubernetes would otherwise surface.
-            logs = await kubernetes.pod_logs(name, _LOG_LINES)
+            logs = await kubernetes.pod_logs(name, _LOG_SCAN_LINES)
             raise ValidationFailed(
                 [
                     ValidationFailure(
