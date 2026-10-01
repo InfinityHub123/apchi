@@ -802,6 +802,22 @@
         "title": "Outcome",
         "type": "string"
       },
+      "PermissionEnforcement": {
+        "additionalProperties": false,
+        "description": "Whether a Trino Identity may reach only what it has been granted.",
+        "properties": {
+          "enforced": {
+            "description": "False leaves the generated rules ending in a catch-all that allows everything to everyone, which is what a Cluster did before Apchi was installed.",
+            "title": "Enforced",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enforced"
+        ],
+        "title": "PermissionEnforcement",
+        "type": "object"
+      },
       "PreservedMappings": {
         "description": "The patterns a Cluster ran before Apchi, kept alive while its clients migrate.",
         "properties": {
@@ -2044,6 +2060,67 @@
         ]
       }
     },
+    "/api/v1/admin/permissions/enforcement": {
+      "get": {
+        "operationId": "get_enforcement_api_v1_admin_permissions_enforcement_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionEnforcement"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Whether grants are enforced",
+        "tags": [
+          "admin"
+        ]
+      },
+      "put": {
+        "description": "An Admin's decision, and an Admin's timing.\n\nTurning this on is what makes a grant mean something, and on a Cluster already serving\nusers it denies every identity without a grant everything it had. An Operator cannot do\nit -- they would be closing a Cluster by editing configuration -- and Apchi will not do\nit on their behalf. It stages nothing by itself: the Cluster gets it at the next Apply,\nwhich Review reports as costing no restart because Trino re-reads the rules on a timer.",
+        "operationId": "set_enforcement_api_v1_admin_permissions_enforcement_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PermissionEnforcement"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionEnforcement"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decide whether grants are enforced",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/applies": {
       "get": {
         "operationId": "list_applies_api_v1_applies_get",
@@ -3166,7 +3243,7 @@
     },
     "/api/v1/permissions/system": {
       "get": {
-        "description": "Visible on purpose. An Operator who cannot see these cannot understand why catalog\nDDL is refused to them, or why a grant does not narrow anyone's access yet.",
+        "description": "Visible on purpose. An Operator who cannot see these cannot understand why catalog\nDDL is refused to them -- or, depending on the posture an Admin has set, why a grant\ndoes not narrow anyone's access yet.",
         "operationId": "get_system_rules_api_v1_permissions_system_get",
         "responses": {
           "200": {
