@@ -60,3 +60,8 @@ packages = ["app"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = ["tier2: end-to-end tests requiring a Kubernetes cluster"]
+
+[dependency-groups]
+dev = [
+    "pytest-timeout>=2.3",
+]

@@ -36,7 +36,11 @@ jobs:
 
       # Real MongoDB and real Trino via Testcontainers; only Kubernetes is faked.
       - name: Tier 1 -- behavioural
-        run: uv run pytest tests/tier1 -q
+        # A per-test limit so a test that stops making progress names itself. Without it a
+        # suite that stalls looks like a suite that is working, and the job dies on the
+        # runner's own timeout with nothing to point at. Generous: the slowest test here
+        # genuinely restarts a Trino container.
+        run: uv run pytest tests/tier1 -q --timeout=300 --timeout-method=signal
 
   tier2:
     # Sharded because the suite is dominated by coordinator restarts, which are wall clock
