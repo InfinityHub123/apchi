@@ -12,6 +12,7 @@ from fastapi import APIRouter, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import (
+    AdminStoreDep,
     CandidateStoreDep,
     ClusterDep,
     OperatorMutationAllowed,
@@ -41,10 +42,11 @@ class PrivilegesWrite(BaseModel):
     response_model=SystemRules,
     summary="The rules Apchi owns and nobody may edit",
 )
-async def get_system_rules() -> SystemRules:
+async def get_system_rules(admin: AdminStoreDep) -> SystemRules:
     """Visible on purpose. An Operator who cannot see these cannot understand why catalog
-    DDL is refused to them, or why a grant does not narrow anyone's access yet."""
-    return section.SYSTEM_RULES
+    DDL is refused to them -- or, depending on the posture an Admin has set, why a grant
+    does not narrow anyone's access yet."""
+    return section.system_rules(await admin.load())
 
 
 @router.put("/system", summary="Refused: these rules are Apchi's", include_in_schema=False)

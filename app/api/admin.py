@@ -12,7 +12,7 @@ recorded in a Snapshot (invariant 9, section 14).
 import logging
 
 from fastapi import APIRouter, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import (
     AdminStoreDep,
@@ -100,6 +100,52 @@ async def set_preserved_mappings(
     validate_patterns(preserved.patterns)
     saved = await admin.save(AdminValues(preserved_certificate_mappings=preserved.patterns))
     return PreservedMappings(patterns=saved.preserved_certificate_mappings)
+
+
+class PermissionEnforcement(BaseModel):
+    """Whether a Trino Identity may reach only what it has been granted."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enforced: bool = Field(
+        description=(
+            "False leaves the generated rules ending in a catch-all that allows everything "
+            "to everyone, which is what a Cluster did before Apchi was installed."
+        )
+    )
+
+
+@router.get(
+    "/permissions/enforcement",
+    response_model=PermissionEnforcement,
+    summary="Whether grants are enforced",
+)
+async def get_enforcement(admin: AdminStoreDep) -> PermissionEnforcement:
+    return PermissionEnforcement(enforced=(await admin.load()).enforce_permissions)
+
+
+@router.put(
+    "/permissions/enforcement",
+    response_model=PermissionEnforcement,
+    summary="Decide whether grants are enforced",
+    dependencies=[MutationsEnabled],
+)
+async def set_enforcement(
+    enforcement: PermissionEnforcement, admin: AdminStoreDep
+) -> PermissionEnforcement:
+    """An Admin's decision, and an Admin's timing.
+
+    Turning this on is what makes a grant mean something, and on a Cluster already serving
+    users it denies every identity without a grant everything it had. An Operator cannot do
+    it -- they would be closing a Cluster by editing configuration -- and Apchi will not do
+    it on their behalf. It stages nothing by itself: the Cluster gets it at the next Apply,
+    which Review reports as costing no restart because Trino re-reads the rules on a timer.
+    """
+    values = await admin.load()
+    saved = await admin.save(
+        values.model_copy(update={"enforce_permissions": enforcement.enforced})
+    )
+    return PermissionEnforcement(enforced=saved.enforce_permissions)
 
 
 @router.post(

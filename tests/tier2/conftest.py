@@ -21,9 +21,11 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.adapters.kubernetes import PodState, RealKubernetes, RolloutState
+from app.adapters.mongo import Mongo
 from app.adapters.trino import Trino
 from app.config import Settings
 from app.main import create_app
+from app.pipeline.admin_values import AdminStore
 
 COORDINATOR = "deploy/trino-coordinator"
 TRINO_SERVICE = "svc/trino"
@@ -395,8 +397,8 @@ class ForwardedKubernetes:
 async def cluster_state(
     real_kubernetes: RealKubernetes, forward: PortForward, settings: Settings
 ) -> AsyncIterator[None]:
-    """Puts the shared cluster back after each test: both Secrets Apchi writes, and any
-    catalog left behind.
+    """Puts the shared cluster back after each test: the Secrets Apchi writes, the Admin
+    values it reads, and any catalog left behind.
 
     One fixture owns the whole reset because the order matters. The access-control
     Secret has to go back *before* stray catalogs are dropped: Apply delivers the rules
@@ -404,6 +406,14 @@ async def cluster_state(
     test that runs Apchi under a different identity to force a failure also revokes the
     real one's `owner` -- and the cleanup would then be denied its own DROP CATALOG.
     """
+    # Admin values outlive an Apply by design (invariant 2), which makes them exactly the
+    # kind of thing one test can leave behind for every test after it. A posture left closed
+    # would deny identities in unrelated tests, and the failure would look like anything but
+    # its cause.
+    mongo = Mongo(settings)
+    admin = AdminStore(mongo.database)
+    admin_before = await admin.load()
+
     secrets = (
         CATALOG_SEED_SECRET,
         ACCESS_CONTROL_SECRET,
@@ -421,6 +431,8 @@ async def cluster_state(
     try:
         yield
     finally:
+        await admin.save(admin_before)
+        await mongo.close()
         # Both are rule files the running coordinator will not pick up again on its own:
         # the access-control rules only on their refresh timer, the user-mapping rules never
         # -- UserMapping parses them when the authenticator is built. Either one changed

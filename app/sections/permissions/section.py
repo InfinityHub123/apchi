@@ -47,58 +47,81 @@ from app.sections.permissions.model import (
 logger = logging.getLogger(__name__)
 
 
-SYSTEM_RULES = SystemRules(
-    rules=[
-        SystemRule(
-            rule="Only Apchi may create or drop a catalog.",
-            why=(
-                "Catalogs are applied as DDL, and Apchi is the only identity with the owner "
-                "access mode that CREATE CATALOG needs. Without it an End User could create a "
-                "catalog Apchi does not know about, which the next Apply would then remove."
+def system_rules(admin: AdminValues) -> SystemRules:
+    """What Apchi owns in this file, and why -- as it stands right now.
+
+    The last of these changes with the posture, because what it says stops being true: an
+    Operator reading "everything no grant names is allowed" on a Cluster where grants are
+    enforced would be reading a lie.
+    """
+    return SystemRules(
+        rules=[
+            SystemRule(
+                rule="Only Apchi may create or drop a catalog.",
+                why=(
+                    "Catalogs are applied as DDL, and Apchi is the only identity with the owner "
+                    "access mode that CREATE CATALOG needs. Without it an End User could create a "
+                    "catalog Apchi does not know about, which the next Apply would then remove."
+                ),
             ),
-        ),
-        SystemRule(
-            rule="Apchi may read the verification catalog.",
-            why=(
-                "A tables block denies every table it does not match, to everyone. "
-                "Verification's smoke query, the running-query count and the resource group "
-                "read-back all read tables there, so without this rule an Apply would pass "
-                "only by luck of the catch-all, and removing that catch-all would cut Apchi "
-                "off from the Cluster it has to recover."
+            SystemRule(
+                rule="Apchi may read the verification catalog.",
+                why=(
+                    "A tables block denies every table it does not match, to everyone. "
+                    "Verification's smoke query, the running-query count and the resource group "
+                    "read-back all read tables there, so without this rule an Apply would pass "
+                    "only by luck of the catch-all, and removing that catch-all would cut Apchi "
+                    "off from the Cluster it has to recover."
+                ),
             ),
-        ),
-        SystemRule(
-            rule="Everyone may run queries; only you may see yours.",
-            why=(
-                "By default any authenticated End User can view and kill any query, and query "
-                "text routinely contains data. This block closes that. It is all-or-nothing: "
-                "once it exists, anything it does not match is denied, including the right to "
-                "run a query at all -- so the rule letting everyone execute is what keeps the "
-                "Cluster serving, and widening this block carelessly stops queries rather "
-                "than leaking data. Seeing your own queries needs no rule: Trino gives you "
-                "those whatever the rules say. Killing your own does, so Apchi writes one per "
-                "identity it knows about -- the identities named in a grant."
+            SystemRule(
+                rule="Everyone may run queries; only you may see yours.",
+                why=(
+                    "By default any authenticated End User can view and kill any query, and query "
+                    "text routinely contains data. This block closes that. It is all-or-nothing: "
+                    "once it exists, anything it does not match is denied, including the right to "
+                    "run a query at all -- so the rule letting everyone execute is what keeps the "
+                    "Cluster serving, and widening this block carelessly stops queries rather "
+                    "than leaking data. Seeing your own queries needs no rule: Trino gives you "
+                    "those whatever the rules say. Killing your own does, so Apchi writes one per "
+                    "identity it knows about -- the identities named in a grant."
+                ),
             ),
-        ),
-        SystemRule(
-            rule="Apchi may see everyone's queries.",
-            why=(
-                "The running-query count Review shows before a Rollout reads "
-                "system.runtime.queries, and Trino filters those rows by who may view them. "
-                "Without this Apchi would count only its own queries and report that a "
-                "Rollout destroys nothing."
+            SystemRule(
+                rule="Apchi may see everyone's queries.",
+                why=(
+                    "The running-query count Review shows before a Rollout reads "
+                    "system.runtime.queries, and Trino filters those rows by who may view them. "
+                    "Without this Apchi would count only its own queries and report that a "
+                    "Rollout destroys nothing."
+                ),
             ),
+            _POSTURE[admin.enforce_permissions],
+        ]
+    )
+
+
+#: The last system-owned rule: the posture an Admin has chosen.
+_POSTURE = {
+    False: SystemRule(
+        rule="Everything no grant names is allowed, for everyone.",
+        why=(
+            "What the Cluster did before Apchi wrote a tables block at all. Staging a grant "
+            "records intent; it does not revoke anyone's access. An Admin removes this when "
+            "the grants are complete, and only an Admin can: on a Cluster already serving "
+            "users, removing it denies every identity without a grant everything it had."
         ),
-        SystemRule(
-            rule="Everything no grant names is allowed, for everyone.",
-            why=(
-                "What the Cluster did before Apchi wrote a tables block at all. Staging a "
-                "grant records intent; it does not revoke anyone's access. Narrowing this is "
-                "a separate, deliberate decision."
-            ),
+    ),
+    True: SystemRule(
+        rule="An identity may reach only what it has been granted.",
+        why=(
+            "An Admin has decided the grants are complete and taken the catch-all away, so a "
+            "table no grant names is denied to everyone but Apchi. Apchi keeps its own read "
+            "access through its own rule, which is what leaves it able to verify and to "
+            "recover."
         ),
-    ]
-)
+    ),
+}
 
 
 def list_grants(stored: Resources) -> list[Grant]:
@@ -195,7 +218,12 @@ class PermissionsSection:
         instead of quietly keeping catalog DDL open to everyone.
         """
         return {
-            MOUNT_PATH: render_rules(settings.trino_user, desired, settings.verification_catalog)
+            MOUNT_PATH: render_rules(
+                settings.trino_user,
+                desired,
+                settings.verification_catalog,
+                admin.enforce_permissions,
+            )
         }
 
     def plan(self, desired: Resources, current: Resources) -> PermissionsPlan:

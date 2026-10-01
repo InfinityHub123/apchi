@@ -5,6 +5,14 @@ lifecycle -- they belong to the platform, they survive a rollback deliberately, 
 actually ran on a Cluster was the Snapshot merged with the Admin values current at the time.
 That is invariant 9, and this is its first implementation. See section 14.
 
+Whether permissions are *enforced* is one of these, and it belongs here for the reason the
+preserved mapping patterns do: it is a migration, not a preference. Staging grants on a
+Cluster that is already serving users takes nothing away, and the day the catch-all is
+removed every identity without a grant loses everything it had. That is a platform decision
+with an irreversible-feeling morning after it, so it is an Admin's to make and an Admin's to
+time -- an Operator should not be able to close a Cluster by editing configuration, and
+Apchi should not do it to them on an upgrade.
+
 The document is typed rather than free-form. Section 14's wider escape hatch -- arbitrary
 properties written into arbitrary files -- is still open; what is settled is this one value,
 so this one value is modelled.
@@ -25,6 +33,14 @@ class AdminValues(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    enforce_permissions: bool = Field(
+        default=False,
+        description=(
+            "Whether a Trino Identity may reach only what it has been granted. False -- the "
+            "default -- leaves the generated rules ending in a catch-all that allows "
+            "everything to everyone, which is what a Cluster did before Apchi was installed."
+        ),
+    )
     preserved_certificate_mappings: list[CertificateMappingWrite] = Field(
         default_factory=list,
         max_length=MAX_PRESERVED_MAPPINGS,

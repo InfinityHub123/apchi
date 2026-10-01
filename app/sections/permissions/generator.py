@@ -128,6 +128,7 @@ def render_rules(
     trino_user: str,
     grants: Resources | None = None,
     verification_catalog: str = "system",
+    enforced: bool = False,
 ) -> str:
     """The whole file: what Apchi owns, then the Operator's grants, then the catch-alls.
 
@@ -153,9 +154,11 @@ def render_rules(
             *(_grant_rule(staged[key]) for key in sorted(staged)),
             # Everything the grants do not name, for everyone -- which is what the Cluster
             # already did before Apchi wrote a tables block at all. Writing grants must not
-            # quietly become an act of revocation: narrowing this is a decision of its own,
-            # and it is not this file's to make.
-            {"privileges": list(_EVERY_PRIVILEGE)},
+            # quietly become an act of revocation, so this stays until an Admin decides the
+            # grants are complete and takes it away (§14). Removing it is the whole of what
+            # "enforced" means: there is nothing else to change, because Apchi's own access
+            # is granted by its own rule above rather than by this one.
+            *([] if enforced else [{"privileges": list(_EVERY_PRIVILEGE)}]),
         ],
         "queries": query_rules(trino_user, sorted({staged[key]["identity"] for key in staged})),
     }

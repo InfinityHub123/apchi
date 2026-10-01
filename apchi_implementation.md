@@ -1106,8 +1106,25 @@ The second is that **writing a grant must not be an act of revocation**. Before 
 a `tables` block at all, every End User could reach every table; emitting one flips that to
 deny-by-default in a single Apply. So the generated block ends with a catch-all allowing
 everything to everyone, and staging a grant records intent without taking anything away.
-Narrowing that — which is what makes grants mean something — is a separate and deliberate
-decision, because on a Cluster already serving users it locks every one of them out.
+
+**Removing that catch-all is an Admin value** (§14), not an Operator setting and not
+something Apchi does on an upgrade. It is the moment grants start meaning something, and on
+a Cluster already serving users it denies every identity without a grant everything it had —
+a platform decision with a difficult morning after it, which is the same reason the preserved
+mapping patterns of §13.3 are an Admin's. An Operator who could close a Cluster by editing
+configuration would be able to cause an outage with a permissions edit.
+
+Three things make the decision recoverable rather than a one-way door. It is a value, so
+reversing it is another value change and an ordinary Apply — proven on a real cluster by
+closing, watching an identity be denied, reopening, and watching it allowed again. It needs
+no restart, because Trino re-reads the rules on its timer. And Apchi's own access survives
+it, because the reserved rules grant that directly rather than relying on the catch-all,
+which is what leaves Apchi able to verify and to recover a Cluster it has just closed.
+
+What enforcement does *not* narrow is catalog visibility: the `catalogs` block still allows
+everyone, so an identity with no grant can see that a catalog exists while reaching nothing
+inside it. Names are not data, and narrowing that is a separate decision nobody has asked
+for.
 
 **No restart required** — Trino re-reads the rules file on its own timer, so a permission
 change reaches the Cluster without touching the pod (§7.2). It is the first Section whose
