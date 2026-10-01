@@ -88,6 +88,16 @@ def system_rules(admin: AdminValues) -> SystemRules:
                 ),
             ),
             SystemRule(
+                rule="Anyone may call system.runtime.kill_query.",
+                why=(
+                    "A file-based access control denies procedure execution unless a rule "
+                    "allows it, so Apchi's own file took this away from every End User the "
+                    "day it was installed -- including from somebody killing their own "
+                    "query. Granting the procedure does not decide whose query may be "
+                    "killed: the rule above still does that. No other procedure is granted."
+                ),
+            ),
+            SystemRule(
                 rule="Apchi may see everyone's queries.",
                 why=(
                     "The running-query count Review shows before a Rollout reads "

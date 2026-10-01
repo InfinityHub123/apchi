@@ -38,6 +38,16 @@ stringData:
           ]
         }
       ],
+      "procedures": [
+        {
+          "catalog": "^system$",
+          "schema": "^runtime$",
+          "procedure": "^kill_query$",
+          "privileges": [
+            "EXECUTE"
+          ]
+        }
+      ],
       "queries": [
         {
           "user": "^apchi$",

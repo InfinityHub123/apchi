@@ -1065,12 +1065,24 @@ against a running coordinator, and it is not what the format looks like:
   `system.runtime.queries`, and Trino filters those rows by who may view them. Without it
   Apchi would count its own queries and report that a Rollout destroys nothing.
 
-**The kill this block governs is Trino's own endpoint**, not `system.runtime.kill_query`. The
-procedure is a separate permission — `procedures` rules, which Apchi does not generate — and
-it is denied to everyone as soon as *any* file-based access control is installed. Apchi has
-written one since slice 1, so Apchi already took `kill_query` away from every End User,
-including from an owner killing their own query. Verified by contrast: with no access control
-at all, that same kill succeeds. That is a regression to fix, not a property to keep.
+**Killing a query happens two ways, and both are now covered.** Trino's own endpoint is
+governed by the block above. `CALL system.runtime.kill_query(...)` is governed by a
+`procedures` rule, which is a separate permission — and a file-based access control denies
+procedure execution unless a rule allows it. Apchi has written such a file since slice 1, so
+it had taken that procedure away from every End User, including from an owner killing their
+own query. Verified by contrast: with no access control at all, the same kill succeeds.
+
+Apchi now grants `EXECUTE` on that one procedure, to everyone, and nothing else. Granting it
+widens no authority: *whose* query may be killed is still the queries block's answer, verified
+on a running coordinator where one End User was refused another's query and allowed their own.
+Trino's runtime schema has neighbours and every connector brings procedures of its own;
+granting execute on all of them would be handing out what nobody has asked for or tested.
+
+What is **not** established is whether table procedures — `ALTER TABLE … EXECUTE optimize` and
+friends — go through these rules or the `tables` rules. `FileBasedSystemAccessControl` has a
+`checkCanExecuteTableProcedure`, but what it consults was not determined, and the probe image
+has no connector supporting one. So whether Apchi also took those away is an open question,
+and it deserves its own evidence rather than a speculative grant.
 
 This must be **visible** in the Permissions UI as a system-owned rule, not a silent default,
 for two reasons: Operators need to understand why they cannot see each other's queries and

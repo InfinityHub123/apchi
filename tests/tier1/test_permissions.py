@@ -143,7 +143,7 @@ async def test_the_system_owned_rules_are_readable(client: AsyncClient) -> None:
     them, or why a grant does not narrow anyone's access yet."""
     system = (await client.get("/api/v1/permissions/system")).json()
 
-    assert len(system["rules"]) == 5
+    assert len(system["rules"]) == 6
     assert all(rule["rule"] and rule["why"] for rule in system["rules"])
 
 
@@ -259,3 +259,26 @@ def test_nobody_is_granted_sight_of_their_own_queries() -> None:
     rules = json.loads(render_rules("apchi", {}, "system"))
 
     assert len(rules["queries"]) == 2
+
+
+def test_the_kill_query_procedure_is_granted_to_everyone() -> None:
+    """Apchi's own file took this away from every End User the day it was installed: a
+    file-based access control denies procedure execution unless a rule allows it."""
+    rules = json.loads(render_rules("apchi", {}, "system"))
+
+    assert rules["procedures"] == [
+        {
+            "catalog": "^system$",
+            "schema": "^runtime$",
+            "procedure": "^kill_query$",
+            "privileges": ["EXECUTE"],
+        }
+    ]
+
+
+def test_no_other_procedure_is_granted() -> None:
+    """Trino's runtime schema has neighbours and every connector brings procedures of its
+    own. Granting execute on all of them would be granting what nobody asked for."""
+    rules = json.loads(render_rules("apchi", {"k": READ_NATION}, "system"))
+
+    assert len(rules["procedures"]) == 1
