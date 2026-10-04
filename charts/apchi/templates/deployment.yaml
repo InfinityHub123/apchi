@@ -1,0 +1,134 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "apchi.fullname" . }}
+  labels: {{- include "apchi.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # Recreate, not RollingUpdate. An Apply is in-process state -- the runner holds the
+  # task and the Candidate lock -- so two Apchis would run two pipelines against one
+  # Trino. The old pod has to be gone before the new one starts.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {{- include "apchi.apiSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "apchi.apiSelectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}{{- toYaml . | nindent 8 }}{{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "apchi.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: apchi
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: APCHI_ENVIRONMENT
+              value: {{ .Values.environment | quote }}
+            - name: APCHI_MONGO_URI
+              value: {{ include "apchi.mongoUri" . | quote }}
+            - name: APCHI_MONGO_DATABASE
+              value: {{ .Values.mongodb.database | quote }}
+            # Apchi reads and writes only this namespace: the Cluster's own. Taken from
+            # the pod rather than a value, so it cannot disagree with where it runs.
+            - name: APCHI_KUBERNETES_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: APCHI_TRINO_HOST
+              value: {{ .Values.trino.host | quote }}
+            - name: APCHI_TRINO_PORT
+              value: {{ .Values.trino.port | int64 | quote }}
+            - name: APCHI_TRINO_USER
+              value: {{ .Values.trino.user | quote }}
+            - name: APCHI_COORDINATOR_DEPLOYMENT_NAME
+              value: {{ .Values.trino.coordinatorDeployment | quote }}
+            - name: APCHI_WORKER_DEPLOYMENT_NAME
+              value: {{ .Values.trino.workerDeployment | quote }}
+            - name: APCHI_TRINO_CONTAINER_NAME
+              value: {{ .Values.trino.containerName | quote }}
+            - name: APCHI_CATALOG_STORE_DIR
+              value: {{ .Values.trino.catalogStoreDir | quote }}
+            - name: APCHI_VERIFICATION_CATALOG
+              value: {{ .Values.trino.verificationCatalog | quote }}
+            - name: APCHI_CATALOG_SECRET_NAME
+              value: {{ .Values.secrets.catalogSeed | quote }}
+            - name: APCHI_ACCESS_CONTROL_SECRET_NAME
+              value: {{ .Values.secrets.accessControl | quote }}
+            - name: APCHI_EVENT_LISTENER_SECRET_NAME
+              value: {{ .Values.secrets.eventListener | quote }}
+            - name: APCHI_CERTIFICATE_MAPPING_SECRET_NAME
+              value: {{ .Values.secrets.certificateMapping | quote }}
+            - name: APCHI_CLIENT_CERTIFICATE_SECRET_NAME
+              value: {{ .Values.secrets.clientCertificates | quote }}
+            - name: APCHI_RESOURCE_GROUPS_SECRET_NAME
+              value: {{ .Values.secrets.resourceGroups | quote }}
+            - name: APCHI_EVENT_LISTENER_VOLUME_NAME
+              value: {{ .Values.volumes.eventListener | quote }}
+            - name: APCHI_CERTIFICATE_MAPPING_VOLUME_NAME
+              value: {{ .Values.volumes.certificateMapping | quote }}
+            - name: APCHI_RESOURCE_GROUPS_VOLUME_NAME
+              value: {{ .Values.volumes.resourceGroups | quote }}
+            - name: APCHI_ROLLOUT_TIMEOUT_SECONDS
+              value: {{ .Values.timeouts.rolloutSeconds | int64 | quote }}
+            - name: APCHI_VALIDATION_TIMEOUT_SECONDS
+              value: {{ .Values.timeouts.validationSeconds | int64 | quote }}
+            - name: APCHI_CERTIFICATE_EXPIRING_WITHIN_DAYS
+              value: {{ .Values.certificates.expiringWithinDays | int64 | quote }}
+            - name: APCHI_CLIENT_CERTIFICATE_MAX_BYTES
+              value: {{ .Values.certificates.maxBytes | int64 | quote }}
+            {{- with .Values.alertWebhookUrl }}
+            - name: APCHI_ALERT_WEBHOOK_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.logging.level }}
+            - name: APCHI_LOG_LEVEL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if not (kindIs "invalid" .Values.logging.json) }}
+            - name: APCHI_LOG_JSON
+              value: {{ .Values.logging.json | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            # /api/v1/health reports 503 while MongoDB is unreachable, which is exactly
+            # when Apchi must take no requests.
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 5
+            # Startup with nothing reachable spends PyMongo's own server-selection
+            # timeout before the app answers at all.
+            failureThreshold: 24
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 20
+            # A Validation holds the loop for up to validationSeconds doing nothing
+            # visible; a short budget here would kill it mid-Apply.
+            failureThreshold: {{ max 6 (div (int .Values.timeouts.validationSeconds) 20 | int) }}
+          {{- with .Values.resources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}

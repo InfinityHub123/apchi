@@ -1,0 +1,128 @@
+# Apchi configures ONE Trino cluster, and it has to run in that cluster's namespace:
+# a Validation reaches its ephemeral coordinator by pod IP, and it reads and writes
+# the Secrets the coordinator mounts. Install it where Trino already is.
+
+image:
+  repository: apchi
+  tag: dev
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# One replica, and Recreate rather than RollingUpdate. An Apply is in-process state --
+# the runner holds the task and the Candidate lock -- so a second Apchi would run a
+# second pipeline against one Trino. This is not a value you want to raise.
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  port: 8000
+
+serviceAccount:
+  create: true
+  # Defaults to the release name.
+  name: ""
+  annotations: {}
+
+# The Role grants only what Apchi calls: see templates/rbac.yaml, which says why for
+# each verb. Set create: false to bind your own.
+rbac:
+  create: true
+
+# np | test | prep | prod. Decides the log level and format unless logging overrides
+# them: DEBUG and console in np and test, INFO and JSON in prep and prod.
+environment: np
+
+logging:
+  # Null means "derive from environment". An explicit value always wins, so the level
+  # can be raised during an incident without a rebuild.
+  level: null
+  json: null
+
+trino:
+  # The coordinator's Service. Apchi issues catalog DDL and the Verification smoke
+  # query through it.
+  host: trino
+  port: 8080
+  # The identity Apchi issues DDL as, and the only identity granted `owner` on
+  # catalogs -- which is what restricts catalog DDL to Apchi.
+  user: apchi
+  # Validation reads the image from this Deployment, so the ephemeral coordinator is
+  # always the version the Cluster runs. A Rollout patches it.
+  coordinatorDeployment: trino-coordinator
+  # Compared against the worker count Trino reports, so the expectation adjusts when
+  # an Admin scales the Cluster.
+  workerDeployment: trino-worker
+  containerName: trino
+  # Where Trino keeps its dynamic catalog store. Nothing read-only may be mounted here
+  # or above it, or every CREATE CATALOG fails.
+  catalogStoreDir: /data/trino/catalogs
+  # The catalog the Verification smoke query runs against.
+  verificationCatalog: system
+
+mongodb:
+  # Apchi's own storage: every Snapshot and all in-flight state.
+  uri: ""
+  database: apchi
+  # true deploys a single-replica MongoDB on an emptyDir alongside Apchi, for trying
+  # Apchi out. It loses every Snapshot when its pod restarts. Point `uri` at a real
+  # MongoDB for anything else.
+  deploy: false
+  image: mongo:7
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 50m
+
+# The Secrets Apchi generates configuration into. These must be the names the Trino
+# deployment mounts -- Apchi writes them, Trino reads them, and nothing reconciles a
+# disagreement.
+secrets:
+  catalogSeed: trino-catalog-seed
+  accessControl: trino-access-control
+  eventListener: trino-event-listener
+  certificateMapping: trino-user-mapping
+  clientCertificates: trino-client-certificates
+  resourceGroups: trino-resource-groups
+
+# The volumes Apchi owns on the coordinator's pod template. Everything else there
+# belongs to the Admin, and Apchi never touches it.
+volumes:
+  eventListener: apchi-event-listener
+  certificateMapping: apchi-user-mapping
+  resourceGroups: apchi-resource-groups
+
+timeouts:
+  # How long a Rollout may take before the Apply fails. A coordinator that never comes
+  # back must not hang the pipeline.
+  rolloutSeconds: 600
+  # The hard limit on Validation. A coordinator that never starts serving fails
+  # Validation rather than hanging it.
+  validationSeconds: 300
+
+certificates:
+  # How close to expiry a Client Certificate has to be before Apchi calls it expiring.
+  # Renewal is manual for now, so this is the warning an Operator acts on.
+  expiringWithinDays: 30
+  # What a Kubernetes Secret may hold. An upload that would exceed it is refused with
+  # that reason rather than as a rejected write from the API server.
+  maxBytes: 1048576
+
+# Where a failed Auto Rollback is reported -- a Mattermost or Slack incoming webhook.
+# Empty means log only: an alert that cannot be delivered must never stop Maintenance
+# Mode engaging.
+alertWebhookUrl: ""
+
+# Anything not covered above, as APCHI_-prefixed names. An escape hatch for a setting
+# newer than this chart.
+extraEnv: []
+
+resources:
+  requests:
+    memory: 256Mi
+    cpu: 100m
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

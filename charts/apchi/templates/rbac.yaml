@@ -1,0 +1,61 @@
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "apchi.serviceAccountName" . }}
+  labels: {{- include "apchi.labels" . | nindent 4 }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- if .Values.rbac.create }}
+---
+# Namespaced, because Apchi reads and writes one namespace: the Cluster's own. Every
+# verb here is one Apchi calls, and nothing else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "apchi.fullname" . }}
+  labels: {{- include "apchi.labels" . | nindent 4 }}
+rules:
+  # The generated configuration lives in Secrets Apchi patches. `create` and `delete`
+  # are the ephemeral Secret a Validation mounts on its probe; `list` is how an Apchi
+  # that crashed mid-validation finds the Secrets it leaked.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, create, patch, delete]
+  # Read-only, and one check only: whether the access-control properties the Admin
+  # mounted carry a refresh period. Without it Trino reads the rules once at startup
+  # and Apchi would report a permission change the Cluster never sees. Apchi never
+  # writes a ConfigMap.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get]
+  # The ephemeral validation coordinator: created, watched, read and deleted. Its log
+  # is the only place a Trino that refuses to start explains itself.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, create, delete]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  # A Rollout patches the coordinator Deployment and watches its status. Apchi never
+  # creates or deletes a Deployment: it does not own the Trino deployment.
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "apchi.fullname" . }}
+  labels: {{- include "apchi.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "apchi.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "apchi.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

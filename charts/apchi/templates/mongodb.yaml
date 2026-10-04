@@ -1,0 +1,48 @@
+{{- if .Values.mongodb.deploy }}
+# For trying Apchi out. One replica, no authentication, and an emptyDir: restarting
+# this pod discards every Snapshot. Point mongodb.uri at a real MongoDB for anything
+# you intend to keep -- Apchi's own durability requirement is §18.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "apchi.mongoName" . }}
+  labels: {{- include "apchi.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "apchi.mongoSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "apchi.mongoSelectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: mongodb
+          image: {{ .Values.mongodb.image | quote }}
+          ports:
+            - containerPort: 27017
+              name: mongodb
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+          {{- with .Values.mongodb.resources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "apchi.mongoName" . }}
+  labels: {{- include "apchi.labels" . | nindent 4 }}
+spec:
+  ports:
+    - port: 27017
+      targetPort: mongodb
+      name: mongodb
+  selector:
+    {{- include "apchi.mongoSelectorLabels" . | nindent 4 }}
+{{- end }}
