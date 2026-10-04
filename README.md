@@ -29,6 +29,90 @@ What survives is a numbered, immutable **Snapshot** you can roll back to.
 Review tells you which of those a pending change is before you run it, and — if it restarts
 the coordinator — how many queries that will destroy.
 
+## How it fits together
+
+Apchi is one container with no state of its own. It sits between you and three things:
+MongoDB, where it keeps its Snapshots; the Kubernetes API, where Trino's configuration
+lives as Secrets; and Trino itself, which it talks to as an ordinary SQL client.
+
+```
+   you ──REST──▶ ┌───────┐ ──Snapshots, Candidate, Applies──▶ MongoDB
+                 │ Apchi │
+                 └───────┘ ──patches Secrets, restarts the ──▶ Kubernetes API
+                     │       coordinator, runs a probe pod         │
+                     │                                            │ the kubelet
+                     │ CREATE CATALOG, smoke query,               │ projects them
+                     │ running-query count                        ▼
+                     └──────────────────────────────▶ Trino coordinator
+                                                        reads its configuration
+                                                        from the mounted files
+```
+
+Nothing about Trino's deployment belongs to Apchi. The Admin owns the Deployment, the heap
+sizes and the image; Apchi owns six files inside it, delivered through Secrets the
+coordinator mounts. That is the whole coupling, and it is why installing Apchi is just
+installing Apchi — there is no sidecar, no operator and no webhook.
+
+Which means the one thing that has to agree is **names**: the Secrets Apchi writes must be
+the Secrets the coordinator mounts. The chart's `secrets.*` values are those names, and
+`deploy/trino-dev/` is a Trino that mounts exactly them.
+
+### What using it looks like
+
+Apchi's API is the interface — there is no UI yet, so this is `curl`, your HTTP client, or
+`localhost:8000/docs`. The shape is the same for every Section:
+
+```sh
+A=localhost:8000/api/v1
+J='content-type: application/json'
+
+# 1. Stage. Nothing reaches Trino.
+curl -X POST $A/catalogs -H "$J" -d '{"name":"sales","connector":"tpch","properties":{}}'
+curl -X POST $A/permissions -H "$J" \
+  -d '{"identity":"analyst","catalog":"sales","privileges":["SELECT"]}'
+
+# 2. See what an Apply would do, and what it would cost.
+curl $A/review
+
+# 3. Promote all of it, in one operation.
+curl -X POST $A/applies
+curl -N $A/applies/{id}/events     # follow the stages as they happen
+
+# 4. It is now a Snapshot, and a Snapshot is something you can go back to.
+curl $A/snapshots
+curl -X POST $A/candidate/rollback -H "$J" -d '{"snapshot":1}'
+```
+
+Edits accumulate in one shared Configuration Candidate, so review shows you every Section
+rather than only the one you touched — including anything a colleague staged. An Apply
+promotes the lot.
+
+## Install
+
+A Helm chart, in this repository. There is no published image yet, so build and push one
+first:
+
+```sh
+docker build -t your-registry/apchi:0.1.0 .
+docker push your-registry/apchi:0.1.0
+
+helm install apchi charts/apchi --namespace trino \
+  --set image.repository=your-registry/apchi --set image.tag=0.1.0 \
+  --set mongodb.uri=mongodb://your-mongo:27017
+```
+
+Install it in the namespace Trino runs in — Apchi reads and writes exactly one namespace, and
+a validation reaches its probe pod by pod IP. `charts/apchi/README.md` documents every value;
+the ones you are most likely to change are the Trino Deployment names, the six Secret names
+and your MongoDB.
+
+To try it on minikube or kind with nothing else set up, one command brings up a Trino, an
+Apchi and a MongoDB and tells you what to do next:
+
+```sh
+./scripts/quickstart.sh
+```
+
 ## Requirements
 
 - A Trino cluster on Kubernetes, deployed so Apchi can configure it.
@@ -42,10 +126,11 @@ the coordinator — how many queries that will destroy.
   coordinator and talks to it by pod IP, which is not reachable from a laptop; running Apchi
   outside the cluster makes every validation time out.
 
-## Getting started
+## Learning it
 
-[`docs/getting-started.md`](docs/getting-started.md) brings up Trino and Apchi on minikube or
-kind and takes one catalog through the whole loop. It takes about ten minutes.
+[`docs/getting-started.md`](docs/getting-started.md) takes one catalog through the whole loop
+— stage, review, validate, apply, read the Snapshot, roll back — with every command and
+response from a real run. About ten minutes.
 
 [`docs/concepts.md`](docs/concepts.md) explains the loop, the vocabulary and who owns what.
 
@@ -60,11 +145,14 @@ app/
   sections/   the six sections above
   adapters/   kubernetes, trino, mongo
   api/        the REST surface
+charts/
+  apchi/      the Helm chart
 deploy/
   trino-dev/  a Trino that satisfies Apchi's requirements, for development
-  apchi-dev/  Apchi and a MongoDB, for development
 docs/
   adr/        the decisions, and what was tried before them
+scripts/
+  quickstart.sh  the whole thing on a local cluster, one command
 ```
 
 `apchi_implementation.md` is the design and the reasoning behind every choice in it.

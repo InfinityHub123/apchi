@@ -8,8 +8,8 @@ Expect about ten minutes, most of it waiting for Trino to start.
 
 ## What you need
 
-- `kubectl`, and a cluster to point it at. minikube or kind is fine; this walkthrough uses
-  minikube.
+- `kubectl` and `helm`, and a cluster to point them at. minikube or kind is fine; this
+  walkthrough uses minikube.
 - Memory. `deploy/trino-dev/` gives every JVM `-Xmx2G`, and during a validation there are
   three of them — coordinator, worker, and the throwaway coordinator the validation starts —
   so leave 6 GB free rather than 4. Short of that the probe pod takes longer than the 300s
@@ -17,8 +17,22 @@ Expect about ten minutes, most of it waiting for Trino to start.
   serving" rather than as a memory problem.
 - `curl` and `python3`, to read the JSON.
 
-Everything lands in the `default` namespace. Apchi reads and writes one namespace — the
-cluster's own — and nothing outside it.
+Everything lands in a namespace called `apchi`. That one namespace holds Trino and Apchi
+both, because Apchi reads and writes exactly one namespace — the cluster's own — and nothing
+outside it.
+
+## The short version
+
+If you just want it running:
+
+```sh
+./scripts/quickstart.sh
+```
+
+That builds the image into your cluster, deploys the reference Trino, installs the Helm
+chart with a MongoDB alongside it, and prints what to do next. `--delete` removes all of it.
+The rest of this page is the same thing done a step at a time, which is worth reading once
+because each step explains what Apchi is doing.
 
 ## 1. A Trino to configure
 
@@ -29,8 +43,9 @@ period on it. `deploy/trino-dev/` is a Trino that satisfies all of them, small e
 on a laptop.
 
 ```sh
-kubectl apply -f deploy/trino-dev/
-kubectl wait --for=condition=ready pod -l app=trino --timeout=300s
+kubectl create namespace apchi
+kubectl apply -f deploy/trino-dev/ -n apchi
+kubectl wait --for=condition=ready pod -l app=trino -n apchi --timeout=300s
 ```
 
 `deploy/trino-dev/README.md` explains what each piece is for and what testing it on a real
@@ -40,29 +55,38 @@ deployment that does not satisfy the preconditions, and tells you which one fail
 
 ## 2. Apchi
 
-Apchi has to run **inside** the cluster. A validation starts a throwaway Trino coordinator
-and talks to it by pod IP, so an Apchi on your laptop reaches Kubernetes fine and then times
-out every validation.
+Apchi has to run **inside** the cluster, in the same namespace as Trino. A validation starts
+a throwaway Trino coordinator and talks to it by pod IP, so an Apchi on your laptop reaches
+Kubernetes fine and then times out every validation.
 
-Build the image into your cluster's daemon and deploy it:
+Build the image into your cluster's daemon:
 
 ```sh
 minikube image build -t apchi:dev .
-kubectl apply -f deploy/apchi-dev/
-kubectl rollout status deploy/apchi --timeout=300s
 ```
 
-On kind, build with Docker and load the result instead of the first line:
+On kind, build with Docker and load the result instead:
 
 ```sh
 docker build -t apchi:dev . && kind load docker-image apchi:dev
 ```
 
-That gives you Apchi, a MongoDB for its Snapshots, and the RBAC Role listing exactly which
-Kubernetes verbs Apchi uses. Reach the API through a port-forward:
+Then install the chart. `mongodb.deploy=true` runs a MongoDB alongside Apchi, which is fine
+for trying it and loses every Snapshot when its pod restarts; point `mongodb.uri` at a real
+one for anything else.
 
 ```sh
-kubectl port-forward svc/apchi 8000:8000 &
+helm install apchi charts/apchi -n apchi --set mongodb.deploy=true --wait
+```
+
+Everything else the chart needs already matches `deploy/trino-dev/`: the Trino Service is
+`trino`, the Deployments are `trino-coordinator` and `trino-worker`, and the six Secret names
+agree. `charts/apchi/README.md` documents every value and when you would change it.
+
+Reach the API through a port-forward:
+
+```sh
+kubectl -n apchi port-forward svc/apchi 8000:8000 &
 curl -s localhost:8000/api/v1/health
 ```
 
@@ -232,7 +256,7 @@ of that fails, Apchi puts the cluster back to the last Snapshot by itself and th
 The catalog is live in Trino:
 
 ```sh
-kubectl exec deploy/trino-coordinator -c trino -- trino --execute "SHOW CATALOGS"
+kubectl exec -n apchi deploy/trino-coordinator -c trino -- trino --execute "SHOW CATALOGS"
 ```
 
 ```
@@ -375,23 +399,30 @@ one exists — worth reading before you turn enforcement on.
 ## Clean up
 
 ```sh
-kubectl delete -f deploy/apchi-dev/
-kubectl delete -f deploy/trino-dev/
+./scripts/quickstart.sh --delete
 ```
 
-The dev MongoDB is an `emptyDir`, so this discards every Snapshot with it.
+or, if you installed it a step at a time:
+
+```sh
+helm uninstall apchi -n apchi
+kubectl delete namespace apchi
+```
+
+The MongoDB `mongodb.deploy` gives you is an `emptyDir`, so this discards every Snapshot
+with it.
 
 ## If something goes wrong
 
 **Everything times out, or `apchi` never becomes ready.** Check that it is MongoDB and not
 Apchi: `/api/v1/health` reports `503` while MongoDB is unreachable, and Apchi starts anyway
-rather than crashlooping, so `kubectl logs deploy/apchi` tells you which it is. With nothing
+rather than crashlooping, so `kubectl logs -n apchi deploy/apchi` tells you which it is. With nothing
 reachable at all, startup takes about a minute before it starts answering — PyMongo spends
 its own server-selection timeout first.
 
 **A validation fails with "the validation coordinator was not serving within 300s".** Either
 Apchi is running outside the cluster, where it cannot reach the probe's pod IP, or the node is
-out of memory and the probe never started. `kubectl get pods -l apchi.dev/role=trino-validation`
+out of memory and the probe never started. `kubectl get pods -n apchi -l apchi.dev/role=trino-validation`
 while a validation is running shows whether the pod is there and what state it is in.
 
 **An apply fails on a precondition.** Apchi refuses to touch a deployment it cannot configure
@@ -401,8 +432,8 @@ at a path Apchi owns, or a missing `security.refresh-period`. §16 of
 `apchi_implementation.md` explains each, and `deploy/trino-dev/` satisfies all of them.
 
 **Trino refuses to start after a rollout.** It should not get that far — validation starts a
-real coordinator with the same files first. If it does, `kubectl logs deploy/trino-coordinator
--c trino` has the reason, near the **start** of the log rather than the end: Trino dumps its
+real coordinator with the same files first. If it does, `kubectl logs -n apchi
+deploy/trino-coordinator -c trino` has the reason, near the **start** of the log rather than the end: Trino dumps its
 whole configuration after the error.
 
 ## Where to go next

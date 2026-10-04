@@ -1,0 +1,28 @@
+Apchi is installed as {{ include "apchi.fullname" . }} in namespace {{ .Release.Namespace }}.
+
+It configures the Trino at {{ .Values.trino.host }}:{{ .Values.trino.port }}, through the
+Deployments {{ .Values.trino.coordinatorDeployment }} and {{ .Values.trino.workerDeployment }}.
+
+Reach the API:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "apchi.fullname" . }} 8000:{{ .Values.service.port }}
+  curl -s localhost:8000/api/v1/health
+
+Then localhost:8000/docs is the interactive API reference, and docs/getting-started.md
+takes one catalog through review, validation, apply and rollback.
+
+{{- if .Values.mongodb.deploy }}
+
+NOTE: mongodb.deploy is on, so this release includes a single-replica MongoDB on an
+emptyDir. It loses every Snapshot when its pod restarts. Set mongodb.uri to a real
+MongoDB for anything you intend to keep.
+{{- end }}
+{{- if not .Values.rbac.create }}
+
+NOTE: rbac.create is off, so nothing granted this release access to Secrets, pods or the
+coordinator Deployment. Bind an equivalent Role to {{ include "apchi.serviceAccountName" . }}
+or every Apply will fail on the API server.
+{{- end }}
+
+Apchi has no authentication yet: every endpoint is open, the Admin ones included. Keep it
+reachable only by platform staff.
