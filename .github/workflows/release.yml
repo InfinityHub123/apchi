@@ -1,0 +1,95 @@
+name: Release
+
+# A tag is the only trigger. The version in the tag is the version everything gets --
+# the image tag, the chart version and the chart's appVersion -- so there is one
+# number to reason about and no way for them to disagree.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+", "v[0-9]+.[0-9]+.[0-9]+-*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, without the leading v (e.g. 0.1.0)"
+        required: true
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  publish:
+    name: Publish the image and the chart
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Work out the version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          # Both artifacts carry the same number, and the chart's version field is
+          # SemVer-validated by helm, so a malformed tag fails here rather than
+          # half-way through publishing.
+          echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' \
+            || { echo "not a SemVer version: $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # GHCR rejects an uppercase path, and this repository's owner has some.
+          echo "owner=$(echo '${{ github.repository_owner }}' | tr 'A-Z' 'a-z')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # arm64 as well as amd64: a lot of people run kind on an Apple laptop, and
+          # an amd64-only image there fails as an exec format error inside the pod
+          # rather than as a pull failure.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.version.outputs.owner }}/apchi:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ steps.version.outputs.owner }}/apchi:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Chart
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          owner="${{ steps.version.outputs.owner }}"
+          # The chart's committed version is a placeholder; the tag decides. Set both
+          # fields so an installed release reports the version it actually is.
+          helm package charts/apchi --version "$version" --app-version "$version" -d /tmp/chart
+          helm push "/tmp/chart/apchi-$version.tgz" "oci://$REGISTRY/$owner/charts"
+
+      - name: Say what was published
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          owner="${{ steps.version.outputs.owner }}"
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Published $version
+
+          \`\`\`sh
+          helm install apchi oci://$REGISTRY/$owner/charts/apchi --version $version \\
+            --namespace trino --set mongodb.uri=mongodb://your-mongo:27017
+          \`\`\`
+
+          Image: \`$REGISTRY/$owner/apchi:$version\` (linux/amd64, linux/arm64)
+          EOF

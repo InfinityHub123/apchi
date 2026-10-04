@@ -89,22 +89,21 @@ promotes the lot.
 
 ## Install
 
-A Helm chart, in this repository. There is no published image yet, so build and push one
-first:
+The chart and the image are published to GHCR on every release:
 
 ```sh
-docker build -t your-registry/apchi:0.1.0 .
-docker push your-registry/apchi:0.1.0
-
-helm install apchi charts/apchi --namespace trino \
-  --set image.repository=your-registry/apchi --set image.tag=0.1.0 \
+helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.1.0 \
+  --namespace trino \
   --set mongodb.uri=mongodb://your-mongo:27017
 ```
 
 Install it in the namespace Trino runs in — Apchi reads and writes exactly one namespace, and
-a validation reaches its probe pod by pod IP. `charts/apchi/README.md` documents every value;
-the ones you are most likely to change are the Trino Deployment names, the six Secret names
-and your MongoDB.
+a validation reaches its probe pod by pod IP. The chart defaults to the image it was released
+with, for `linux/amd64` and `linux/arm64`.
+
+`charts/apchi/README.md` documents every value; the ones you are most likely to change are the
+Trino Deployment names, the six Secret names and your MongoDB. To install from a clone instead,
+`helm install apchi charts/apchi` with the same values.
 
 To try it on minikube or kind with nothing else set up, one command brings up a Trino, an
 Apchi and a MongoDB and tells you what to do next:
