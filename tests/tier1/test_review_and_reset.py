@@ -53,3 +53,39 @@ async def test_the_candidate_survives_across_requests(client: AsyncClient) -> No
     await client.post("/api/v1/catalogs", json={**PG, "name": "hr"})
 
     assert [c["name"] for c in (await client.get("/api/v1/catalogs")).json()] == ["finance", "hr"]
+
+
+async def test_review_reports_staged_selectors(applying_client: AsyncClient) -> None:
+    """The Resource Groups Section stores its selectors as one list-valued resource, and a
+    diff entry has to carry that as readily as an object. Review 500'd on every Candidate
+    with a selector in it, which is every Candidate that makes a resource group do
+    anything."""
+    await applying_client.post(
+        "/api/v1/resource-groups", json={"path": "adhoc", "hard_concurrency_limit": 10}
+    )
+    await applying_client.put(
+        "/api/v1/resource-groups/selectors", json={"selectors": [{"group": "adhoc"}]}
+    )
+
+    response = await applying_client.get("/api/v1/review")
+
+    assert response.status_code == 200
+    changes = {
+        change["resource"]: change
+        for section in response.json()["sections"]
+        if section["section"] == "resource_groups"
+        for change in section["changes"]
+    }
+    assert changes["#selectors"]["after"] == [
+        {
+            "group": "adhoc",
+            "user": None,
+            "original_user": None,
+            "authenticated_user": None,
+            "user_group": None,
+            "source": None,
+            "query_type": None,
+            "query_text": None,
+            "client_tags": None,
+        }
+    ]

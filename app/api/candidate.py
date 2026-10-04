@@ -21,11 +21,18 @@ router = APIRouter(tags=["candidate"])
 ChangeKind = Literal["added", "changed", "removed"]
 
 
+#: What one resource looks like in a diff. A Section stores a resource as whatever shape
+#: that Section needs, and the Resource Groups Section stores its whole ordered selector
+#: list as one resource -- order is meaning there, so the list cannot be split into one
+#: resource per selector. A diff entry therefore has to carry a list as readily as an object.
+ResourceBody = dict[str, Any] | list[Any]
+
+
 class ResourceChange(BaseModel):
     resource: str
     change: ChangeKind
-    before: dict[str, Any] | None = None
-    after: dict[str, Any] | None = None
+    before: ResourceBody | None = None
+    after: ResourceBody | None = None
 
 
 class SectionDiff(BaseModel):

@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apchi
+spec:
+  replicas: 1
+  # An Apply is in-process state: the runner holds the task and the Candidate
+  # lock. Two Apchis would run two pipelines against one Cluster, so the old pod
+  # goes away before the new one arrives.
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: apchi}}
+  template:
+    metadata:
+      labels: {app: apchi}
+    spec:
+      serviceAccountName: apchi
+      containers:
+        - name: apchi
+          image: apchi:dev
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8000, name: http}]
+          env:
+            - {name: APCHI_ENVIRONMENT, value: np}
+            - {name: APCHI_MONGO_URI, value: "mongodb://apchi-mongo:27017"}
+            - {name: APCHI_TRINO_HOST, value: trino}
+            # Apchi reads and writes only this namespace: the Cluster's own.
+            - name: APCHI_KUBERNETES_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+          readinessProbe:
+            # /api/v1/health reports 503 while MongoDB is unreachable, which is
+            # exactly when Apchi must take no requests.
+            httpGet: {path: /api/v1/health, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /api/v1/health, port: http}
+            periodSeconds: 20
+            # A Validation holds the event loop for up to validation_timeout_seconds
+            # doing nothing visible; a short liveness budget would kill it mid-Apply.
+            failureThreshold: 6
+          resources:
+            requests: {memory: 256Mi, cpu: 100m}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: apchi
+spec:
+  selector: {app: apchi}
+  ports: [{port: 8000, targetPort: http, name: http}]
