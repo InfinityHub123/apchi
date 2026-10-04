@@ -8,9 +8,11 @@ reporting which configuration is live. Checking that the process restarted prove
 nothing about whether it is running what was asked for.
 """
 
+import asyncio
 import logging
+import time
 
-from app.adapters.trino import SOURCE
+from app.adapters.trino import SOURCE, Trino
 from app.sections import SectionName
 from app.sections.base import Cluster, Resources, SmokeQuery
 from app.sections.registry import REGISTERED
@@ -22,6 +24,43 @@ class VerificationFailed(Exception):
     """The Cluster did not adopt the configuration, or is not healthy."""
 
 
+#: How long the coordinator may take to start answering Apchi after a Rollout.
+#:
+#: Kubernetes calls a rollout complete the instant the new pod is ready, and the
+#: Service follows a fraction of a second later: the old pod leaves the endpoint
+#: list before the new one is programmed into it, so a request through the Service
+#: in that window is refused. Measured on a one-replica Cluster, the gap straddles
+#: the moment the Deployment reports complete -- the Deployment went to zero
+#: unavailable replicas at 07:34:28.8 and the Service refused the request at
+#: 07:34:29, recovering by 07:34:30. Verification's first request lands exactly
+#: there, and without this it fails an Apply that worked and triggers an Auto
+#: Rollback for a reason that would have cured itself.
+#:
+#: The Rollout has already proved Kubernetes considers the pod ready, so a
+#: coordinator still silent after this long is a broken coordinator, which is what
+#: Verification exists to catch.
+_RESPONSE_GRACE_SECONDS = 30.0
+_POLL_SECONDS = 1.0
+
+
+async def _await_response(trino: Trino) -> None:
+    """Returns once the coordinator answers and is past its own startup."""
+    deadline = time.monotonic() + _RESPONSE_GRACE_SECONDS
+    while True:
+        starting = await trino.is_starting()
+        if starting is False:
+            return
+        if time.monotonic() >= deadline:
+            if starting is None:
+                raise VerificationFailed(
+                    f"The Trino coordinator did not respond within {_RESPONSE_GRACE_SECONDS:.0f}s."
+                )
+            raise VerificationFailed(
+                f"The Trino coordinator was still starting {_RESPONSE_GRACE_SECONDS:.0f}s later."
+            )
+        await asyncio.sleep(_POLL_SECONDS)
+
+
 async def verify(
     cluster: Cluster,
     desired: dict[SectionName, Resources],
@@ -31,11 +70,7 @@ async def verify(
     trino = cluster.trino
 
     # 1. The coordinator is responding and past its own startup.
-    starting = await trino.is_starting()
-    if starting is None:
-        raise VerificationFailed("The Trino coordinator did not respond.")
-    if starting:
-        raise VerificationFailed("The Trino coordinator is still starting.")
+    await _await_response(trino)
 
     # 2. Workers have registered. The readiness probe only proves the JVM booted --
     #    a coordinator with zero workers passes it. The expectation comes from
