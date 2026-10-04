@@ -1,0 +1,29 @@
+# Development only. One replica, no authentication, and an emptyDir: restarting
+# this pod loses every Snapshot. Apchi's own durability requirement is §18.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apchi-mongo
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: apchi-mongo}}
+  template:
+    metadata:
+      labels: {app: apchi-mongo}
+    spec:
+      containers:
+        - name: mongo
+          image: mongo:7
+          ports: [{containerPort: 27017, name: mongo}]
+          volumeMounts: [{name: data, mountPath: /data/db}]
+          resources:
+            requests: {memory: 256Mi, cpu: 50m}
+      volumes: [{name: data, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: apchi-mongo
+spec:
+  selector: {app: apchi-mongo}
+  ports: [{port: 27017, targetPort: mongo, name: mongo}]

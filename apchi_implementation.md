@@ -1399,7 +1399,20 @@ volume over that path, because those are always mounted read-only, which is the 
 seed design rests on. Apchi therefore checks the volume's *kind*, not whether a volume is present
 at all.
 
-All three checks report every problem they find rather than the first, because an Admin fixing a
+**The third precondition: nothing but Apchi is mounted at the paths Apchi's Sections
+declare.** An Admin mounting their own file at one of them would be fighting Apchi over one
+file, and whichever of the two wrote last would win, silently. The list comes from the Section
+registry rather than from a list kept here, so a new file-owning Section is guarded without
+anyone remembering to add it.
+
+**The fourth precondition: `security.refresh-period` is set.** Without it Trino reads the
+access control rules once at startup and never again, so Apchi would write a permission
+change, report success, and the Cluster would never see it (§13.4). This is the one
+precondition that reads the Admin's Trino configuration rather than their pod template: Apchi
+follows whatever is mounted at `access-control.properties` back to its ConfigMap or Secret and
+reads the property out of it.
+
+Every check reports every problem it finds rather than the first, because an Admin fixing a
 manifest should see the whole list.
 
 ## Rollout mechanics

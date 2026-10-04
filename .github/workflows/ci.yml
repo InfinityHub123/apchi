@@ -42,6 +42,36 @@ jobs:
         # genuinely restarts a Trino container.
         run: uv run pytest tests/tier1 -q --timeout=300 --timeout-method=signal
 
+  image:
+    name: The image docs/getting-started.md tells you to build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Not pushed anywhere: this exists so the Dockerfile cannot rot while the
+      # getting-started walkthrough keeps telling a new user to build it. A broken
+      # Dockerfile is the first thing they would hit and the last thing anyone would
+      # notice.
+      - name: Build
+        run: docker build -t apchi:ci .
+      - name: It starts and serves
+        run: |
+          # No MongoDB, so /api/v1/health reports 503 by design -- any HTTP answer at all
+          # proves the image's dependencies resolved and the app imported.
+          #
+          # The wait is generous because startup with nothing reachable takes about a
+          # minute, measured: PyMongo spends its 30s server-selection timeout on the
+          # interrupted-Apply recovery, and the orphaned-validation sweep then spends its
+          # own on a Kubernetes that is not there. Both are meant to fail that way --
+          # starting degraded and reporting 503 beats crashlooping on a transient blip.
+          docker run -d --name apchi -p 8000:8000 -e APCHI_MONGO_URI=mongodb://127.0.0.1:1 apchi:ci
+          for _ in $(seq 120); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' localhost:8000/api/v1/health || true)
+            case "$code" in 200|503) echo "serving ($code)"; exit 0;; esac
+            sleep 1
+          done
+          docker logs apchi
+          exit 1
+
   tier2:
     # Sharded because the suite is dominated by coordinator restarts, which are wall clock
     # and not work -- one job spent seventeen minutes mostly waiting for pods. Each shard
