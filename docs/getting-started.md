@@ -76,8 +76,13 @@ for trying it and loses every Snapshot when its pod restarts; point `mongodb.uri
 one for anything else.
 
 ```sh
-helm install apchi charts/apchi -n apchi --set mongodb.deploy=true --wait
+helm install apchi charts/apchi -n apchi \
+  --set image.repository=apchi --set image.tag=dev \
+  --set mongodb.deploy=true --wait
 ```
+
+The two `image` settings are because you built the image locally; the chart otherwise
+defaults to the published one, which your cluster cannot pull a locally built tag from.
 
 Everything else the chart needs already matches `deploy/trino-dev/`: the Trino Service is
 `trino`, the Deployments are `trino-coordinator` and `trino-worker`, and the six Secret names

@@ -3,9 +3,11 @@
 Installs Apchi into the namespace its Trino runs in.
 
 ```sh
-helm install apchi charts/apchi -n trino \
-  --set mongodb.uri=mongodb://your-mongo:27017
+helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.1.0 \
+  -n trino --set mongodb.uri=mongodb://your-mongo:27017
 ```
+
+From a clone, `helm install apchi charts/apchi` with the same values.
 
 Apchi is one container with no state of its own, so the chart is a Deployment, a Service, a
 ServiceAccount and a namespaced Role. It installs nothing into Trino and watches nothing
@@ -50,7 +52,8 @@ secrets:
 
 | Value | Default | What it is |
 | --- | --- | --- |
-| `image.repository`, `image.tag` | `apchi`, `dev` | There is no published image yet; build it from the repository root |
+| `image.repository` | `ghcr.io/infinityhub123/apchi` | Published on every release for `linux/amd64` and `linux/arm64` |
+| `image.tag` | `""` | Empty means the chart's `appVersion`, so an install gets the image that chart version was released with rather than whatever `latest` is today |
 | `replicaCount` | `1` | Leave it. An Apply is in-process state, so a second Apchi runs a second pipeline against one Trino |
 | `environment` | `np` | `np`/`test`/`prep`/`prod`. Decides the log level and format: DEBUG and console in np and test, INFO and JSON in prep and prod |
 | `logging.level`, `logging.json` | `null` | Override the above. An explicit level can be raised during an incident without a rebuild |

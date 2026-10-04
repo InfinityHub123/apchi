@@ -3,8 +3,10 @@
 # the Secrets the coordinator mounts. Install it where Trino already is.
 
 image:
-  repository: apchi
-  tag: dev
+  repository: ghcr.io/infinityhub123/apchi
+  # Empty means the chart's appVersion, so an install gets the image the chart was
+  # released with rather than whatever `latest` happens to be today.
+  tag: ""
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
