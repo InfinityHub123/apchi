@@ -10,8 +10,11 @@ Expect about ten minutes, most of it waiting for Trino to start.
 
 - `kubectl`, and a cluster to point it at. minikube or kind is fine; this walkthrough uses
   minikube.
-- About 4 GB of memory free for the cluster. Trino's coordinator, one worker and the
-  throwaway coordinator a validation starts are all real JVMs.
+- Memory. `deploy/trino-dev/` gives every JVM `-Xmx2G`, and during a validation there are
+  three of them — coordinator, worker, and the throwaway coordinator the validation starts —
+  so leave 6 GB free rather than 4. Short of that the probe pod takes longer than the 300s
+  validation timeout to start, and the failure reads as "the validation coordinator was not
+  serving" rather than as a memory problem.
 - `curl` and `python3`, to read the JSON.
 
 Everything lands in the `default` namespace. Apchi reads and writes one namespace — the
