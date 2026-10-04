@@ -490,7 +490,7 @@ too. A Kubernetes merge patch merges the data map key by key, so removing a key 
 explicit null — without it a dropped Catalog is seeded straight back in at the next pod restart,
 which is the same silent, weeks-later failure in reverse. A consequence worth stating: a catalog
 that exists on the Cluster but not in the Candidate is removed from the seed by the next Apply.
-Bringing pre-existing catalogs under management is Adoption's job (§12), not Apply's.
+Bringing pre-existing catalogs under management is Adoption's job (§15), not Apply's.
 
 # 8. Verification
 
