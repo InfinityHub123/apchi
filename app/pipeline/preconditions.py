@@ -181,24 +181,31 @@ async def _refresh_period_problems(
 ) -> list[str]:
     """Whether the access-control properties Trino reads set a refresh period.
 
-    Found through the pod template rather than configured in Apchi: whichever volume is
-    mounted at Trino's `access-control.properties` is the file in force, and its content is
+    Found through the pod template rather than configured in Apchi: whichever volume
+    provides Trino's `access-control.properties` is the file in force, and its content is
     in the ConfigMap or Secret behind that volume. Apchi reads it and nothing else from
     there -- the rest of that file is the Admin's business.
+
+    "Provides" is the subtle part, and getting it wrong refused the official Trino chart.
+    A deployment may mount the file on its own, which is what Apchi's reference deployment
+    does, or mount the whole configuration directory that contains it, which is what the
+    official chart does and what most charts do. Both are the file in force, so both are
+    looked for -- and the more specific mount wins, because that is how the kubelet layers
+    them.
     """
     for container in spec.containers:
-        for mount in container.volume_mounts:
-            if mount.mount_path != PROPERTIES_PATH:
-                continue
+        mount = _provides_properties(container)
+        if mount is not None:
             volume = volumes.get(mount.name)
             if volume is None:
                 continue
-            content = await _content_of(kubernetes, volume, mount.sub_path)
+            content = await _content_of(kubernetes, volume, mount)
             if content is None:
                 return [
                     f"Container {container.name!r} mounts {mount.name!r} at "
-                    f"{PROPERTIES_PATH}, but Apchi cannot read what is in it, so it cannot "
-                    f"tell whether {REFRESH_PERIOD} is set."
+                    f"{mount.mount_path}, which should provide {PROPERTIES_PATH}, but Apchi "
+                    f"cannot read what is in it, so it cannot tell whether {REFRESH_PERIOD} "
+                    "is set."
                 ]
             if any(line.strip().startswith(f"{REFRESH_PERIOD}=") for line in content.splitlines()):
                 return []
@@ -209,13 +216,40 @@ async def _refresh_period_problems(
                 "see it."
             ]
     return [
-        f"Nothing is mounted at {PROPERTIES_PATH}, so Trino is not configured to read the "
-        "access-control rules Apchi writes. Every permission Apchi applies would be "
+        f"Nothing provides {PROPERTIES_PATH} -- neither that path nor the "
+        f"{_PROPERTIES_DIR} directory is mounted -- so Trino is not configured to read "
+        "the access-control rules Apchi writes. Every permission Apchi applies would be "
         "written and ignored."
     ]
 
 
-async def _content_of(kubernetes: KubernetesAdapter, volume: Volume, key: str | None) -> str | None:
+#: The directory `access-control.properties` sits in, as the deployment sees it.
+_PROPERTIES_DIR = str(PurePosixPath(PROPERTIES_PATH).parent)
+#: The key holding it, in either kind of mount: a ConfigMap key cannot contain a slash,
+#: so a directory mount names the file by its basename and nothing deeper is possible.
+_PROPERTIES_KEY = PurePosixPath(PROPERTIES_PATH).name
+
+
+def _provides_properties(container: Container) -> VolumeMount | None:
+    """The mount that puts `access-control.properties` in the container, if any.
+
+    Either the file itself or the directory holding it. The longest matching mount path
+    wins: a deployment that mounts the directory *and* overlays the single file is
+    serving the overlay, and so is Trino.
+    """
+    candidates = [
+        mount
+        for mount in container.volume_mounts
+        if mount.mount_path.rstrip("/") in (PROPERTIES_PATH, _PROPERTIES_DIR)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda mount: len(mount.mount_path.rstrip("/")))
+
+
+async def _content_of(
+    kubernetes: KubernetesAdapter, volume: Volume, mount: VolumeMount
+) -> str | None:
     """The file behind a mount, from whichever kind of volume carries it."""
     if volume.config_map_name is not None:
         data = await kubernetes.read_config_map(volume.config_map_name)
@@ -223,10 +257,18 @@ async def _content_of(kubernetes: KubernetesAdapter, volume: Volume, key: str | 
         data = await kubernetes.read_secret(volume.secret_name)
     else:
         return None
-    if key is not None:
-        return data.get(key)
-    # A whole-volume mount: the file is the key named like it.
-    return data.get(PurePosixPath(PROPERTIES_PATH).name)
+    if data is None:
+        return None
+    if mount.mount_path.rstrip("/") == PROPERTIES_PATH:
+        # The file mounted on its own: subPath names the key, and a whole-volume mount of
+        # a single file takes the key named like it.
+        return data.get(mount.sub_path or _PROPERTIES_KEY)
+    # The directory. A subPath here would select a sub-directory of the volume, which a
+    # ConfigMap cannot have, so there is nothing Apchi could resolve -- and saying so
+    # beats guessing at the key.
+    if mount.sub_path is not None:
+        return None
+    return data.get(_PROPERTIES_KEY)
 
 
 def pod_spec(raw: dict[str, Any]) -> PodSpec:

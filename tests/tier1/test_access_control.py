@@ -367,3 +367,85 @@ async def test_an_apply_is_refused_when_the_rules_would_never_be_reread(
 
     assert record["stage"] == "failed"
     assert "security.refresh-period" in (record["failure_reason"] or "")
+
+
+async def test_the_whole_configuration_directory_counts_as_mounting_the_properties(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """How the official Trino chart does it, and how most charts do it: one ConfigMap
+    mounted at /etc/trino rather than one mount per file. Apchi used to look only for the
+    exact path, so it refused the official chart for a file that was there all along."""
+    spec = healthy_pod_spec()
+    spec["containers"][0]["volumeMounts"] = [
+        mount
+        for mount in spec["containers"][0]["volumeMounts"]
+        if mount["mountPath"] != "/etc/trino/access-control.properties"
+    ]
+    spec["containers"][0]["volumeMounts"].append({"name": "config", "mountPath": "/etc/trino"})
+
+    await check(fake_kubernetes, pod_spec(spec), settings)
+
+
+async def test_a_directory_mount_without_the_refresh_period_is_still_refused(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """The looser matching must not become a way to pass the check without the property."""
+    fake_kubernetes.config_maps["trino-config"]["access-control.properties"] = (
+        "access-control.name=file\n"
+    )
+    spec = healthy_pod_spec()
+    spec["containers"][0]["volumeMounts"] = [
+        mount
+        for mount in spec["containers"][0]["volumeMounts"]
+        if mount["mountPath"] != "/etc/trino/access-control.properties"
+    ]
+    spec["containers"][0]["volumeMounts"].append({"name": "config", "mountPath": "/etc/trino"})
+
+    with pytest.raises(PreconditionFailed) as raised:
+        await check(fake_kubernetes, pod_spec(spec), settings)
+
+    assert "security.refresh-period" in str(raised.value)
+
+
+async def test_a_file_mount_overrides_the_directory_it_sits_in(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """A deployment doing both is serving the overlay, and so is Trino -- so the more
+    specific mount is the one Apchi must read. Here the directory's copy would pass and
+    the overlay's would not."""
+    fake_kubernetes.config_maps["trino-overlay"] = {
+        "access-control.properties": "access-control.name=file\n"
+    }
+    spec = healthy_pod_spec()
+    spec["containers"][0]["volumeMounts"] = [
+        mount
+        for mount in spec["containers"][0]["volumeMounts"]
+        if mount["mountPath"] != "/etc/trino/access-control.properties"
+    ]
+    spec["containers"][0]["volumeMounts"] += [
+        {"name": "config", "mountPath": "/etc/trino"},
+        {"name": "overlay", "mountPath": "/etc/trino/access-control.properties"},
+    ]
+    spec["volumes"].append({"name": "overlay", "configMap": {"name": "trino-overlay"}})
+
+    with pytest.raises(PreconditionFailed) as raised:
+        await check(fake_kubernetes, pod_spec(spec), settings)
+
+    assert "security.refresh-period" in str(raised.value)
+
+
+async def test_neither_the_file_nor_its_directory_mounted_is_refused(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    spec = healthy_pod_spec()
+    spec["containers"][0]["volumeMounts"] = [
+        mount
+        for mount in spec["containers"][0]["volumeMounts"]
+        if mount["mountPath"] != "/etc/trino/access-control.properties"
+    ]
+
+    with pytest.raises(PreconditionFailed) as raised:
+        await check(fake_kubernetes, pod_spec(spec), settings)
+
+    assert "written and ignored" in str(raised.value)
+    assert "/etc/trino" in str(raised.value)
