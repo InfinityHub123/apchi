@@ -10,7 +10,7 @@ Expect about ten minutes, most of it waiting for Trino to start.
 
 - `kubectl` and `helm`, and a cluster to point them at. minikube or kind is fine; this
   walkthrough uses minikube.
-- Memory. `deploy/trino-dev/` gives every JVM `-Xmx2G`, and during a validation there are
+- Memory. Every JVM gets `-Xmx2G`, and during a validation there are
   three of them — coordinator, worker, and the throwaway coordinator the validation starts —
   so leave 6 GB free rather than 4. Short of that the probe pod takes longer than the 300s
   validation timeout to start, and the failure reads as "the validation coordinator was not
@@ -39,19 +39,23 @@ because each step explains what Apchi is doing.
 Apchi does not install Trino. It configures a Trino that is already deployed, and expects
 that deployment to satisfy a handful of requirements: a catalog store it can write, the
 generated files mounted where Apchi will put them, and an access control file with a refresh
-period on it. `deploy/trino-dev/` is a Trino that satisfies all of them, small enough to run
-on a laptop.
+period on it. `charts/trino` is a Trino that satisfies all of them, small enough to run on
+a laptop.
 
 ```sh
 kubectl create namespace apchi
-kubectl apply -f deploy/trino-dev/ -n apchi
-kubectl wait --for=condition=ready pod -l app=trino -n apchi --timeout=300s
+helm install trino charts/trino -n apchi --set fullnameOverride=trino --set worker.replicas=1 --wait
 ```
 
-`deploy/trino-dev/README.md` explains what each piece is for and what testing it on a real
-cluster corrected. If you already run Trino on Kubernetes, read §7.1 and §16 of
-`apchi_implementation.md` before pointing Apchi at it: Apchi refuses to apply against a
-deployment that does not satisfy the preconditions, and tells you which one failed.
+That chart exists to make the preconditions impossible to get wrong, and CI proves it by
+rendering it and running Apchi's own precondition checker against the result.
+`charts/trino/README.md` lists each guarantee and says what the chart deliberately leaves
+out.
+
+If you already run Trino on Kubernetes, read §7.1 and §16 of `apchi_implementation.md`
+before pointing Apchi at it. Apchi refuses to apply against a deployment that does not
+satisfy the preconditions and tells you which one failed, so the worst case is a clear
+message rather than a lost change.
 
 ## 2. Apchi
 
@@ -84,9 +88,10 @@ helm install apchi charts/apchi -n apchi \
 The two `image` settings are because you built the image locally; the chart otherwise
 defaults to the published one, which your cluster cannot pull a locally built tag from.
 
-Everything else the chart needs already matches `deploy/trino-dev/`: the Trino Service is
-`trino`, the Deployments are `trino-coordinator` and `trino-worker`, and the six Secret names
-agree. `charts/apchi/README.md` documents every value and when you would change it.
+Everything else matches what `charts/trino` installed: the Trino Service is `trino`, the
+Deployments are `trino-coordinator` and `trino-worker`, and the six Secret names agree. That
+agreement is the only coupling between the two charts, and getting it wrong surfaces as a
+precondition failure rather than as a lost change. `charts/apchi/README.md` documents every value and when you would change it.
 
 Reach the API through a port-forward:
 
@@ -267,18 +272,16 @@ kubectl exec -n apchi deploy/trino-coordinator -c trino -- trino --execute "SHOW
 ```
 "sales"
 "system"
-"tpch"
 ```
 
-`tpch` is the catalog `deploy/trino-dev/` seeds, and it is still there — the apply added
-`sales` and took nothing away. But Apchi has no adoption yet, so `tpch` is a catalog Apchi
-does not know about, and that has a consequence worth understanding before you point Apchi at
-a cluster you care about: the durable copy of every catalog is a Secret Apchi owns and
-rewrites, and the coordinator reseeds its catalog store from that Secret at every start. So a
-catalog Apchi does not hold survives until the next coordinator restart and then disappears.
-Run `SHOW CATALOGS` again after step 8, which restarts the coordinator, and `tpch` is gone.
+`charts/trino` seeds no catalogs by default, so `sales` and `system` is the whole list. If
+you had seeded one with `bootstrap.catalogs`, or if you are pointing Apchi at a cluster that
+already has catalogs, there is a consequence worth understanding first: the durable copy of
+every catalog is a Secret Apchi owns and rewrites, and the coordinator reseeds its catalog
+store from that Secret at every start. So a catalog Apchi does not hold survives the apply,
+survives the day, and **disappears at the next coordinator restart**.
 
-Until adoption exists, stage everything you want to keep before the first restart.
+Until adoption exists (#82), stage everything you want to keep before the first restart.
 
 ## 7. The Snapshot
 
@@ -411,8 +414,13 @@ or, if you installed it a step at a time:
 
 ```sh
 helm uninstall apchi -n apchi
+helm uninstall trino -n apchi
 kubectl delete namespace apchi
 ```
+
+Deleting the namespace is what removes the Secrets Apchi writes into. `helm uninstall`
+deliberately leaves them: they hold the cluster's configuration and, for the catalog seed,
+its only durable copy.
 
 The MongoDB `mongodb.deploy` gives you is an `emptyDir`, so this discards every Snapshot
 with it.
@@ -434,7 +442,7 @@ while a validation is running shows whether the pod is there and what state it i
 correctly and names what is wrong — a `subPath` mount on a file it has to update, a missing
 catalog seed initContainer, a read-only volume over the catalog store, something else mounted
 at a path Apchi owns, or a missing `security.refresh-period`. §16 of
-`apchi_implementation.md` explains each, and `deploy/trino-dev/` satisfies all of them.
+`apchi_implementation.md` explains each, and `charts/trino` satisfies all of them.
 
 **Trino refuses to start after a rollout.** It should not get that far — validation starts a
 real coordinator with the same files first. If it does, `kubectl logs -n apchi

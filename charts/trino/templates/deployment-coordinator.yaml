@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "trino.coordinatorName" . }}
+  labels:
+    {{- include "trino.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "trino.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: coordinator
+  template:
+    metadata:
+      labels:
+        {{- include "trino.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: coordinator
+      {{- with .Values.coordinator.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        # Seeds the writable store directory from the Secret Apchi patches, before Trino
+        # reads it. FileCatalogStore enumerates the directory only in its constructor, so
+        # anything absent here is absent until the next pod start -- which is why the
+        # durable copy of every catalog lives in etcd and not on a volume.
+        #
+        # Apchi asserts this initContainer exists before every Apply. Without it the
+        # Cluster comes up with no catalogs at all.
+        - name: seed-catalogs
+          image: {{ include "trino.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["sh", "-c"]
+          args:
+            - mkdir -p {{ .Values.trino.catalogStoreDir }} &&
+              cp -L /data/trino/catalog-seed/*.properties {{ .Values.trino.catalogStoreDir }}/ 2>/dev/null || true;
+              ls -l {{ .Values.trino.catalogStoreDir }}
+          volumeMounts:
+            - {name: catalog-seed, mountPath: /data/trino/catalog-seed, readOnly: true}
+            - {name: catalog-store, mountPath: {{ .Values.trino.catalogStoreDir }}}
+      containers:
+        - name: trino
+          image: {{ include "trino.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.trino.httpPort }}
+              name: http
+          readinessProbe:
+            # Trino's own script. A Rollout's "complete" means every replica passed this,
+            # which is what makes Apchi's Verification talk to a coordinator that answers.
+            exec: {command: ["/usr/lib/trino/bin/health-check"]}
+            initialDelaySeconds: {{ .Values.coordinator.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.coordinator.readinessProbe.periodSeconds }}
+            failureThreshold: {{ .Values.coordinator.readinessProbe.failureThreshold }}
+          volumeMounts:
+            # The Admin's own files, one mount each. Deliberately NOT one mount of the
+            # whole /etc/trino directory: Apchi mounts a single file inside it
+            # (user-mapping.json), and a subPath mount at a path inside a ConfigMap
+            # directory mount fails the container outright -- runc has no file to bind
+            # onto. Verified; see #93.
+            - {name: config, mountPath: /etc/trino/config.properties, subPath: coordinator-config.properties}
+            - {name: config, mountPath: /etc/trino/node.properties, subPath: node.properties}
+            - {name: config, mountPath: /etc/trino/jvm.config, subPath: jvm.config}
+            - {name: config, mountPath: /etc/trino/catalog-store.properties, subPath: catalog-store.properties}
+            - {name: config, mountPath: /etc/trino/access-control.properties, subPath: access-control.properties}
+            # Apchi-managed. Whole volume, never subPath: a subPath mount is frozen at pod
+            # creation, so the kubelet would never project a rewritten rules file and a
+            # permission change would be reported as applied and never arrive (§16).
+            - {name: access-control, mountPath: /etc/trino/access-control, readOnly: true}
+            # Apchi's mount, pre-created under Apchi's own volume name. The coordinator
+            # is configured to read this file at startup and Trino refuses to boot when it
+            # is missing, so it cannot wait for Apchi's first Apply -- and Apchi's
+            # preconditions require the volume at this path to be the one Apchi manages, so
+            # the name is what lets the Admin create it and Apchi take it over.
+            #
+            # subPath, and correctly so: the rules are read once when the authenticator is
+            # built, so there is nothing for the kubelet to keep current and a Rollout is
+            # what makes a change take.
+            - {name: {{ .Values.volumes.certificateMapping }}, mountPath: /etc/trino/user-mapping.json, subPath: user-mapping.json, readOnly: true}
+            # Whole volume, never subPath: a certificate uploaded after this pod started
+            # must appear here without a restart, and a subPath mount never updates
+            # (ADR-0005).
+            - {name: client-certificates, mountPath: /etc/trino/certs, readOnly: true}
+            # Writable, and an emptyDir rather than a Secret or ConfigMap: Trino writes
+            # this directory itself and those mounts are always read-only, so every
+            # CREATE CATALOG would fail. Apchi asserts that too.
+            - {name: catalog-store, mountPath: {{ .Values.trino.catalogStoreDir }}}
+          {{- with .Values.coordinator.resources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - {name: config, configMap: {name: {{ include "trino.fullname" . }}-config}}
+        - {name: access-control, secret: {secretName: {{ .Values.secrets.accessControl }}}}
+        - {name: {{ .Values.volumes.certificateMapping }}, secret: {secretName: {{ .Values.secrets.certificateMapping }}}}
+        - {name: catalog-seed, secret: {secretName: {{ .Values.secrets.catalogSeed }}}}
+        - {name: client-certificates, secret: {secretName: {{ .Values.secrets.clientCertificates }}}}
+        # Ephemeral by design. Durability lives in the catalog seed Secret, not here.
+        - {name: catalog-store, emptyDir: {}}
+        # No volume for the resource-groups or event-listener Secrets. For both of them the
+        # absence of the mount is how "none configured" is expressed -- Trino refuses to
+        # start if a file it was told to read is missing -- so Apchi adds and removes those
+        # volumes itself. They are the only part of this pod template Apchi writes.
+      {{- with .Values.coordinator.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.coordinator.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.coordinator.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
