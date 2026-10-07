@@ -1,0 +1,13 @@
+apiVersion: v2
+name: trino
+description: A Trino cluster Apchi can configure
+type: application
+version: 0.1.0
+appVersion: "483"
+home: https://github.com/InfinityHub123/apchi
+sources:
+  - https://github.com/InfinityHub123/apchi
+  - https://github.com/trinodb/trino
+keywords:
+  - trino
+  - apchi

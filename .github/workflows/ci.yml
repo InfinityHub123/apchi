@@ -39,11 +39,16 @@ jobs:
       # Settings ignores so Apchi silently runs on a default, and a value it will not
       # parse -- Helm rendered 1048576 as "1.048576e+06" the first time this was
       # written, which Pydantic refuses outright.
-      - name: Helm chart renders an environment Apchi accepts
+      - name: Helm charts are ones Apchi accepts
         run: |
           curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
           helm lint charts/apchi --set mongodb.deploy=true
+          helm lint charts/trino
           uv run python scripts/check_chart_env.py
+          # Renders the Trino chart and runs Apchi's own preconditions against it, rather
+          # than a second opinion about what they mean. A chart that ships with Apchi must
+          # not be able to drift into something Apchi refuses to Apply against.
+          uv run python scripts/check_trino_chart.py
 
       # Real MongoDB and real Trino via Testcontainers; only Kubernetes is faked.
       - name: Tier 1 -- behavioural

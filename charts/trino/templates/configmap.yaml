@@ -1,0 +1,55 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "trino.fullname" . }}-config
+  labels: {{- include "trino.labels" . | nindent 4 }}
+data:
+  # catalog.store selects the store and belongs HERE. In catalog-store.properties it is
+  # rejected with "Configuration property 'catalog.store' was not used".
+  coordinator-config.properties: |
+    coordinator=true
+    node-scheduler.include-coordinator=false
+    http-server.http.port={{ .Values.trino.httpPort }}
+    discovery.uri={{ include "trino.discoveryUri" . }}
+    catalog.management=dynamic
+    catalog.store=file
+    {{ include "trino.userMappingProperty" . }}=/etc/trino/user-mapping.json
+    {{- range .Values.trino.additionalCoordinatorProperties }}
+    {{ . }}
+    {{- end }}
+  worker-config.properties: |
+    coordinator=false
+    http-server.http.port={{ .Values.trino.httpPort }}
+    discovery.uri={{ include "trino.discoveryUri" . }}
+    catalog.management=dynamic
+    {{- range .Values.trino.additionalWorkerProperties }}
+    {{ . }}
+    {{- end }}
+  node.properties: |
+    node.environment={{ .Values.trino.environment }}
+  jvm.config: |
+    -server
+    -Xmx{{ .Values.trino.jvm.maxHeapSize }}
+    -XX:+UseG1GC
+    -XX:+ExitOnOutOfMemoryError
+    -XX:-OmitStackTraceInFastThrow
+    -Djdk.attach.allowAttachSelf=true
+    {{- range .Values.trino.jvm.extraArgs }}
+    {{ . }}
+    {{- end }}
+  # Read as etc/catalog-store.properties, relative to the launcher's working directory
+  # /data/trino, whose `etc` symlinks to /etc/trino. The image's WorkingDir metadata says
+  # `/`, which is the wrong answer -- this was established on a running cluster. The file
+  # takes only catalog.config-dir and catalog.read-only.
+  catalog-store.properties: |
+    catalog.config-dir={{ .Values.trino.catalogStoreDir }}
+  # access-control.name belongs only here. In config.properties it is rejected with
+  # "Did you mean to use 'access-control.config-files'?"
+  #
+  # security.refresh-period is what makes Apchi's whole-volume mount worth anything:
+  # without it Trino reads the rules once at startup and a Secret the kubelet faithfully
+  # keeps current is never re-read. Apchi refuses to Apply without it.
+  access-control.properties: |
+    access-control.name=file
+    security.config-file=/etc/trino/access-control/rules.json
+    security.refresh-period={{ .Values.trino.securityRefreshPeriod }}

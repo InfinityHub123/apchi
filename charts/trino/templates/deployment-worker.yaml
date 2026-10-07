@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "trino.workerName" . }}
+  labels:
+    {{- include "trino.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      {{- include "trino.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "trino.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      {{- with .Values.worker.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: trino
+          image: {{ include "trino.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.trino.httpPort }}
+              name: http
+          readinessProbe:
+            # The worker count Apchi's Verification expects comes from this Deployment's
+            # ready replicas, so the probe is what decides whether a worker counts.
+            exec: {command: ["/usr/lib/trino/bin/health-check"]}
+            initialDelaySeconds: {{ .Values.worker.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.worker.readinessProbe.periodSeconds }}
+            failureThreshold: {{ .Values.worker.readinessProbe.failureThreshold }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/trino/config.properties, subPath: worker-config.properties}
+            - {name: config, mountPath: /etc/trino/node.properties, subPath: node.properties}
+            - {name: config, mountPath: /etc/trino/jvm.config, subPath: jvm.config}
+            # Workers need the certificates: a connector presenting one to a data source
+            # runs here. They need nothing else Apchi writes -- catalogs reach a worker
+            # through the coordinator's announcement, and access control, resource groups,
+            # event listeners and user mapping are all coordinator-only. That asymmetry is
+            # why a catalog or permission change restarts nothing (§7.4).
+            - {name: client-certificates, mountPath: /etc/trino/certs, readOnly: true}
+          {{- with .Values.worker.resources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - {name: config, configMap: {name: {{ include "trino.fullname" . }}-config}}
+        - {name: client-certificates, secret: {secretName: {{ .Values.secrets.clientCertificates }}}}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,33 @@
+Trino {{ .Chart.AppVersion }} is installed as {{ include "trino.fullname" . }} in namespace {{ .Release.Namespace }}.
+
+  coordinator  {{ include "trino.coordinatorName" . }}
+  workers      {{ include "trino.workerName" . }} ({{ .Values.worker.replicas }})
+  endpoint     {{ include "trino.discoveryUri" . }}
+
+Install Apchi beside it, in this namespace, with names that match:
+
+  helm install apchi oci://ghcr.io/infinityhub123/charts/apchi \
+    --namespace {{ .Release.Namespace }} \
+    --set trino.host={{ include "trino.fullname" . }} \
+    --set trino.coordinatorDeployment={{ include "trino.coordinatorName" . }} \
+    --set trino.workerDeployment={{ include "trino.workerName" . }} \
+    --set mongodb.uri=mongodb://your-mongo:27017
+
+Apchi refuses to Apply against a deployment it cannot configure correctly and names what is
+wrong, so a mismatch above surfaces as a precondition failure rather than as a lost change.
+
+{{- if not .Values.bootstrap.create }}
+
+NOTE: bootstrap.create is off, so this release created none of the Secrets Apchi writes
+into. Trino will not start until the access-control rules and the user-mapping file exist.
+{{- end }}
+{{- if .Values.bootstrap.catalogs }}
+
+NOTE: bootstrap.catalogs seeded {{ len .Values.bootstrap.catalogs }} catalog(s). Apchi does
+not know about them, and Apchi's first Apply rewrites the seed -- so they will disappear at
+the following coordinator restart. Stage them in Apchi to keep them.
+{{- end }}
+
+This chart is one coordinator, by design rather than by omission: Trino cannot drain a
+coordinator, so a configuration change that needs a restart destroys every running query.
+See ADR-0003.

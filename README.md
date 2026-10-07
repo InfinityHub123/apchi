@@ -101,6 +101,17 @@ Install it in the namespace Trino runs in — Apchi reads and writes exactly one
 a validation reaches its probe pod by pod IP. The chart defaults to the image it was released
 with, for `linux/amd64` and `linux/arm64`.
 
+If you do not already run Trino on Kubernetes, `charts/trino` is one Apchi can configure:
+
+```sh
+helm install trino charts/trino -n trino --set fullnameOverride=trino
+```
+
+It is not a general-purpose Trino chart — the official `trino/trino` is that — but it makes
+the things Apchi requires impossible to get wrong, and CI proves it by running Apchi's own
+preconditions against what it renders. `charts/trino/README.md` says what it guarantees and
+what it deliberately leaves out.
+
 `charts/apchi/README.md` documents every value; the ones you are most likely to change are the
 Trino Deployment names, the six Secret names and your MongoDB. To install from a clone instead,
 `helm install apchi charts/apchi` with the same values.
@@ -114,9 +125,10 @@ Apchi and a MongoDB and tells you what to do next:
 
 ## Requirements
 
-- A Trino cluster on Kubernetes, deployed so Apchi can configure it.
-  `deploy/trino-dev/` is an executable reference for what that means; the requirements
-  themselves are §7.1 and §16 of `apchi_implementation.md`. Apchi is developed and tested
+- A Trino cluster on Kubernetes, deployed so Apchi can configure it. `charts/trino` is one,
+  and CI proves it by running Apchi's own precondition checker against what that chart
+  renders. The requirements themselves are §7.1 and §16 of `apchi_implementation.md`, and
+  Apchi names which one failed rather than half-applying. Apchi is developed and tested
   against Trino **483**, and several things it relies on were established by reading that
   version rather than its documentation — another version may well work, but no other
   version has been tried.
@@ -145,9 +157,10 @@ app/
   adapters/   kubernetes, trino, mongo
   api/        the REST surface
 charts/
-  apchi/      the Helm chart
+  apchi/      Apchi itself
+  trino/      a Trino that Apchi can configure
 deploy/
-  trino-dev/  a Trino that satisfies Apchi's requirements, for development
+  trino-dev/  the same Trino as raw manifests, for the end-to-end tests
 docs/
   adr/        the decisions, and what was tried before them
 scripts/

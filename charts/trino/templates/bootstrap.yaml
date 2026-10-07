@@ -1,0 +1,103 @@
+{{- if .Values.bootstrap.create }}
+{{/*
+The six Secrets Apchi writes into, created on **install only**.
+
+`pre-install` and nothing else is the whole point. Apchi owns the content of these Secrets
+from its first Apply, and a Secret tracked in the release would be reverted by the next
+`helm upgrade` -- a permission change silently undone by an unrelated chart bump, which is
+exactly the class of failure Apchi exists to prevent. A pre-install hook runs once, is not
+part of the release, and is never reconciled.
+
+`hook-delete-policy` is deliberately absent: the default keeps the resource, and these must
+outlive the hook. `helm uninstall` therefore leaves them behind, which is correct -- they
+hold the Cluster's configuration and, in the catalog seed's case, its only durable copy.
+Remove them deliberately or not at all.
+
+Two of them cannot be empty. Trino reads the access-control rules and the user-mapping file
+while loading, and refuses to boot if either is missing -- so the Cluster could not start
+and wait for Apchi to write them. The content here is the same fail-open starting point
+Apchi generates for an empty configuration: every identity keeps the access it had, and
+catalog DDL is already restricted to Apchi.
+*/}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.secrets.accessControl }}
+  labels: {{- include "trino.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install
+    helm.sh/resource-policy: keep
+stringData:
+  rules.json: |
+{{ .Files.Get "files/rules.json" | indent 4 }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.secrets.certificateMapping }}
+  labels: {{- include "trino.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install
+    helm.sh/resource-policy: keep
+stringData:
+  user-mapping.json: |
+{{ .Files.Get "files/user-mapping.json" | indent 4 }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.secrets.catalogSeed }}
+  labels: {{- include "trino.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install
+    helm.sh/resource-policy: keep
+{{- if .Values.bootstrap.catalogs }}
+stringData:
+  {{- range $name, $properties := .Values.bootstrap.catalogs }}
+  {{ $name }}.properties: |
+{{ $properties | indent 4 }}
+  {{- end }}
+{{- else }}
+stringData: {}
+{{- end }}
+---
+{{/*
+Three that start empty, because for each of them emptiness is a meaning rather than an
+absence of configuration.
+
+The certificate Secret mounts as an empty directory, so "no certificates" needs no mount
+juggling (ADR-0005). The resource-groups and event-listener Secrets carry no mount at all
+until something is configured: Trino refuses to start if a file it was told to read is
+missing, so the absence of the mount is how "none configured" is expressed -- which is why
+Apchi owns those volumes on the pod template and this chart does not mount them.
+*/}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.secrets.clientCertificates }}
+  labels: {{- include "trino.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install
+    helm.sh/resource-policy: keep
+stringData: {}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.secrets.resourceGroups }}
+  labels: {{- include "trino.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install
+    helm.sh/resource-policy: keep
+stringData: {}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.secrets.eventListener }}
+  labels: {{- include "trino.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install
+    helm.sh/resource-policy: keep
+stringData: {}
+{{- end }}

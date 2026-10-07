@@ -1,0 +1,11 @@
+{
+  "rules": [
+    {
+      "pattern": "^apchi$",
+      "user": "apchi"
+    },
+    {
+      "pattern": "(.*)"
+    }
+  ]
+}

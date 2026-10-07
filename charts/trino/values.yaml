@@ -1,0 +1,128 @@
+# A Trino cluster Apchi can configure.
+#
+# This is not a general-purpose Trino chart and does not try to be one -- the official
+# trino/trino chart is that. What this chart is for is the handful of things Apchi asserts
+# before every Apply (§16) and the three Trino settings that make dynamic catalogs work
+# (§7.1), arranged so they cannot be got wrong. Heap, replicas, scheduling and TLS are
+# still yours, and anything this chart does not expose is a gap in the chart rather than a
+# decision Apchi made for you.
+
+# Apchi is configured with the coordinator and worker Deployment names, so pinning the
+# release's base name is what lets one Apchi configuration work whatever the release is
+# called. Default: the release name.
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: trinodb/trino
+  # Apchi is developed and tested against 483. Several behaviours it relies on were
+  # established by reading that version rather than its documentation.
+  tag: ""  # defaults to the chart's appVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+coordinator:
+  # Trino cannot drain a coordinator, so there is exactly one and a Rollout destroys every
+  # running query. That is a property of Trino, not a limit of this chart (ADR-0003).
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  # Trino's own health-check script. It is what makes a Rollout's "complete" mean the
+  # coordinator is answering, which Apchi's Verification depends on.
+  readinessProbe:
+    initialDelaySeconds: 15
+    periodSeconds: 5
+    failureThreshold: 30
+
+worker:
+  replicas: 2
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  readinessProbe:
+    initialDelaySeconds: 15
+    periodSeconds: 5
+    failureThreshold: 30
+
+service:
+  type: ClusterIP
+  port: 8080
+
+trino:
+  # node.environment. Lowercase alphanumeric and underscores only; Trino rejects the rest.
+  environment: production
+  httpPort: 8080
+
+  # Where Trino keeps its dynamic catalog store. It must be writable by the non-root
+  # `trino` user and nothing read-only may be mounted at or above it, or every CREATE
+  # CATALOG fails. /data/trino is trino-owned in the image, which is why the default
+  # lives there and not under /var.
+  catalogStoreDir: /data/trino/catalogs
+
+  # How often Trino re-reads the access-control rules. Not optional: without it the rules
+  # are read once at startup, and Apchi would report a permission change the Cluster never
+  # sees. Apchi refuses to Apply against a Cluster that does not set it.
+  securityRefreshPeriod: 30s
+
+  # The identity Apchi issues catalog DDL as. It has to match Apchi's trino.user, and it
+  # is the only identity the generated rules give `owner` on catalogs.
+  apchiUser: apchi
+
+  jvm:
+    maxHeapSize: 2G
+    extraArgs: []
+
+  # Added verbatim to the coordinator's config.properties. The escape hatch for anything
+  # this chart does not model -- but note that properties Apchi owns are not yours to set
+  # here, and the preconditions will tell you so.
+  additionalCoordinatorProperties: []
+  additionalWorkerProperties: []
+
+# How callers authenticate to Trino, and how their certificate becomes a Trino Identity.
+#
+# `insecure` is the development shape: no TLS, and the user-mapping file fed to the
+# insecure authenticator. `certificate` is the production shape. Both feed the same file to
+# the same parser, so a pattern proven under one is proven under the other -- Trino simply
+# rejects the certificate variant unless certificate authentication is configured. §7.6.
+authentication:
+  type: insecure  # insecure | certificate
+
+secrets:
+  # The Secrets Apchi writes configuration into. These names must be the ones Apchi is
+  # configured with: Apchi writes them, Trino reads them, and nothing reconciles a
+  # disagreement -- Apchi would report a successful Apply the Cluster never saw.
+  catalogSeed: trino-catalog-seed
+  accessControl: trino-access-control
+  certificateMapping: trino-user-mapping
+  clientCertificates: trino-client-certificates
+  eventListener: trino-event-listener
+  resourceGroups: trino-resource-groups
+
+# The volume names Apchi uses on this pod template. Apchi adds and removes these volumes
+# itself, so the names must match its own settings or Apchi will refuse to Apply -- two
+# volumes fighting over one path, whichever wrote last winning silently, is exactly what
+# that precondition exists to stop.
+#
+# The certificate-mapping one is mounted here rather than by Apchi, because the coordinator
+# is configured to read that file at startup and Trino refuses to boot when it is missing.
+# Apchi takes the mount over from its first Apply; the name is what makes that handover
+# invisible.
+volumes:
+  certificateMapping: apchi-user-mapping
+
+# Trino refuses to boot without the access-control rules and the user-mapping file, so a
+# Cluster cannot wait for Apchi to write them before starting. This chart creates both
+# **once, on install only**, and never touches them again -- Apchi owns their content from
+# its first Apply, and a `helm upgrade` must not revert a permission change.
+#
+# Set to false if you are adopting a Cluster whose Secrets already exist.
+bootstrap:
+  create: true
+  # The catalogs the Cluster comes up with before Apchi has ever applied. Normally empty:
+  # anything here that Apchi does not know about disappears at the first Apply that
+  # rewrites the seed. Useful for a demo, and for nothing else.
+  catalogs: {}

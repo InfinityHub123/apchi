@@ -24,7 +24,10 @@ kubectl cluster-info >/dev/null 2>&1 || die "kubectl cannot reach a cluster; sta
 if [[ "${1:-}" == "--delete" ]]; then
   say "Removing everything"
   helm uninstall "$RELEASE" -n "$NAMESPACE" 2>/dev/null || true
-  kubectl delete -f "$ROOT/deploy/trino-dev/" -n "$NAMESPACE" --ignore-not-found 2>/dev/null || true
+  helm uninstall trino -n "$NAMESPACE" 2>/dev/null || true
+  # Deleting the namespace is what removes the bootstrap Secrets: they are pre-install
+  # hooks, so helm uninstall deliberately leaves them -- they hold the Cluster's
+  # configuration and the only durable copy of its catalogs.
   kubectl delete namespace "$NAMESPACE" --ignore-not-found
   echo "Gone."
   exit 0
@@ -52,12 +55,14 @@ esac
 say "Namespace $NAMESPACE"
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-# Apchi configures a Trino; it does not install one. This is the reference Trino that
-# satisfies Apchi's preconditions -- see deploy/trino-dev/README.md.
+# Apchi configures a Trino; it does not install one. charts/trino is a Trino that
+# satisfies Apchi's preconditions -- see charts/trino/README.md.
 say "Trino"
-kubectl apply -f "$ROOT/deploy/trino-dev/" -n "$NAMESPACE"
-kubectl rollout status deploy/trino-coordinator -n "$NAMESPACE" --timeout=600s
-kubectl rollout status deploy/trino-worker -n "$NAMESPACE" --timeout=600s
+helm upgrade --install trino "$ROOT/charts/trino" \
+  --namespace "$NAMESPACE" \
+  --set fullnameOverride=trino \
+  --set worker.replicas=1 \
+  --wait --timeout 10m
 
 say "Apchi"
 helm upgrade --install "$RELEASE" "$ROOT/charts/apchi" \
