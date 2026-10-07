@@ -11,9 +11,10 @@ is rejected outright in `config.properties`.
 """
 
 import json
+import re
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from pydantic.alias_generators import to_camel
 
 from app.sections.base import Resources
@@ -111,3 +112,131 @@ def render(desired: Resources) -> dict[str, str]:
     if not groups_of(desired) and not selectors_of(desired):
         return {}
     return {RULES_PATH: render_rules(desired), MANAGER_PATH: MANAGER_FILE}
+
+
+class Unreadable(Exception):
+    """A file this module cannot read. Translated by the Section, so the generator keeps
+    knowing nothing about the pipeline."""
+
+    def __init__(self, path: str, reason: str) -> None:
+        self.path = path
+        self.reason = reason
+        super().__init__(f"{path}: {reason}")
+
+
+def _snake(camel: str) -> str:
+    """Trino's spelling back to the model's. The inverse of `to_camel`, and written out
+    rather than imported because Pydantic ships the one direction."""
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", camel).lower()
+
+
+def _fields(model: type[BaseModel]) -> set[str]:
+    return set(model.model_fields)
+
+
+def _flatten(
+    spec: Any,
+    parent: str | None,
+    path: str,
+    groups: dict[str, dict[str, Any]],
+    unaccounted: list[tuple[str, Any]],
+) -> None:
+    """One group and its subgroups, into the flat map the Candidate holds.
+
+    The tree exists only in the file; the Candidate is flat so Review can name the group
+    that changed. Rebuilding the path as the walk descends is what makes `global.etl` out of
+    an `etl` nested under a `global`.
+    """
+    if not isinstance(spec, dict):
+        raise Unreadable(path, f"a group under {parent or 'the root'} is not an object")
+    name = spec.get("name")
+    if not isinstance(name, str) or not name:
+        raise Unreadable(path, f"a group under {parent or 'the root'} has no name")
+    full = f"{parent}{SEPARATOR}{name}" if parent else name
+
+    known = _fields(ResourceGroupWrite)
+    own: dict[str, Any] = {}
+    for key, value in spec.items():
+        if key in ("name", "subGroups"):
+            continue
+        field = _snake(key)
+        if field not in known:
+            # Trino has settings Apchi's model does not carry, and a hand-written file is
+            # where they turn up. Reported against the group so an Operator knows which one.
+            unaccounted.append((f"group {full!r} sets {key!r}", {key: value}))
+            continue
+        own[field] = value
+
+    try:
+        groups[full] = ResourceGroupWrite.model_validate(own).model_dump(mode="json")
+    except ValidationError as exc:
+        raise Unreadable(path, f"group {full!r} is not valid: {exc.errors()[0]['msg']}") from exc
+
+    subgroups = spec.get("subGroups", [])
+    if not isinstance(subgroups, list):
+        raise Unreadable(path, f"group {full!r} has a subGroups that is not a list")
+    for child in subgroups:
+        _flatten(child, full, path, groups, unaccounted)
+
+
+def parse_rules(path: str, content: str) -> tuple[Resources, list[tuple[str, Any]]]:
+    """The inverse of `render_rules`: the tree flattened back to paths, selectors in order.
+
+    Selector order is the configuration -- first match wins -- so it is preserved exactly.
+    Group order is not, and the groups come back sorted by path, which is what `render_rules`
+    writes anyway.
+    """
+    try:
+        document = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise Unreadable(path, f"not valid JSON: {exc}") from exc
+    if not isinstance(document, dict):
+        raise Unreadable(path, "the file is not a JSON object")
+
+    unaccounted: list[tuple[str, Any]] = []
+    groups: dict[str, dict[str, Any]] = {}
+    roots = document.get("rootGroups", [])
+    if not isinstance(roots, list):
+        raise Unreadable(path, "rootGroups is not a list")
+    for root in roots:
+        _flatten(root, None, path, groups, unaccounted)
+
+    raw_selectors = document.get("selectors", [])
+    if not isinstance(raw_selectors, list):
+        raise Unreadable(path, "selectors is not a list")
+    selectors: list[dict[str, Any]] = []
+    known = _fields(Selector)
+    for index, raw in enumerate(raw_selectors):
+        if not isinstance(raw, dict):
+            raise Unreadable(path, f"selector {index} is not an object")
+        fields: dict[str, Any] = {}
+        for key, value in raw.items():
+            field = _snake(key)
+            if field not in known:
+                unaccounted.append((f"selector {index} matches on {key!r}", {key: value}))
+                continue
+            fields[field] = value
+        try:
+            selectors.append(Selector.model_validate(fields).model_dump(mode="json"))
+        except ValidationError as exc:
+            raise Unreadable(
+                path, f"selector {index} is not valid: {exc.errors()[0]['msg']}"
+            ) from exc
+
+    settings_fields = {
+        _snake(key): value
+        for key, value in document.items()
+        if _snake(key) in _fields(ResourceGroupSettings)
+    }
+    for key in document:
+        if key not in ("rootGroups", "selectors") and _snake(key) not in _fields(
+            ResourceGroupSettings
+        ):
+            unaccounted.append((f"the file sets {key!r}", {key: document[key]}))
+
+    resources: Resources = dict(groups)
+    resources[SETTINGS] = ResourceGroupSettings.model_validate(settings_fields).model_dump(
+        mode="json"
+    )
+    resources[SELECTORS] = selectors
+    return resources, unaccounted

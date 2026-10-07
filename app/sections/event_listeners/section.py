@@ -6,6 +6,7 @@ is no reload path, so Trino adopts a listener change only by restarting. See sec
 """
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -17,13 +18,22 @@ from app.sections.admin import AdminValues
 from app.sections.base import (
     Cluster,
     CoordinatorFile,
+    Parsed,
+    ParseProblem,
     Resources,
     SectionPlan,
     SmokeQuery,
+    Unaccounted,
     ValidationFailure,
 )
 from app.sections.event_listeners import SECTION
-from app.sections.event_listeners.generator import FILE_KEY, MOUNT_PATH, render_secret
+from app.sections.event_listeners.generator import (
+    FILE_KEY,
+    MOUNT_PATH,
+    Unreadable,
+    parse_properties,
+    render_secret,
+)
 from app.sections.event_listeners.model import (
     EventListener,
     EventListenerUpdate,
@@ -138,6 +148,28 @@ class EventListenersSection:
     name: SectionName = SECTION
     #: Trino loads event listeners exactly once per process lifetime.
     requires_rollout = True
+
+    def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
+        """An absent file means no listener, which is this Section's whole way of saying so.
+
+        The listener is named after its type, because the file carries no name -- see
+        `parse_properties`. An Operator adopting a Cluster can rename it afterwards; what
+        matters is that the configuration is not lost.
+        """
+        content = files.get(MOUNT_PATH)
+        if content is None:
+            return Parsed()
+        try:
+            listener_type, properties, unaccounted = parse_properties(MOUNT_PATH, content)
+        except Unreadable as exc:
+            raise ParseProblem(exc.path, exc.reason) from exc
+        return Parsed(
+            resources={listener_type: {"type": listener_type, "properties": properties}},
+            unaccounted=tuple(
+                Unaccounted(path=MOUNT_PATH, what=what, content=found)
+                for what, found in unaccounted
+            ),
+        )
 
     def plan(self, desired: Resources, current: Resources) -> ListenerPlan:
         return ListenerPlan(

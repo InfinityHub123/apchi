@@ -29,6 +29,16 @@ MOUNT_PATH = f"/etc/trino/{FILE_KEY}"
 _UNCHANGED = "(.*)"
 
 
+class Unreadable(Exception):
+    """A file this module cannot read. Translated to the Section contract's ParseProblem by
+    the Section, so the generator keeps knowing nothing about the pipeline."""
+
+    def __init__(self, path: str, reason: str) -> None:
+        self.path = path
+        self.reason = reason
+        super().__init__(f"{path}: {reason}")
+
+
 def reserved_rule(trino_user: str) -> dict[str, Any]:
     """Apchi's own identity, kept working whatever the Operator writes.
 
@@ -77,3 +87,74 @@ def render_rules(
     # backslashes that are not valid JSON escapes on their own. Hand-built JSON produced a
     # file Trino rejected outright.
     return json.dumps({"rules": rules}, indent=2) + "\n"
+
+
+def parse_rules(
+    path: str, content: str, trino_user: str
+) -> tuple[Resources, list[tuple[str, Any]]]:
+    """The inverse of `render_rules`: the file back into the Operator's one pattern.
+
+    Returns the resources and whatever could not be accounted for, as (description, content)
+    pairs for the caller to turn into `Unaccounted`.
+
+    Two of the rules in a file Apchi wrote are Apchi's own rather than an Operator's
+    pattern: the reserved rule keeping Apchi's identity working, and the trailing catch-all
+    that stops an unmatched principal being refused. Both are dropped -- on a Cluster that
+    already ran Apchi, importing them as Operator configuration would mean generating each
+    of them a second time.
+
+    What is left is where this Section's model is smaller than Trino's file. Apchi holds
+    **one** pattern (§13.3) and a hand-written file may have many, so the first is the
+    Operator's and the rest are unaccounted for -- which is the right answer rather than a
+    limitation: §13.3 keeps a Cluster's existing patterns as Admin values beneath the single
+    pattern it is migrating to, and these are those patterns.
+    """
+    try:
+        document = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise Unreadable(path, f"not valid JSON: {exc}") from exc
+    if not isinstance(document, dict):
+        raise Unreadable(path, "the file is not a JSON object")
+    rules = document.get("rules")
+    if not isinstance(rules, list):
+        raise Unreadable(path, "there is no 'rules' array")
+
+    unaccounted: list[tuple[str, Any]] = [
+        (f"{key!r} outside the rules array", value)
+        for key, value in sorted(document.items())
+        if key != "rules"
+    ]
+
+    for index, rule in enumerate(rules):
+        if not isinstance(rule, dict):
+            raise Unreadable(path, f"rule {index} is not an object")
+
+    # Positionally, exactly where render_rules puts them, rather than by matching anywhere
+    # in the list. `(.*)` is a legal Operator pattern -- it matches every subject and leaves
+    # the name as presented -- and matching it anywhere made an Operator who wrote it
+    # disappear on the way back in.
+    body: list[tuple[int, dict[str, Any]]] = list(enumerate(rules))
+    if body and body[0][1] == reserved_rule(trino_user):
+        body = body[1:]
+    if body and body[-1][1] == {"pattern": _UNCHANGED}:
+        body = body[:-1]
+
+    operator: dict[str, Any] | None = None
+    for index, rule in body:
+        extra = sorted(set(rule) - {"pattern", "user", "case"})
+        if extra or "pattern" not in rule:
+            # `allow` is the one Trino supports and Apchi does not expose, because a single
+            # rule that denies is a Cluster nobody can authenticate to (model.py).
+            unaccounted.append((f"rule {index} uses {', '.join(extra) or 'no pattern'}", rule))
+            continue
+        if operator is None:
+            operator = rule
+            continue
+        unaccounted.append((f"rule {index} is a further pattern", rule))
+
+    resources: Resources = {}
+    if operator is not None:
+        resources[RESOURCE] = CertificateMappingWrite.model_validate(operator).model_dump(
+            mode="json"
+        )
+    return resources, unaccounted
