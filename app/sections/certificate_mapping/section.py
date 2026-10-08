@@ -6,7 +6,7 @@ constructed, so a change is adopted only by a new pod. See section 13.3.
 
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from app.adapters.trino import Trino
 from app.api.errors import NotFound, UnprocessablePayload
@@ -16,13 +16,21 @@ from app.sections.admin import AdminValues
 from app.sections.base import (
     Cluster,
     CoordinatorFile,
+    Parsed,
+    ParseProblem,
     Resources,
     SectionPlan,
     SmokeQuery,
+    Unaccounted,
     ValidationFailure,
 )
 from app.sections.certificate_mapping import RESOURCE, SECTION
-from app.sections.certificate_mapping.generator import MOUNT_PATH, render_rules
+from app.sections.certificate_mapping.generator import (
+    MOUNT_PATH,
+    Unreadable,
+    parse_rules,
+    render_rules,
+)
 from app.sections.certificate_mapping.model import CertificateMapping, CertificateMappingWrite
 
 logger = logging.getLogger(__name__)
@@ -142,6 +150,27 @@ class CertificateMappingSection:
                 desired, settings.trino_user, admin.preserved_certificate_mappings
             )
         }
+
+    def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
+        """An absent file means nothing configured, not a Cluster to refuse.
+
+        The file is always present on a Cluster Apchi has applied to, but a Cluster being
+        adopted may have an authenticator pointed at a path with nothing there yet.
+        """
+        content = files.get(MOUNT_PATH)
+        if content is None:
+            return Parsed()
+        try:
+            resources, unaccounted = parse_rules(MOUNT_PATH, content, settings.trino_user)
+        except Unreadable as exc:
+            raise ParseProblem(exc.path, exc.reason) from exc
+        return Parsed(
+            resources=resources,
+            unaccounted=tuple(
+                Unaccounted(path=MOUNT_PATH, what=what, content=content)
+                for what, content in unaccounted
+            ),
+        )
 
     def plan(self, desired: Resources, current: Resources) -> "MappingPlan":
         return MappingPlan(changed=desired.get(RESOURCE) != current.get(RESOURCE))

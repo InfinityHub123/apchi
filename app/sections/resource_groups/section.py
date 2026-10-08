@@ -5,6 +5,7 @@ never rereads the file, so a change is adopted only by a new pod.
 """
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from app.adapters.trino import Trino
@@ -15,18 +16,24 @@ from app.sections.admin import AdminValues
 from app.sections.base import (
     Cluster,
     CoordinatorFile,
+    Parsed,
+    ParseProblem,
     Resources,
     SectionPlan,
     SmokeQuery,
+    Unaccounted,
     ValidationFailure,
 )
 from app.sections.resource_groups import SECTION, SELECTORS, SEPARATOR, SETTINGS
 from app.sections.resource_groups.generator import (
+    MANAGER_FILE,
     MANAGER_PATH,
     RULES_PATH,
+    Unreadable,
     children_of,
     groups_of,
     parent_of,
+    parse_rules,
     render,
     selectors_of,
     settings_of,
@@ -169,6 +176,50 @@ class ResourceGroupsSection:
         self, desired: Resources, settings: Settings, admin: AdminValues
     ) -> dict[str, str]:
         return render(desired)
+
+    def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
+        """Both files absent means no Resource Groups, which is how this Section says so.
+
+        The rules file is the configuration; the properties file only points at it. So the
+        rules being absent is "nothing configured" whatever the properties file says, and a
+        properties file pointing somewhere else is reported rather than followed -- Apchi
+        reading a file it does not own would be reading the Admin's configuration as if it
+        were an Operator's.
+        """
+        rules = files.get(RULES_PATH)
+        manager = files.get(MANAGER_PATH)
+        if rules is None:
+            if manager is None:
+                return Parsed()
+            return Parsed(
+                unaccounted=(
+                    Unaccounted(
+                        path=MANAGER_PATH,
+                        what="Trino is told to read a resource groups file that is not there",
+                        content=manager,
+                    ),
+                )
+            )
+        try:
+            resources, unaccounted = parse_rules(RULES_PATH, rules)
+        except Unreadable as exc:
+            raise ParseProblem(exc.path, exc.reason) from exc
+
+        found = tuple(
+            Unaccounted(path=RULES_PATH, what=what, content=content)
+            for what, content in unaccounted
+        )
+        if manager is not None and manager != MANAGER_FILE:
+            # Trino reads whatever config-file names, so a properties file that is not the
+            # one Apchi writes means the rules above may not be the rules in force.
+            found += (
+                Unaccounted(
+                    path=MANAGER_PATH,
+                    what="the properties file is not the one Apchi writes",
+                    content=manager,
+                ),
+            )
+        return Parsed(resources=resources, unaccounted=found)
 
     def plan(self, desired: Resources, current: Resources) -> ResourceGroupsPlan:
         before, after = groups_of(current), groups_of(desired)

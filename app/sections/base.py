@@ -13,7 +13,7 @@ raised: the pipeline decides what a failure means to the Apply it is running.
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeGuard
 
 from pydantic import BaseModel
 
@@ -27,6 +27,56 @@ from app.sections.admin import AdminValues
 #: by resource name. Deliberately untyped here: the shape belongs to the Section's own
 #: model, and the pipeline never looks inside it.
 Resources = dict[str, Any]
+
+
+class ParseProblem(Exception):
+    """A file Apchi cannot read at all.
+
+    Distinct from something in a file Apchi has no vocabulary for, which is `Unaccounted`
+    and is a report rather than a failure. This is the file being unreadable: not JSON, not
+    the shape the Section generates, a value where a list belongs. Carries the path, because
+    "could not parse" without one sends an Admin reading the wrong file.
+    """
+
+    def __init__(self, path: str, reason: str) -> None:
+        self.path = path
+        self.reason = reason
+        super().__init__(f"{path}: {reason}")
+
+
+@dataclass(frozen=True)
+class Unaccounted:
+    """Something a Section read and cannot express.
+
+    Apchi's models are deliberately smaller than Trino's file formats, so a file an Admin
+    wrote by hand will contain things no Section resource can hold -- a rule type Apchi does
+    not model, a property it does not curate, a second pattern where it has room for one.
+
+    Reported rather than dropped, because dropping is the one outcome that must not happen:
+    Adoption would import a configuration missing a piece, and the first Apply would then
+    delete that piece from the Cluster. What becomes of these -- preserved as an Admin value
+    or refused -- is §15's decision and not a Section's.
+
+    `content` is the thing itself, so whatever preserves it later does not have to parse the
+    file a second time to find it.
+    """
+
+    path: str
+    what: str
+    content: Any = None
+
+
+@dataclass(frozen=True)
+class Parsed:
+    """What a Section read out of the Cluster's files."""
+
+    resources: Resources = field(default_factory=dict)
+    unaccounted: tuple[Unaccounted, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        """Whether everything in the files is something Apchi can hold."""
+        return not self.unaccounted
 
 
 class ValidationFailure(BaseModel):
@@ -149,6 +199,35 @@ class SectionPlan(Protocol):
     def summary(self) -> str: ...
 
 
+class ParsesFiles(Protocol):
+    """A Section that can read its own files back: the inverse of `render_files`.
+
+    Deliberately separate from `Section` rather than part of it, because it is not yet true
+    of every Section. Catalogs and Permissions each have a problem of their own -- a
+    catalog's properties cannot be read out of Trino at all, and a hand-written rules file
+    says more than Apchi's grants can express -- and until those are solved the type system
+    should say which Sections can be parsed rather than let a stub claim they all can.
+
+    Nothing in Apchi read Trino configuration before Adoption (§15), and the reason it has
+    to now is that Trino cannot be asked: a catalog's properties, a rules file, a selector
+    list -- none of them can be read back out of a running coordinator, so the only place a
+    Cluster's configuration can be recovered from is the files themselves.
+    """
+
+    name: SectionName
+
+    def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
+        """`files` is keyed by the paths this Section declares, and a path the Cluster does
+        not have is simply absent -- a legitimate state, not an error, since half the
+        Sections express "nothing configured" as the absence of their file.
+
+        Raises `ParseProblem` for a file it cannot read. Returns `Unaccounted` for anything
+        it read and cannot hold: the difference matters, because the first is an Admin's
+        file being wrong and the second is Apchi's model being smaller than Trino's.
+        """
+        ...
+
+
 class Section(Protocol):
     """One managed area of a Configuration Candidate."""
 
@@ -228,3 +307,13 @@ class Section(Protocol):
         whose adoption is visible in what became of a real query.
         """
         ...
+
+
+def parses_files(section: Section) -> TypeGuard[ParsesFiles]:
+    """Whether this Section can read its files back yet.
+
+    A runtime question for as long as two Sections cannot, and the honest alternative to a
+    stub that returns nothing and looks like a Cluster with no catalogs. A TypeGuard, so a
+    caller that checks gets the narrower type and one that forgets does not type-check.
+    """
+    return hasattr(section, "parse_files")
