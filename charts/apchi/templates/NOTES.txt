@@ -3,6 +3,12 @@ Apchi is installed as {{ include "apchi.fullname" . }} in namespace {{ .Release.
 It configures the Trino at {{ .Values.trino.host }}:{{ .Values.trino.port }}, through the
 Deployments {{ .Values.trino.coordinatorDeployment }} and {{ .Values.trino.workerDeployment }}.
 
+{{- if .Values.bootstrap.create }}
+This release also created the six Secrets Apchi writes configuration into, which the Trino
+deployment mounts. Install Trino after Apchi: it reads two of them while loading and refuses
+to boot when either is missing.
+{{- end }}
+
 Reach the API:
 
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "apchi.fullname" . }} 8000:{{ .Values.service.port }}
@@ -11,6 +17,17 @@ Reach the API:
 Then localhost:8000/docs is the interactive API reference, and docs/getting-started.md
 takes one catalog through review, validation, apply and rollback.
 
+{{- if not .Values.bootstrap.create }}
+
+NOTE: bootstrap.create is off, so this release created none of the Secrets Apchi writes
+into. Trino will not start until the access-control rules and the user-mapping file exist.
+{{- end }}
+{{- if .Values.bootstrap.catalogs }}
+
+NOTE: bootstrap.catalogs seeded {{ len .Values.bootstrap.catalogs }} catalog(s). Apchi does
+not know about them, and Apchi's first Apply rewrites the seed -- so they will disappear at
+the following coordinator restart. Stage them in Apchi to keep them.
+{{- end }}
 {{- if .Values.mongodb.deploy }}
 
 NOTE: mongodb.deploy is on, so this release includes a single-replica MongoDB on an

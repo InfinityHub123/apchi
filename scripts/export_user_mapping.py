@@ -20,9 +20,9 @@ from app.sections.certificate_mapping.generator import FILE_KEY, render_rules
 ROOT = Path(__file__).resolve().parent.parent
 #: The reference deployment's Secret, manifest and all.
 TARGET = ROOT / "deploy" / "trino-dev" / "06-user-mapping.yaml"
-#: The same rules as a bare file, for the chart's pre-install hook to read with
+#: The same rules as a bare file, for the Apchi chart's pre-install hook to read with
 #: `.Files.Get`. One generator, two consumers.
-CHART_TARGET = ROOT / "charts" / "trino" / "files" / "user-mapping.json"
+CHART_TARGET = ROOT / "charts" / "apchi" / "files" / "user-mapping.json"
 
 
 def rules() -> str:

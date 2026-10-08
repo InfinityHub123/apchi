@@ -68,10 +68,6 @@ trino:
   # sees. Apchi refuses to Apply against a Cluster that does not set it.
   securityRefreshPeriod: 30s
 
-  # The identity Apchi issues catalog DDL as. It has to match Apchi's trino.user, and it
-  # is the only identity the generated rules give `owner` on catalogs.
-  apchiUser: apchi
-
   jvm:
     maxHeapSize: 2G
     extraArgs: []
@@ -114,15 +110,7 @@ secrets:
 volumes:
   certificateMapping: apchi-user-mapping
 
-# Trino refuses to boot without the access-control rules and the user-mapping file, so a
-# Cluster cannot wait for Apchi to write them before starting. This chart creates both
-# **once, on install only**, and never touches them again -- Apchi owns their content from
-# its first Apply, and a `helm upgrade` must not revert a permission change.
-#
-# Set to false if you are adopting a Cluster whose Secrets already exist.
-bootstrap:
-  create: true
-  # The catalogs the Cluster comes up with before Apchi has ever applied. Normally empty:
-  # anything here that Apchi does not know about disappears at the first Apply that
-  # rewrites the seed. Useful for a demo, and for nothing else.
-  catalogs: {}
+# This chart creates none of the Secrets above. They hold configuration Apchi writes, so
+# Apchi's chart creates them -- which is why Apchi is installed first. Trino will not start
+# until the access-control rules and the user-mapping file exist, because it reads both
+# while loading and refuses to boot when either is missing.

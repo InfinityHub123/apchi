@@ -3,12 +3,14 @@
 A Trino cluster Apchi can configure.
 
 ```sh
-helm install trino charts/trino -n trino
+# Apchi first: it creates the Secrets Trino mounts, and Trino will not boot without two.
 helm install apchi oci://ghcr.io/infinityhub123/charts/apchi -n trino \
   --set trino.host=trino \
   --set trino.coordinatorDeployment=trino-coordinator \
   --set trino.workerDeployment=trino-worker \
   --set mongodb.uri=mongodb://your-mongo:27017
+
+helm install trino charts/trino -n trino --set fullnameOverride=trino
 ```
 
 ## Why this exists
@@ -50,25 +52,20 @@ runs it. These are the five things it proves:
 5. **`security.refresh-period` is set.** Without it Trino reads the access-control rules
    once at startup and never again.
 
-## The bootstrap, and why `helm upgrade` is safe
+## This chart creates no Secrets
 
-Trino reads the access-control rules and the user-mapping file while loading and refuses to
-boot without either, so the Cluster cannot wait for Apchi to write them. This chart creates
-all six Secrets Apchi writes into — but as a **`pre-install` hook**, which runs once and is
-not part of the release.
+It mounts six and creates none. They hold configuration Apchi writes and rewrites on every
+apply, so they are Apchi's data and Apchi's chart creates them — which is why Apchi is
+installed first. Trino reads two of them while loading and refuses to boot when either is
+missing, so it cannot start and wait; Apchi has no such problem, because its readiness
+depends on MongoDB and nothing else.
 
-That is the whole design, and it matters: a Secret tracked in the release would be reverted
-by the next `helm upgrade`, so an unrelated chart bump would silently undo a permission
-change. Verified on a live cluster — after Apchi had applied catalogs, grants and resource
-groups, a `helm upgrade` that changed the worker count and then one that changed the
-chart's own volume list both left every Secret and Apchi's own pod-template volume exactly
-as Apchi had them.
-
-`helm uninstall` leaves those Secrets behind, which is also correct: they hold the
-Cluster's configuration and, for the catalog seed, its only durable copy. Remove them
-deliberately or not at all.
-
-Set `bootstrap.create=false` when the Secrets already exist.
+Keeping them out of here is what lets this chart be read, reviewed and released without
+Apchi in the picture. The cost is that the two charts must now **agree on names**, and
+nothing reconciles a mismatch: Apchi would write a Secret nobody reads and report a
+successful apply the Cluster never saw. `scripts/check_trino_chart.py` renders both charts
+and checks exactly that, because while they were one chart it could not happen and now it
+can.
 
 ## Values you are likely to set
 
@@ -82,7 +79,6 @@ Set `bootstrap.create=false` when the Secrets already exist.
 | `authentication.type` | `insecure` | `certificate` for production. Both feed the same file to the same parser; Trino rejects the certificate variant unless certificate authentication is configured (§7.6) |
 | `fullnameOverride` | `""` | Pins the Deployment names Apchi is configured with, independently of the release name |
 | `trino.additionalCoordinatorProperties` | `[]` | Verbatim into `config.properties`. Properties Apchi owns are not yours to set here, and the preconditions will say so |
-| `bootstrap.catalogs` | `{}` | Catalogs to come up with before Apchi has applied. Useful for a demo and nothing else: Apchi's first Apply rewrites the seed, so anything here that Apchi does not know about disappears at the following restart |
 
 `coordinator.*` and `worker.*` also take `resources`, `nodeSelector`, `tolerations`,
 `affinity` and `podAnnotations`.
@@ -101,6 +97,9 @@ is what has to land first.
 the volumes for them to this pod template itself, because for both of them the *absence* of
 the mount is how "none configured" is expressed. Trino refuses to start if a file it was
 told to read is missing.
+
+**The Secrets Apchi writes.** `charts/apchi` creates those, including the two Trino needs
+before it can boot. Install it first.
 
 ## Verified
 

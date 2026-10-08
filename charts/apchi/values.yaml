@@ -114,6 +114,24 @@ certificates:
 # Mode engaging.
 alertWebhookUrl: ""
 
+# Trino refuses to boot without the access-control rules and the user-mapping file, so a
+# Cluster cannot wait for Apchi to write them. This chart creates all six Secrets Apchi
+# writes into, **once, on install only**, and never touches them again -- Apchi owns their
+# content from its first Apply, and a `helm upgrade` must not revert a permission change.
+#
+# They live here rather than in the Trino chart because they are Apchi's data. Which means
+# installing this chart *before* Trino: Trino mounts these and will not start without two of
+# them, while Apchi starts fine with no Trino at all.
+#
+# Set create: false when the Secrets already exist -- adopting a Cluster, or a second Apchi
+# release against one that is already configured.
+bootstrap:
+  create: true
+  # The catalogs the Cluster comes up with before Apchi has ever applied. Normally empty:
+  # anything here that Apchi does not know about disappears at the first Apply that rewrites
+  # the seed. Useful for a demo, and for nothing else.
+  catalogs: {}
+
 # Anything not covered above, as APCHI_-prefixed names. An escape hatch for a setting
 # newer than this chart.
 extraEnv: []

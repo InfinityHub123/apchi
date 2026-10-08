@@ -101,6 +101,11 @@ Install it in the namespace Trino runs in — Apchi reads and writes exactly one
 a validation reaches its probe pod by pod IP. The chart defaults to the image it was released
 with, for `linux/amd64` and `linux/arm64`.
 
+Apchi's chart also creates the six Secrets Trino mounts its configuration from, because those
+are Apchi's data — so **install Apchi before Trino**. Trino reads two of them while loading
+and refuses to boot when either is missing; Apchi starts fine against a Trino that is not
+there yet.
+
 If you do not already run Trino on Kubernetes, `charts/trino` is one Apchi can configure:
 
 ```sh
@@ -157,8 +162,8 @@ app/
   adapters/   kubernetes, trino, mongo
   api/        the REST surface
 charts/
-  apchi/      Apchi itself
-  trino/      a Trino that Apchi can configure
+  apchi/      Apchi, and the Secrets it writes configuration into
+  trino/      a Trino that Apchi can configure, and that creates no Secrets of its own
 deploy/
   trino-dev/  the same Trino as raw manifests, for the end-to-end tests
 docs/

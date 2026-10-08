@@ -55,6 +55,17 @@ esac
 say "Namespace $NAMESPACE"
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
+# Apchi first, and the order is not arbitrary: Apchi's chart creates the Secrets Trino
+# mounts, and Trino refuses to boot without two of them. Apchi starts fine with no Trino --
+# its readiness depends on MongoDB and nothing else.
+say "Apchi"
+helm upgrade --install "$RELEASE" "$ROOT/charts/apchi" \
+  --namespace "$NAMESPACE" \
+  --set image.repository="${IMAGE%:*}" \
+  --set image.tag="${IMAGE##*:}" \
+  --set mongodb.deploy=true \
+  --wait --timeout 10m
+
 # Apchi configures a Trino; it does not install one. charts/trino is a Trino that
 # satisfies Apchi's preconditions -- see charts/trino/README.md.
 say "Trino"
@@ -62,14 +73,6 @@ helm upgrade --install trino "$ROOT/charts/trino" \
   --namespace "$NAMESPACE" \
   --set fullnameOverride=trino \
   --set worker.replicas=1 \
-  --wait --timeout 10m
-
-say "Apchi"
-helm upgrade --install "$RELEASE" "$ROOT/charts/apchi" \
-  --namespace "$NAMESPACE" \
-  --set image.repository="${IMAGE%:*}" \
-  --set image.tag="${IMAGE##*:}" \
-  --set mongodb.deploy=true \
   --wait --timeout 10m
 
 cat <<EOF

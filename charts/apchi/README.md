@@ -10,8 +10,13 @@ helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.1.0 \
 From a clone, `helm install apchi charts/apchi` with the same values.
 
 Apchi is one container with no state of its own, so the chart is a Deployment, a Service, a
-ServiceAccount and a namespaced Role. It installs nothing into Trino and watches nothing
-outside its namespace.
+ServiceAccount, a namespaced Role — and the six Secrets Apchi writes configuration into.
+It installs nothing into Trino and watches nothing outside its namespace.
+
+**Install this before Trino.** Those Secrets are Apchi's data, so they belong to this chart
+rather than the Trino one; Trino mounts them and reads two while loading, refusing to boot
+when either is missing. Apchi has no such constraint — its readiness depends on MongoDB and
+nothing else, so it starts fine against a Trino that does not exist yet.
 
 To try it with nothing set up, `./scripts/quickstart.sh` from the repository root brings up a
 Trino, this chart and a MongoDB on minikube or kind in one command.
@@ -24,7 +29,9 @@ Snapshot. `mongodb.deploy=true` runs a single-replica MongoDB on an `emptyDir` b
 fine for trying Apchi out, and it discards every Snapshot when its pod restarts.
 
 **The names of your Trino deployment**, if they are not the defaults. The chart assumes a
-Service called `trino` and Deployments called `trino-coordinator` and `trino-worker`.
+Service called `trino` and Deployments called `trino-coordinator` and `trino-worker`. These
+must match what your Trino deployment actually calls them; `charts/trino` uses exactly these,
+and CI checks the two charts agree.
 
 ```yaml
 trino:
@@ -34,9 +41,10 @@ trino:
 ```
 
 **The Secret names**, if your Trino mounts different ones. This is the one place a
-disagreement is silent and damaging: Apchi writes these Secrets and Trino reads them, and
-nothing reconciles a mismatch — Apchi reports a successful apply and the coordinator never
-sees it. `deploy/trino-dev/` mounts exactly the defaults.
+disagreement is silent and damaging: Apchi creates and writes these Secrets and Trino reads
+them, and nothing reconciles a mismatch — Apchi reports a successful apply and the
+coordinator never sees it. `charts/trino` and `deploy/trino-dev/` both mount exactly the
+defaults, and `scripts/check_trino_chart.py` fails CI if the two charts disagree.
 
 ```yaml
 secrets:
@@ -75,6 +83,8 @@ secrets:
 | `certificates.maxBytes` | `1048576` | What a Kubernetes Secret may hold; a larger upload is refused with that reason |
 | `alertWebhookUrl` | `""` | Where a failed Auto Rollback is reported. Empty means log only |
 | `extraEnv` | `[]` | `APCHI_`-prefixed environment, for a setting newer than this chart |
+| `bootstrap.create` | `true` | Creates the six Secrets Apchi writes into, as a `pre-install` hook. `false` when they already exist |
+| `bootstrap.catalogs` | `{}` | Catalogs the Cluster comes up with before Apchi has applied. For a demo and nothing else: Apchi's first apply rewrites the seed, so anything here Apchi does not know about disappears at the following restart |
 | `rbac.create` | `true` | `false` to bind your own Role. Without an equivalent one every Apply fails at the API server |
 | `serviceAccount.create`, `.name`, `.annotations` | `true`, `""`, `{}` | |
 | `service.type`, `service.port` | `ClusterIP`, `8000` | |
@@ -95,6 +105,24 @@ cluster-scoped rule.
 | `configmaps` | get | One read-only check: whether the access-control properties carry a refresh period |
 | `pods`, `pods/log` | get, list, create, delete / get | The ephemeral validation coordinator. Its log is the only place a refusing Trino explains itself |
 | `deployments` | get, patch | A Rollout. Apchi never creates or deletes one: it does not own the Trino deployment |
+
+## The bootstrap, and why `helm upgrade` is safe
+
+Trino reads the access-control rules and the user-mapping file while loading and refuses to
+boot without either, so the Cluster cannot wait for Apchi to write them. This chart creates
+all six Secrets Apchi writes into — but as a **`pre-install` hook**, which runs once and is
+not part of the release.
+
+That is the whole design, and it matters: a Secret tracked in the release would be reverted
+by the next `helm upgrade`, so an unrelated chart bump would silently undo a permission
+change. Verified on a live cluster — after Apchi had applied catalogs, grants and resource
+groups, a `helm upgrade` that changed the worker count and then one that changed a chart's
+own volume list both left every Secret and Apchi's own pod-template volume exactly as Apchi
+had them.
+
+`helm uninstall` leaves those Secrets behind, which is also correct: they hold the Cluster's
+configuration and, for the catalog seed, its only durable copy. Remove them deliberately or
+not at all.
 
 ## Not covered by this chart
 
