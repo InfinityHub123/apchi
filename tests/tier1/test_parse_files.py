@@ -46,22 +46,18 @@ def _rendered(section, desired):
 # --- which Sections can parse at all ------------------------------------------------
 
 
-def test_which_sections_can_read_their_files_back() -> None:
-    """Permissions cannot yet (#89), and the type system says which rather than a stub
-    returning nothing and looking like a Cluster with no configuration.
+def test_every_section_can_read_its_files_back() -> None:
+    """All six, now that #88 did catalogs and #89 permissions.
 
-    Catalogs can read its files, but files are only one of its three sources -- the
-    reconciliation against `system.metadata.catalogs` is the pipeline's, because a source
-    that is not a file is not something a Section's parser can reach (#88)."""
+    Two of them are only partly answered by their files, and that is a property of the
+    configuration rather than of the parsers. Catalogs have a source that is not a file at
+    all, reconciled in the pipeline (#88). Permissions' file says more than Apchi's grants
+    can express, and the remainder is kept as an Admin value rather than dropped (#89).
+    """
     can = {section.name for section in REGISTERED if parses_files(section)}
 
-    assert can == {
-        "catalogs",
-        "certificate_mapping",
-        "client_certificates",
-        "event_listeners",
-        "resource_groups",
-    }
+    assert can == {section.name for section in REGISTERED}
+    assert len(can) == 6
 
 
 # --- certificate mapping ------------------------------------------------------------

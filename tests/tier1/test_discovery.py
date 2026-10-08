@@ -12,6 +12,7 @@ import copy
 import pytest
 
 from app.config import Settings
+from app.pipeline import discovery as discovery_module
 from app.pipeline.discovery import Discovery, DiscoveryFailed, discover
 from app.sections.certificate_mapping import RESOURCE as MAPPING
 from app.sections.certificate_mapping.generator import MOUNT_PATH as MAPPING_PATH
@@ -78,7 +79,7 @@ async def test_a_cluster_apchi_cannot_read_fails_rather_than_discovering_nothing
 # --- what it reads ------------------------------------------------------------------
 
 
-async def test_every_section_is_reported_even_with_nothing_configured(
+async def test_every_section_is_listed_even_with_nothing_configured(
     settings: Settings, fake_kubernetes: FakeKubernetes
 ) -> None:
     discovery = await discover(fake_kubernetes, settings)
@@ -93,14 +94,31 @@ async def test_every_section_is_reported_even_with_nothing_configured(
     ]
 
 
-async def test_a_section_apchi_cannot_parse_yet_is_said_so_not_left_empty(
+async def test_every_section_can_be_read_back_now(
     settings: Settings, fake_kubernetes: FakeKubernetes
 ) -> None:
-    """Permissions is #89. Reporting it as empty would be reporting a Cluster where nobody
-    has been granted anything, which is a lie with consequences."""
+    """Where Adoption got to: #86 did four, #88 catalogs, #89 permissions."""
     discovery = await discover(fake_kubernetes, settings)
 
-    found = _of(discovery, "permissions")
+    assert all(found.readable for found in discovery.sections)
+
+
+async def test_a_section_apchi_could_not_parse_would_be_said_so_not_left_empty(
+    settings: Settings, fake_kubernetes: FakeKubernetes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No Section is unparseable today, so this uses a stub one to hold the guarantee that
+    matters: a Section Apchi cannot read must be *reported*, because reporting it as empty
+    would be reporting a Cluster with none of that configuration -- a lie with consequences,
+    and the shape of every Adoption failure worth fearing."""
+
+    class Unparseable:
+        name = "resource_groups"
+
+    monkeypatch.setattr(discovery_module, "REGISTERED", (Unparseable(),))
+
+    discovery = await discover(fake_kubernetes, settings)
+
+    found = _of(discovery, "resource_groups")
     assert found.readable is False
     assert found.resources == {}
     assert found.problems[0].kind == "unreadable_section"
@@ -279,10 +297,12 @@ async def test_something_apchi_cannot_express_is_reported(
     found = _of(discovery, "certificate_mapping")
 
     assert found.resources[MAPPING]["pattern"] == "CN=(.*?),.*"
-    # Both, and both are right: the second pattern is something Apchi cannot hold, and
-    # dropping it means the file would not regenerate as it was read.
-    assert {p.kind for p in found.problems} == {"unaccounted", "lossy"}
-    assert any("further pattern" in p.detail for p in found.problems)
+    # `unaccounted` and nothing else. Apchi adds its own rules to every file it writes, so
+    # the regenerated file is never byte-identical to a hand-written one -- what the lossy
+    # check asks instead is whether Apchi's *model* survives a round trip, and here it does.
+    # The second pattern is reported because Apchi cannot hold it, not because of the render.
+    assert {p.kind for p in found.problems} == {"unaccounted"}
+    assert "further pattern" in found.problems[0].detail
 
 
 async def test_trino_told_to_read_a_file_nothing_mounts_is_reported(
@@ -302,12 +322,17 @@ async def test_trino_told_to_read_a_file_nothing_mounts_is_reported(
     assert found.problems[0].path == "/etc/trino/nowhere/mapping.json"
 
 
-async def test_a_parse_that_would_not_regenerate_the_file_is_reported_as_lossy(
+async def test_a_comment_is_reported_as_unaccounted_rather_than_as_a_lossy_render(
     settings: Settings, fake_kubernetes: FakeKubernetes
 ) -> None:
-    """The check that makes discovery trustworthy rather than best-effort. A comment is the
-    simplest thing Apchi cannot write back, so a file with one does not round-trip -- and if
-    that went unreported, the first Apply would delete it."""
+    """A comment is the simplest thing Apchi cannot write back, and it must be reported --
+    unreported, the first Apply would delete it.
+
+    But it is reported as content Apchi cannot hold, not as a render that loses something.
+    The distinction is the whole reason the lossy check is a fixpoint rather than a
+    comparison against the original: Apchi adds its own rules to every file, so comparing
+    bytes flagged every hand-written file and said nothing.
+    """
     fake_kubernetes.secrets[settings.event_listener_secret_name] = {
         "event-listener.properties": "# why this exists\nevent-listener.name=http\n"
     }
@@ -329,7 +354,8 @@ async def test_a_parse_that_would_not_regenerate_the_file_is_reported_as_lossy(
     found = _of(discovery, "event_listeners")
 
     assert found.resources["http"]["type"] == "http"
-    assert "lossy" in {p.kind for p in found.problems}
+    assert {p.kind for p in found.problems} == {"unaccounted"}
+    assert "comment" in found.problems[0].detail
 
 
 # --- the preconditions --------------------------------------------------------------
@@ -377,12 +403,9 @@ async def test_a_cutover_requirement_alone_does_not_make_a_discovery_incomplete(
     discovery = await discover(fake_kubernetes, settings)
 
     assert {p.kind for p in discovery.problems} == {"cutover"}
-    # Still incomplete, but because Permissions cannot be read yet (#89) and because no
-    # Trino was supplied to ask about catalogs -- not because of the cutover.
-    assert {p.kind for p in discovery.every_problem if p.kind != "cutover"} == {
-        "unreadable_section",
-        "unreadable",
-    }
+    # Still incomplete, but because no Trino was supplied to ask which catalogs are loaded
+    # -- not because of the cutover.
+    assert {p.kind for p in discovery.every_problem if p.kind != "cutover"} == {"unreadable"}
 
 
 async def test_a_healthy_cluster_reports_no_cluster_level_problems(

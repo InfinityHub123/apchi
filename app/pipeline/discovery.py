@@ -26,9 +26,9 @@ worst possible answer.
 """
 
 import logging
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app.adapters.kubernetes import KubernetesAdapter
 from app.config import Settings
@@ -111,6 +111,12 @@ class SectionDiscovery(BaseModel):
     readable: bool = Field(
         default=True, description="False when Apchi cannot parse this Section's files yet."
     )
+    #: Configuration this Section read that belongs to the Admin rather than the Candidate:
+    #: rules Apchi's models cannot express, kept working beneath the Operator's own rather
+    #: than dropped or refused (§13.3, invariant 9). Not a problem, and reported separately
+    #: so it is visible -- preserved rules nobody can see are worse than no adoption, because
+    #: an Operator would read the grants and not understand the access people actually have.
+    admin: dict[str, Any] = Field(default_factory=dict)
     problems: list[Problem] = Field(default_factory=list)
 
 
@@ -125,6 +131,19 @@ class Discovery(BaseModel):
     @property
     def every_problem(self) -> list[Problem]:
         return [*self.problems, *(p for section in self.sections for p in section.problems)]
+
+    @property
+    def admin_values(self) -> dict[str, Any]:
+        """Every Admin value discovered, merged across Sections.
+
+        What #101 writes and what the Admin API shows. Flat because `AdminValues` is one
+        document read in one go, so an Apply holds the Admin side of the Cluster frozen for
+        its whole run (§14).
+        """
+        merged: dict[str, Any] = {}
+        for section in self.sections:
+            merged.update(section.admin)
+        return merged
 
     @property
     def complete(self) -> bool:
@@ -311,6 +330,7 @@ async def _discover_section(
         )
 
     resources: Resources = {}
+    admin: dict[str, Any] = {}
     if found:
         try:
             parsed = section.parse_files(found, settings)
@@ -325,6 +345,7 @@ async def _discover_section(
             )
         else:
             resources = parsed.resources
+            admin = parsed.admin
             problems.extend(
                 Problem(
                     kind="unaccounted",
@@ -334,11 +355,12 @@ async def _discover_section(
                 )
                 for found_problem in parsed.unaccounted
             )
-            problems.extend(_lossy(section, settings, resources, found))
+            problems.extend(_lossy(section, settings, resources, admin, found))
 
     return SectionDiscovery(
         section=section.name,
         resources=resources,
+        admin=admin,
         looked_at=where.everywhere_looked,
         guessed_because=where.why,
         problems=problems,
@@ -346,40 +368,81 @@ async def _discover_section(
 
 
 def _lossy(
-    section: ParsesFiles, settings: Settings, resources: Resources, read: dict[str, str]
+    section: ParsesFiles,
+    settings: Settings,
+    resources: Resources,
+    admin: dict[str, Any],
+    read: dict[str, str],
 ) -> list[Problem]:
-    """Whether regenerating from what was parsed reproduces what was read.
+    """Whether Apchi's model survives a round trip through the file it would write.
 
-    The check that turns discovery from a best-effort import into something an Operator can
-    run against production. A parse that silently drops a field looks fine here and deletes
-    that field from the Cluster at the first Apply, because the Apply rewrites these files
-    from what Apchi holds.
+    Not byte equality against what was read. That was the first version of this and it was
+    noise: Apchi **adds** its own rules to every file it generates -- the reserved identity,
+    the catch-alls, the kill_query procedure -- so a hand-written file never matches
+    byte-for-byte and every adoption looked lossy. A check that fires on everything says
+    nothing.
 
-    Only paths Apchi would write itself are compared. A file at a path of the Admin's
-    choosing regenerates at Apchi's path instead, which is a difference of location rather
-    than of content -- and the cutover is what resolves it.
+    The property that actually matters is a fixpoint. Parse the file, render from what was
+    parsed, parse that: if the second parse differs from the first, the render dropped
+    something the model was holding, and the first Apply would write that loss to the
+    Cluster. If they agree, Apchi can carry this configuration without changing it.
+
+    Content the model never held is a different thing and is already reported -- as
+    `Unaccounted` for what Apchi cannot express, or as an Admin value for what it preserves.
+    So the two checks are complementary rather than redundant.
     """
     from app.sections.admin import AdminValues
 
-    regenerated = section.render_files(resources, settings, AdminValues())
-    problems: list[Problem] = []
-    for path, original in sorted(read.items()):
-        if path not in regenerated:
-            continue
-        if regenerated[path] != original:
-            problems.append(
-                Problem(
-                    kind="lossy",
-                    section=section.name,
-                    path=path,
-                    detail=(
-                        "what Apchi parsed would not regenerate this file, so the parse lost "
-                        "something. Applying it would write the regenerated version over "
-                        "what is there."
-                    ),
-                )
+    # Regenerated with the Admin values this Section just discovered rather than with
+    # defaults. A Section whose file holds configuration Apchi keeps as an Admin value would
+    # otherwise drop it on the way out and then report itself lossy for doing so.
+    try:
+        values = AdminValues.model_validate(admin)
+    except ValidationError:
+        return [
+            Problem(
+                kind="lossy",
+                section=section.name,
+                detail=(
+                    "what this Section read cannot be held as Admin values, so Apchi could "
+                    "not carry it through an Apply."
+                ),
             )
-    return problems
+        ]
+
+    regenerated = section.render_files(resources, settings, values)
+    if not regenerated:
+        # Catalogs reach Trino as DDL and own no coordinator file, so there is nothing to
+        # read back. Their loss is checked against their durable form instead (§7.1).
+        return []
+    try:
+        again = section.parse_files(regenerated, settings)
+    except ParseProblem as problem:
+        return [
+            Problem(
+                kind="lossy",
+                section=section.name,
+                path=problem.path,
+                detail=(
+                    f"Apchi cannot read back the file it would write for this Section "
+                    f"({problem.reason}), so applying what was discovered would leave a "
+                    "Cluster Apchi could not discover again."
+                ),
+            )
+        ]
+    if again.resources == resources and again.admin == admin:
+        return []
+    return [
+        Problem(
+            kind="lossy",
+            section=section.name,
+            path=sorted(read)[0] if read else None,
+            detail=(
+                "what Apchi parsed does not survive being written back and read again, so "
+                "the configuration it holds is not the configuration it would apply."
+            ),
+        )
+    ]
 
 
 #: Never adopted. It cannot be dropped, has no properties, and §10 already excludes it from

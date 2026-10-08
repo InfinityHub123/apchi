@@ -11,6 +11,7 @@ is not immediate.
 """
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from app.adapters.trino import Trino
@@ -22,6 +23,9 @@ from app.sections.base import (
     Cluster,
     CoordinatorDirectory,
     Delivery,
+    DiscoveredPaths,
+    Parsed,
+    ParseProblem,
     Resources,
     SectionPlan,
     SmokeQuery,
@@ -33,6 +37,8 @@ from app.sections.permissions.generator import (
     MOUNT_PATH,
     PROBE_PROPERTIES,
     PROPERTIES_PATH,
+    Unreadable,
+    parse_rules,
     render_rules,
 )
 from app.sections.permissions.model import (
@@ -226,6 +232,12 @@ class PermissionsSection:
         Re-rendered on every Apply rather than written once, so a Cluster whose
         access-control Secret was changed outside Apchi is corrected by the next Apply
         instead of quietly keeping catalog DDL open to everyone.
+
+        Which is exactly why the preserved rules have to be passed in here. Rendering
+        without them would rewrite the file without them, and an adopted Cluster would lose
+        on its first Apply every rule Adoption had carefully kept (§15). They are Admin
+        values rather than Candidate resources, so they survive a rollback and leave with an
+        Admin's decision and nothing else (invariant 9).
         """
         return {
             MOUNT_PATH: render_rules(
@@ -233,8 +245,49 @@ class PermissionsSection:
                 desired,
                 settings.verification_catalog,
                 admin.enforce_permissions,
+                admin.preserved_access_control,
             )
         }
+
+    def discover_paths(self, settings: Settings, properties: Mapping[str, str]) -> DiscoveredPaths:
+        """`security.config-file` names the rules, and Trino reads whatever it names.
+
+        There is no default worth falling back to: without that property Trino has no
+        file-based access control at all, so a Cluster that does not set it has no rules to
+        discover rather than rules somewhere Apchi should guess at.
+        """
+        named = properties.get("security.config-file")
+        if named:
+            return DiscoveredPaths(files={MOUNT_PATH: named})
+        return DiscoveredPaths(
+            files={MOUNT_PATH: MOUNT_PATH},
+            why=(
+                "no security.config-file property was found, so this Cluster may have no "
+                "file-based access control at all -- this is where Apchi would put the rules"
+            ),
+        )
+
+    def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
+        """Grants where Apchi's model reaches, Admin values where it does not.
+
+        The split is the point. Apchi's grants are deliberately smaller than Trino's file
+        (§13.4), so a Cluster onboarded years into its life has rules with no grant to
+        become -- and the answer is to keep them working beneath the grants rather than drop
+        them or refuse the Cluster (§13.3's pattern, decided in #82).
+        """
+        content = files.get(MOUNT_PATH)
+        if content is None:
+            return Parsed()
+        try:
+            grants, preserved, enforced = parse_rules(
+                MOUNT_PATH, content, settings.trino_user, settings.verification_catalog
+            )
+        except Unreadable as exc:
+            raise ParseProblem(exc.path, exc.reason) from exc
+        return Parsed(
+            resources=grants,
+            admin={"preserved_access_control": preserved, "enforce_permissions": enforced},
+        )
 
     def plan(self, desired: Resources, current: Resources) -> PermissionsPlan:
         return PermissionsPlan(
