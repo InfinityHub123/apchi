@@ -44,3 +44,53 @@ def render_secret(sections: dict[SectionName, dict[str, Any]]) -> dict[str, str]
         f"{name}.properties": render_properties(stored["connector"], effective(stored))
         for name, stored in sorted(catalogs.items())
     }
+
+
+class Unreadable(Exception):
+    """A file this module cannot read. Translated by the Section, so the generator keeps
+    knowing nothing about the pipeline."""
+
+    def __init__(self, path: str, reason: str) -> None:
+        self.path = path
+        self.reason = reason
+        super().__init__(f"{path}: {reason}")
+
+
+SUFFIX = ".properties"
+
+
+def name_of(path: str, directory: str) -> str | None:
+    """The catalog a path in the store directory belongs to."""
+    prefix = f"{directory.rstrip('/')}/"
+    if not path.startswith(prefix) or not path.endswith(SUFFIX):
+        return None
+    return path[len(prefix) : -len(SUFFIX)] or None
+
+
+def parse_properties(path: str, content: str) -> tuple[str, dict[str, str], list[str]]:
+    """The inverse of `render_properties`: the connector and the rest of the properties.
+
+    Returns the connector, the properties, and descriptions of anything a round trip would
+    lose -- comments, which Apchi cannot write back.
+    """
+    connector: str | None = None
+    properties: dict[str, str] = {}
+    lost: list[str] = []
+    for number, raw in enumerate(content.splitlines(), start=1):
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            lost.append(f"a comment on line {number}")
+            continue
+        key, separator, value = line.partition("=")
+        if not separator:
+            raise Unreadable(path, f"line {number} is not key=value: {line!r}")
+        key, value = key.strip(), value.strip()
+        if key == "connector.name":
+            connector = value
+            continue
+        properties[key] = value
+    if connector is None:
+        raise Unreadable(path, "there is no connector.name, so nothing says what this catalog is")
+    return connector, properties, lost

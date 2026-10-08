@@ -26,7 +26,7 @@ worst possible answer.
 """
 
 import logging
-from typing import Literal
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -36,6 +36,8 @@ from app.pipeline import preconditions
 from app.pipeline.coordinator import PodSpec, content_at, files_under, source_of
 from app.sections import SectionName
 from app.sections.base import ParseProblem, ParsesFiles, Resources, parses_files
+from app.sections.catalogs import SECTION as CATALOGS
+from app.sections.client_certificates.generator import MOUNT_DIR as CERTIFICATE_DIR
 from app.sections.permissions.generator import PROPERTIES_PATH
 from app.sections.registry import REGISTERED
 from app.sections.resource_groups.generator import MANAGER_PATH
@@ -67,7 +69,20 @@ ProblemKind = Literal[
     "precondition",
     #: A §16 precondition that can only be met at the cutover, not before.
     "cutover",
+    #: Trino is serving a catalog Apchi can name and cannot reconstruct. The Operator has
+    #: to supply its properties; Apchi will not invent them.
+    "incomplete",
+    #: Configured but not loaded -- Apchi found a catalog Trino is not serving, which
+    #: usually means the coordinator has not restarted since it was added.
+    "not_loaded",
 ]
+
+
+class TrinoReader(Protocol):
+    """The one thing discovery asks Trino. A protocol rather than the adapter, because
+    discovery reads and a type that can only read says so."""
+
+    async def catalog_connectors(self) -> dict[str, str]: ...
 
 
 class Problem(BaseModel):
@@ -173,13 +188,14 @@ async def _precondition_problems(
 
 
 async def discover(
-    kubernetes: KubernetesAdapter, settings: Settings, trino_catalogs: set[str] | None = None
+    kubernetes: KubernetesAdapter, settings: Settings, trino: TrinoReader | None = None
 ) -> Discovery:
     """Read the Cluster. Writes nothing.
 
-    `trino_catalogs` is accepted and unused here: catalogs are reconciled from three sources
-    and that is #88, which will need it. Taking it now keeps the signature from changing
-    under the API that #90 builds on top.
+    `trino` is optional and its absence is reported rather than hidden. It is only needed
+    for one thing, and that thing cannot be got any other way: a catalog created by DDL
+    after the pod started lives in the coordinator's writable store, which Apchi cannot
+    read, so Trino is the only witness that it exists at all.
     """
     try:
         raw = await kubernetes.deployment_pod_spec(settings.coordinator_deployment_name)
@@ -223,9 +239,10 @@ async def discover(
                 )
             )
             continue
-        discovery.sections.append(
-            await _discover_section(kubernetes, spec, settings, section, properties)
-        )
+        found = await _discover_section(kubernetes, spec, settings, section, properties)
+        if section.name == CATALOGS:
+            found = await _reconcile_catalogs(found, kubernetes, settings, trino)
+        discovery.sections.append(found)
 
     logger.info(
         "discovery complete",
@@ -359,6 +376,169 @@ def _lossy(
                         "what Apchi parsed would not regenerate this file, so the parse lost "
                         "something. Applying it would write the regenerated version over "
                         "what is there."
+                    ),
+                )
+            )
+    return problems
+
+
+#: Never adopted. It cannot be dropped, has no properties, and §10 already excludes it from
+#: rollback for the same reason -- a Snapshot holding `system` would describe a Cluster
+#: Apchi could not restore.
+_NEVER_ADOPTED = frozenset({"system"})
+
+
+async def _reconcile_catalogs(
+    found: SectionDiscovery,
+    kubernetes: KubernetesAdapter,
+    settings: Settings,
+    trino: TrinoReader | None,
+) -> SectionDiscovery:
+    """Catalogs, from three sources, none of them complete.
+
+    The one Section whose configuration has a source that is not a file, which is why this
+    is here rather than in the Section: reconciling across sources is pipeline work, the way
+    reconciling across Sections is (§6, `references.py`).
+
+    | Found in | Reported as |
+    |---|---|
+    | a readable source, and Trino | complete |
+    | Trino only | incomplete -- name and connector known, properties must be supplied |
+    | a readable source only | configured but not loaded |
+
+    **Nothing is ever invented.** A catalog Apchi can name and cannot reconstruct is reported
+    as needing properties, not given plausible ones. An adopted catalog with a wrong
+    `connection-url` validates, applies, and fails at query time against the wrong database;
+    a refusal to guess is the feature.
+    """
+    resources = dict(found.resources)
+    problems = list(found.problems)
+    looked_at = list(found.looked_at)
+
+    # The seed Secret, read by name rather than through a mount: the initContainer that
+    # consumes it is not a container whose mounts `source_of` walks, and on a Cluster being
+    # adopted there may be no initContainer yet at all.
+    seed = await kubernetes.read_secret(settings.catalog_secret_name)
+    if seed:
+        looked_at.append(f"Secret {settings.catalog_secret_name}")
+        from_seed = _catalogs_from_seed(settings, seed)
+        for name, stored in from_seed.items():
+            resources.setdefault(name, stored)
+
+    if trino is None:
+        problems.append(
+            Problem(
+                kind="unreadable",
+                section=CATALOGS,
+                detail=(
+                    "Apchi could not ask Trino which catalogs are loaded, so a catalog that "
+                    "exists only in the coordinator's store would not be noticed -- and would "
+                    "be gone at the first restart after adoption."
+                ),
+            )
+        )
+        return found.model_copy(
+            update={"resources": resources, "problems": problems, "looked_at": looked_at}
+        )
+
+    try:
+        live = await trino.catalog_connectors()
+    except Exception as exc:
+        problems.append(
+            Problem(
+                kind="unreadable",
+                section=CATALOGS,
+                detail=(
+                    f"Apchi could not ask Trino which catalogs are loaded ({exc}), so a "
+                    "catalog existing only in the coordinator's store would not be noticed."
+                ),
+            )
+        )
+        return found.model_copy(
+            update={"resources": resources, "problems": problems, "looked_at": looked_at}
+        )
+
+    looked_at.append("system.metadata.catalogs")
+    for name, connector in sorted(live.items()):
+        if name in _NEVER_ADOPTED or name in resources:
+            continue
+        problems.append(
+            Problem(
+                kind="incomplete",
+                section=CATALOGS,
+                path=name,
+                detail=(
+                    f"Trino is serving {name!r} using the {connector!r} connector, and its "
+                    "properties exist only in the coordinator's writable store. Supply them: "
+                    "Apchi will not invent a connection it could not read."
+                ),
+            )
+        )
+
+    for name in sorted(set(resources) - set(live)):
+        problems.append(
+            Problem(
+                kind="not_loaded",
+                section=CATALOGS,
+                path=name,
+                detail=(
+                    f"{name!r} is configured and Trino is not serving it, which usually means "
+                    "the coordinator has not restarted since it was added."
+                ),
+            )
+        )
+
+    problems.extend(_catalogs_using_a_certificate(resources))
+    return found.model_copy(
+        update={"resources": resources, "problems": problems, "looked_at": looked_at}
+    )
+
+
+def _catalogs_from_seed(settings: Settings, seed: dict[str, str]) -> Resources:
+    """The seed Secret's keys, back into staged Catalogs.
+
+    The same files as the store directory holds, under the same names, so the Section's own
+    parser does the work -- re-keyed to the store directory it expects.
+    """
+    from app.sections.catalogs.section import CatalogsSection
+
+    directory = settings.catalog_store_dir.rstrip("/")
+    files = {f"{directory}/{key}": value for key, value in seed.items()}
+    return CatalogsSection().parse_files(files, settings).resources
+
+
+def _catalogs_using_a_certificate(resources: Resources) -> list[Problem]:
+    """Catalogs whose properties point into the certificate directory.
+
+    The loss here is semantic rather than textual, which is why the generic round-trip check
+    misses it. `effective` wires a certificate into the connector's own properties and
+    expands `${cert:name}` into a path *before* anything is written, so the file holds a path
+    and no record of the name it came from. Re-rendering that path produces the same bytes --
+    the file round-trips perfectly -- and Apchi still does not know the catalog uses a
+    certificate it manages.
+
+    The consequence is specific: removing that certificate would be allowed, because the
+    check that refuses to remove one a Catalog still references works off the name. So this
+    is reported, and an Operator naming the certificate is what repairs it.
+    """
+    problems: list[Problem] = []
+    for name, stored in sorted(resources.items()):
+        pointing = sorted(
+            key
+            for key, value in stored.get("properties", {}).items()
+            if isinstance(value, str) and value.startswith(f"{CERTIFICATE_DIR.rstrip('/')}/")
+        )
+        if pointing:
+            problems.append(
+                Problem(
+                    kind="unaccounted",
+                    section=CATALOGS,
+                    path=name,
+                    detail=(
+                        f"{', '.join(pointing)} points into the certificate directory, so this "
+                        "catalog uses a Client Certificate. Apchi reads a path and cannot tell "
+                        "which certificate it is -- name it, or removing that certificate will "
+                        "not be refused."
                     ),
                 )
             )

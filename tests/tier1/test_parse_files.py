@@ -46,12 +46,17 @@ def _rendered(section, desired):
 # --- which Sections can parse at all ------------------------------------------------
 
 
-def test_four_sections_can_read_their_files_back() -> None:
-    """Catalogs and Permissions cannot yet, and the type system says which rather than a
-    stub returning nothing and looking like a Cluster with no configuration."""
+def test_which_sections_can_read_their_files_back() -> None:
+    """Permissions cannot yet (#89), and the type system says which rather than a stub
+    returning nothing and looking like a Cluster with no configuration.
+
+    Catalogs can read its files, but files are only one of its three sources -- the
+    reconciliation against `system.metadata.catalogs` is the pipeline's, because a source
+    that is not a file is not something a Section's parser can reach (#88)."""
     can = {section.name for section in REGISTERED if parses_files(section)}
 
     assert can == {
+        "catalogs",
         "certificate_mapping",
         "client_certificates",
         "event_listeners",

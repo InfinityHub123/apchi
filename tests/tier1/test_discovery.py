@@ -96,15 +96,14 @@ async def test_every_section_is_reported_even_with_nothing_configured(
 async def test_a_section_apchi_cannot_parse_yet_is_said_so_not_left_empty(
     settings: Settings, fake_kubernetes: FakeKubernetes
 ) -> None:
-    """Catalogs and Permissions are #88 and #89. Reporting them as empty would be reporting
-    a Cluster with no catalogs and no permissions, which is a lie with consequences."""
+    """Permissions is #89. Reporting it as empty would be reporting a Cluster where nobody
+    has been granted anything, which is a lie with consequences."""
     discovery = await discover(fake_kubernetes, settings)
 
-    for name in ("catalogs", "permissions"):
-        found = _of(discovery, name)
-        assert found.readable is False
-        assert found.resources == {}
-        assert found.problems[0].kind == "unreadable_section"
+    found = _of(discovery, "permissions")
+    assert found.readable is False
+    assert found.resources == {}
+    assert found.problems[0].kind == "unreadable_section"
     assert discovery.complete is False
 
 
@@ -378,10 +377,11 @@ async def test_a_cutover_requirement_alone_does_not_make_a_discovery_incomplete(
     discovery = await discover(fake_kubernetes, settings)
 
     assert {p.kind for p in discovery.problems} == {"cutover"}
-    # Still incomplete, but because Catalogs and Permissions cannot be read yet (#88, #89),
-    # not because of the cutover.
+    # Still incomplete, but because Permissions cannot be read yet (#89) and because no
+    # Trino was supplied to ask about catalogs -- not because of the cutover.
     assert {p.kind for p in discovery.every_problem if p.kind != "cutover"} == {
-        "unreadable_section"
+        "unreadable_section",
+        "unreadable",
     }
 
 
