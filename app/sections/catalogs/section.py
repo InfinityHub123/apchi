@@ -99,17 +99,29 @@ def _certificate_usable(connector: str, properties: dict[str, str], certificate:
         )
 
 
-def create_catalog(stored: Resources, write: CatalogWrite) -> Catalog:
-    if write.name in stored:
-        raise NameAlreadyTaken(f"A Catalog named {write.name!r} already exists.")
+def validated(write: CatalogWrite) -> dict[str, Any]:
+    """The stored form of a Catalog, with everything about it judged.
+
+    Separate from `create_catalog` because Adoption needs the judging without the staging:
+    an Operator supplying the properties of a Catalog that already exists on the Cluster is
+    answering a question, not creating anything, so the name is not theirs to collide with
+    (#90). Sharing this is what makes "validated the way staging is" true rather than
+    approximately true.
+    """
     properties = _validated(write.connector, write.properties)
     if write.certificate:
         _certificate_usable(write.connector, properties, write.certificate)
-    stored[write.name] = {
+    return {
         "connector": write.connector,
         "properties": properties,
         **({"certificate": write.certificate} if write.certificate else {}),
     }
+
+
+def create_catalog(stored: Resources, write: CatalogWrite) -> Catalog:
+    if write.name in stored:
+        raise NameAlreadyTaken(f"A Catalog named {write.name!r} already exists.")
+    stored[write.name] = validated(write)
     return _as_catalog(write.name, stored[write.name])
 
 
