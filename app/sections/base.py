@@ -72,10 +72,24 @@ class Parsed:
 
     resources: Resources = field(default_factory=dict)
     unaccounted: tuple[Unaccounted, ...] = ()
+    #: What this Section read that belongs to the **Admin** rather than the Candidate.
+    #:
+    #: A third outcome, and not a problem: invariant 9 says Admin values are applied and
+    #: never recorded in a Snapshot, so configuration a Cluster had that Apchi's models
+    #: cannot express is neither a resource nor a fault -- it is preserved beneath the
+    #: Operator's own and removed by an Admin when the migration is done (§13.3, §15).
+    #:
+    #: Reporting it as `unaccounted` would make a successfully adopted Cluster look
+    #: incomplete forever, and dropping it would take access away from people on the day
+    #: their Cluster was onboarded.
+    admin: dict[str, Any] = field(default_factory=dict)
 
     @property
     def complete(self) -> bool:
-        """Whether everything in the files is something Apchi can hold."""
+        """Whether everything in the files is something Apchi can hold.
+
+        Admin values do not count against it: they are held, just not by the Candidate.
+        """
         return not self.unaccounted
 
 

@@ -14,9 +14,18 @@ time -- an Operator should not be able to close a Cluster by editing configurati
 Apchi should not do it to them on an upgrade.
 
 The document is typed rather than free-form. Section 14's wider escape hatch -- arbitrary
-properties written into arbitrary files -- is still open; what is settled is this one value,
-so this one value is modelled.
+properties written into arbitrary files -- is still open; what is settled is modelled here and
+nothing else.
+
+The preserved values are the shape Adoption needs (§15). A Cluster being onboarded has
+configuration Apchi's models cannot express -- access-control rules of kinds it does not
+model, certificate mapping patterns beyond the single one it holds -- and preserving them as
+Admin values is what makes adoption non-destructive by construction: nobody loses access on
+the day their Cluster is onboarded, and an Admin removes them deliberately when the migration
+is finished.
 """
+
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -39,6 +48,15 @@ class AdminValues(BaseModel):
             "Whether a Trino Identity may reach only what it has been granted. False -- the "
             "default -- leaves the generated rules ending in a catch-all that allows "
             "everything to everyone, which is what a Cluster did before Apchi was installed."
+        ),
+    )
+    preserved_access_control: dict[str, list[dict[str, Any]]] = Field(
+        default_factory=dict,
+        description=(
+            "Access-control rules a Cluster already ran before it was onboarded, kept "
+            "working beneath the Operator's grants while the grants catch up. Keyed by the "
+            "block they belong to -- the blocks Apchi generates, and the ones it does not "
+            "model at all. An Admin removes them when the migration is done."
         ),
     )
     preserved_certificate_mappings: list[CertificateMappingWrite] = Field(
