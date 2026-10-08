@@ -1,4 +1,4 @@
-"""Assert charts/trino renders a Trino that Apchi will accept.
+"""Assert the two charts agree, and that charts/trino renders a Trino Apchi will accept.
 
 Apchi refuses to Apply against a deployment that cannot support what it is about to do,
 and every one of those preconditions exists because breaking it produces a failure that
@@ -13,6 +13,11 @@ It caught two things while the chart was being written: a mount of the user-mapp
 under a volume name Apchi did not recognise, which Apchi reads as somebody else fighting it
 over one file, and the whole class of problem that made Apchi refuse the official Trino
 chart.
+
+It also checks the two charts **agree on names**. Apchi writes these Secrets and Trino reads
+them, and nothing reconciles a mismatch: Apchi would report a successful Apply the Cluster
+never saw. While both lived in one chart that could not happen; now that the Secrets belong
+to the Apchi chart and the mounts to the Trino one, it can, so it is checked.
 """
 
 import asyncio
@@ -28,6 +33,7 @@ from app.pipeline.preconditions import PodSpec, PreconditionFailed, check
 
 ROOT = Path(__file__).resolve().parents[1]
 CHART = ROOT / "charts" / "trino"
+APCHI_CHART = ROOT / "charts" / "apchi"
 
 #: Rendered with the values an Apchi install actually uses. The chart's own defaults name
 #: the Deployments after the release, so Apchi's defaults are passed in rather than
@@ -58,14 +64,41 @@ class _Cluster:
         raise AssertionError(f"the preconditions must not reach the Cluster for {name!r}")
 
 
-def _rendered() -> list[dict[str, Any]]:
+def _rendered(chart: Path, *values: str) -> list[dict[str, Any]]:
     completed = subprocess.run(
-        ["helm", "template", "trino", str(CHART), *VALUES],
+        ["helm", "template", chart.name, str(chart), *values],
         capture_output=True,
         text=True,
         check=True,
     )
     return [document for document in yaml.safe_load_all(completed.stdout) if document]
+
+
+def _name_disagreements() -> list[str]:
+    """Where the Trino chart mounts a Secret or volume the Apchi chart does not write.
+
+    Compared through what each chart renders rather than by reading both values files,
+    because a default that is overridden in a template is the kind of disagreement reading
+    values would miss.
+    """
+    trino = _rendered(CHART, *VALUES)
+    apchi = _rendered(APCHI_CHART, "--set", "mongodb.deploy=true")
+
+    written = {document["metadata"]["name"] for document in apchi if document["kind"] == "Secret"}
+    coordinator = _coordinator(trino)
+    spec = PodSpec.model_validate(coordinator["spec"]["template"]["spec"])
+    mounted = {volume.secret_name: volume.name for volume in spec.volumes if volume.secret_name}
+
+    problems = [
+        f"charts/trino mounts Secret {secret!r} (as volume {volume!r}) that charts/apchi "
+        "does not create"
+        for secret, volume in sorted(mounted.items())
+        if secret not in written
+    ]
+    # The reverse is not a problem: Apchi writes two Secrets the coordinator never mounts,
+    # because Apchi adds those volumes to the pod template itself when something is
+    # configured -- the absence of the mount is how "none configured" is expressed.
+    return problems
 
 
 def _coordinator(documents: list[dict[str, Any]]) -> dict[str, Any]:
@@ -80,7 +113,7 @@ def _coordinator(documents: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def main() -> int:
-    documents = _rendered()
+    documents = _rendered(CHART, *VALUES)
     coordinator = _coordinator(documents)
     spec = PodSpec.model_validate(coordinator["spec"]["template"]["spec"])
 
@@ -91,6 +124,13 @@ def main() -> int:
                 sub = f" (subPath {mount.sub_path})" if mount.sub_path else ""
                 print(f"  {mount.mount_path}{sub} <- {mount.name}")
         return 0
+
+    disagreements = _name_disagreements()
+    if disagreements:
+        print("The two charts do not agree:", file=sys.stderr)
+        for problem in disagreements:
+            print(f"  - {problem}", file=sys.stderr)
+        return 1
 
     cluster = _Cluster(
         {
@@ -111,7 +151,10 @@ def main() -> int:
         for problem in exc.problems:
             print(f"  - {problem}", file=sys.stderr)
         return 1
-    print(f"charts/trino satisfies every precondition ({len(spec.volumes)} volumes)")
+    print(
+        f"charts/trino satisfies every precondition ({len(spec.volumes)} volumes) "
+        "and agrees with charts/apchi on names"
+    )
     return 0
 
 

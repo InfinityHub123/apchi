@@ -34,38 +34,23 @@ chart with a MongoDB alongside it, and prints what to do next. `--delete` remove
 The rest of this page is the same thing done a step at a time, which is worth reading once
 because each step explains what Apchi is doing.
 
-## 1. A Trino to configure
-
-Apchi does not install Trino. It configures a Trino that is already deployed, and expects
-that deployment to satisfy a handful of requirements: a catalog store it can write, the
-generated files mounted where Apchi will put them, and an access control file with a refresh
-period on it. `charts/trino` is a Trino that satisfies all of them, small enough to run on
-a laptop.
-
-```sh
-kubectl create namespace apchi
-helm install trino charts/trino -n apchi --set fullnameOverride=trino --set worker.replicas=1 --wait
-```
-
-That chart exists to make the preconditions impossible to get wrong, and CI proves it by
-rendering it and running Apchi's own precondition checker against the result.
-`charts/trino/README.md` lists each guarantee and says what the chart deliberately leaves
-out.
-
-If you already run Trino on Kubernetes, read §7.1 and §16 of `apchi_implementation.md`
-before pointing Apchi at it. Apchi refuses to apply against a deployment that does not
-satisfy the preconditions and tells you which one failed, so the worst case is a clear
-message rather than a lost change.
-
-## 2. Apchi
+## 1. Apchi
 
 Apchi has to run **inside** the cluster, in the same namespace as Trino. A validation starts
 a throwaway Trino coordinator and talks to it by pod IP, so an Apchi on your laptop reaches
 Kubernetes fine and then times out every validation.
 
+It also goes in **before** Trino, which is worth understanding rather than just following.
+Apchi's chart creates the six Secrets Trino mounts its configuration from, because those
+Secrets are Apchi's data — Apchi rewrites them on every apply. Trino reads two of them while
+loading and refuses to boot when either is missing, so it cannot start and wait. Apchi has no
+such problem: its readiness depends on MongoDB and nothing else, so it starts perfectly well
+against a Trino that does not exist yet.
+
 Build the image into your cluster's daemon:
 
 ```sh
+kubectl create namespace apchi
 minikube image build -t apchi:dev .
 ```
 
@@ -88,10 +73,35 @@ helm install apchi charts/apchi -n apchi \
 The two `image` settings are because you built the image locally; the chart otherwise
 defaults to the published one, which your cluster cannot pull a locally built tag from.
 
-Everything else matches what `charts/trino` installed: the Trino Service is `trino`, the
-Deployments are `trino-coordinator` and `trino-worker`, and the six Secret names agree. That
-agreement is the only coupling between the two charts, and getting it wrong surfaces as a
-precondition failure rather than as a lost change. `charts/apchi/README.md` documents every value and when you would change it.
+`charts/apchi/README.md` documents every value and when you would change it.
+
+## 2. A Trino to configure
+
+Apchi does not install Trino. It configures a Trino that is already deployed, and expects
+that deployment to satisfy a handful of requirements: a catalog store it can write, the
+Secrets Apchi writes mounted where Apchi will put them, and an access control file with a
+refresh period on it. `charts/trino` is a Trino that satisfies all of them, small enough to
+run on a laptop.
+
+```sh
+helm install trino charts/trino -n apchi --set fullnameOverride=trino --set worker.replicas=1 --wait
+```
+
+That chart exists to make the preconditions impossible to get wrong, and CI proves it by
+rendering it and running Apchi's own precondition checker against the result.
+`charts/trino/README.md` lists each guarantee and says what the chart deliberately leaves
+out.
+
+The two charts have to agree on **names** — the Trino Service, the two Deployments, and the
+six Secrets. Nothing reconciles a mismatch: Apchi would write a Secret nobody reads and
+report a successful apply the cluster never saw. The defaults line up, CI checks that they
+do, and getting it wrong on a real cluster surfaces as a precondition failure rather than as
+a lost change.
+
+If you already run Trino on Kubernetes, read §7.1 and §16 of `apchi_implementation.md`
+before pointing Apchi at it. Apchi refuses to apply against a deployment that does not
+satisfy the preconditions and tells you which one failed, so the worst case is a clear
+message rather than a lost change.
 
 Reach the API through a port-forward:
 
@@ -413,8 +423,8 @@ one exists — worth reading before you turn enforcement on.
 or, if you installed it a step at a time:
 
 ```sh
-helm uninstall apchi -n apchi
 helm uninstall trino -n apchi
+helm uninstall apchi -n apchi
 kubectl delete namespace apchi
 ```
 
