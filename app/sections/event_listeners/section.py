@@ -18,6 +18,7 @@ from app.sections.admin import AdminValues
 from app.sections.base import (
     Cluster,
     CoordinatorFile,
+    DiscoveredPaths,
     Parsed,
     ParseProblem,
     Resources,
@@ -148,6 +149,18 @@ class EventListenersSection:
     name: SectionName = SECTION
     #: Trino loads event listeners exactly once per process lifetime.
     requires_rollout = True
+
+    def discover_paths(self, settings: Settings, properties: Mapping[str, str]) -> DiscoveredPaths:
+        """One fixed path, and nothing in Trino's configuration points at it.
+
+        Trino reads `etc/event-listener.properties` if it is there and ignores its absence,
+        so there is no property naming it and nowhere else it could be. The alternative
+        spelling -- `event-listener.config-files` -- makes Trino refuse to start when a file
+        it names is missing, which would make Event Listeners mandatory, so Apchi does not
+        use it. If an Admin does, their listeners are configured somewhere this cannot see,
+        and the discovery says so by finding nothing here.
+        """
+        return DiscoveredPaths(files={MOUNT_PATH: MOUNT_PATH})
 
     def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
         """An absent file means no listener, which is this Section's whole way of saying so.

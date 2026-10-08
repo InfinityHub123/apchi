@@ -16,6 +16,7 @@ from app.sections.admin import AdminValues
 from app.sections.base import (
     Cluster,
     CoordinatorFile,
+    DiscoveredPaths,
     Parsed,
     ParseProblem,
     Resources,
@@ -176,6 +177,25 @@ class ResourceGroupsSection:
         self, desired: Resources, settings: Settings, admin: AdminValues
     ) -> dict[str, str]:
         return render(desired)
+
+    def discover_paths(self, settings: Settings, properties: Mapping[str, str]) -> DiscoveredPaths:
+        """`resource-groups.config-file` names the rules, and the properties file that names
+        it is at a fixed path of its own.
+
+        Both are read, because a mismatch between them is worth reporting: Trino reads
+        whatever `config-file` points at, so a properties file naming something other than
+        the rules Apchi found means the rules Apchi found are not the rules in force.
+        """
+        named = properties.get("resource-groups.config-file")
+        if named:
+            return DiscoveredPaths(files={RULES_PATH: named, MANAGER_PATH: MANAGER_PATH})
+        return DiscoveredPaths(
+            files={RULES_PATH: RULES_PATH, MANAGER_PATH: MANAGER_PATH},
+            why=(
+                "no resource-groups.config-file property was found, so this is where Apchi "
+                "would put the rules rather than where the Cluster says they are"
+            ),
+        )
 
     def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
         """Both files absent means no Resource Groups, which is how this Section says so.

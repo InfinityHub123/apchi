@@ -19,6 +19,7 @@ from app.sections.base import (
     Cluster,
     CoordinatorDirectory,
     Delivery,
+    DiscoveredPaths,
     Parsed,
     Resources,
     SectionPlan,
@@ -130,6 +131,23 @@ class ClientCertificatesSection:
         self, desired: Resources, settings: Settings, admin: AdminValues
     ) -> dict[str, str]:
         return render(desired)
+
+    def discover_paths(self, settings: Settings, properties: Mapping[str, str]) -> DiscoveredPaths:
+        """A directory, and the one Section nothing in Trino's configuration points at.
+
+        Certificates are referenced from a connector's own properties as a path, so the only
+        statement of where they live is in the catalogs -- and those are #88's problem. Apchi
+        looks where Apchi would put them and says that is what it did, because on a Cluster
+        Apchi did not configure they could be anywhere, and reporting an empty directory as
+        "no certificates" would be a guess dressed as a fact.
+        """
+        return DiscoveredPaths(
+            directories={MOUNT_DIR: MOUNT_DIR},
+            why=(
+                "nothing in Trino's configuration names a certificate directory, so this is "
+                "where Apchi would mount one rather than where the Cluster says it is"
+            ),
+        )
 
     def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
         """An empty directory means no certificates, which mounts as an empty directory

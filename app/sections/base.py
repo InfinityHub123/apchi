@@ -199,6 +199,35 @@ class SectionPlan(Protocol):
     def summary(self) -> str: ...
 
 
+@dataclass(frozen=True)
+class DiscoveredPaths:
+    """Where a Section's configuration is, mapped to where Apchi would keep it.
+
+    Both halves are needed and they are usually different, which is the whole difficulty of
+    Adoption. The **key** is the path Apchi writes and `parse_files` expects; the **value**
+    is where that file actually is on this Cluster. A parser handed content under the Admin's
+    path would look up Apchi's path, find nothing, and report a Section with no configuration
+    -- which is the one failure Adoption must never produce.
+
+    `files` are read individually. `directories` are listed, because for some Sections the
+    question is "what is in here" rather than "what is at this path": client certificates are
+    a directory whose contents *are* the configuration.
+
+    `why` explains a path Apchi guessed rather than read from the Cluster, so a discovery can
+    say "I looked here because this is where Apchi would put it, not because your Cluster
+    told me" -- and an empty result is not mistaken for a fact.
+    """
+
+    files: Mapping[str, str] = field(default_factory=dict)
+    directories: Mapping[str, str] = field(default_factory=dict)
+    why: str | None = None
+
+    @property
+    def everywhere_looked(self) -> list[str]:
+        """The actual paths, which is what an Operator wants to see."""
+        return sorted({*self.files.values(), *self.directories.values()})
+
+
 class ParsesFiles(Protocol):
     """A Section that can read its own files back: the inverse of `render_files`.
 
@@ -215,6 +244,31 @@ class ParsesFiles(Protocol):
     """
 
     name: SectionName
+
+    def render_files(
+        self, desired: Resources, settings: Settings, admin: AdminValues
+    ) -> dict[str, str]:
+        """The other direction. Part of this protocol rather than only of `Section` because
+        the round trip is what makes a parser trustworthy: Adoption regenerates what it
+        parsed and compares, since a parse that silently drops a field would have that field
+        deleted from the Cluster by the first Apply."""
+        ...
+
+    def discover_paths(self, settings: Settings, properties: Mapping[str, str]) -> DiscoveredPaths:
+        """Where this Section's configuration is on a Cluster Apchi has not configured.
+
+        `render_files` declares where Apchi *puts* its files. This answers the different
+        question Adoption asks: where are they **now**, on a Cluster whose files an Admin
+        placed and named. Usually somewhere else, and the only authority on where is Trino's
+        own configuration -- `security.config-file` says where the rules are,
+        `resource-groups.config-file` says where the resource groups are.
+
+        `properties` is the coordinator's configuration as Apchi managed to read it, merged
+        across the property files it found. A Section finds its own path in there and falls
+        back to where Apchi would put it, because a Cluster part-way through onboarding has
+        some of each.
+        """
+        ...
 
     def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
         """`files` is keyed by the paths this Section declares, and a path the Cluster does
