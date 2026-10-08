@@ -89,6 +89,22 @@ class Trino:
     async def catalogs(self) -> set[str]:
         return {row[0] for row in await self.query("SHOW CATALOGS")}
 
+    async def catalog_connectors(self) -> dict[str, str]:
+        """Every loaded catalog and the connector behind it.
+
+        As much as Trino will say about a catalog, and the reason Adoption cannot be a
+        matter of asking it: there is no properties column here, no `SHOW CREATE CATALOG`
+        in 483 -- the grammar accepts only FUNCTION, MATERIALIZED, SCHEMA, TABLE and VIEW --
+        and no other route to a `connection-url`. Verified against a running coordinator.
+
+        So this is what tells Apchi a catalog *exists* that it cannot reconstruct, which is
+        worth more than it sounds: a catalog created by DDL after the pod started lives only
+        in the coordinator's writable store, and without this it would simply be absent from
+        a discovery and deleted at the first restart after adoption (§15).
+        """
+        rows = await self.query("SELECT catalog_name, connector_name FROM system.metadata.catalogs")
+        return {row[0]: row[1] for row in rows}
+
     async def create_catalog(self, name: str, connector: str, properties: dict[str, str]) -> None:
         """Issues CREATE CATALOG. Trino writes the .properties file itself as a side
         effect, so Apchi never touches the coordinator's store directory."""
