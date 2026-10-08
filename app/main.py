@@ -11,6 +11,7 @@ from app.adapters.mongo import Mongo
 from app.adapters.trino import Trino
 from app.api import errors
 from app.api.admin import router as admin_router
+from app.api.adoption import router as adoption_router
 from app.api.applies import router as applies_router
 from app.api.candidate import router as candidate_router
 from app.api.catalogs import router as catalogs_router
@@ -27,6 +28,7 @@ from app.logging import configure_logging
 from app.pipeline.admin_values import AdminStore
 from app.pipeline.applies import ApplyEngine, ApplyRunner, ApplyStore, recover_interrupted
 from app.pipeline.candidate import CandidateStore
+from app.pipeline.discoveries import DiscoveryStore
 from app.pipeline.engine import AdminEngine, Engine
 from app.pipeline.maintenance import MaintenanceStore
 from app.pipeline.snapshots import SnapshotStore
@@ -46,6 +48,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.validation_store = ValidationStore(app.state.mongo.database)
     app.state.maintenance_store = MaintenanceStore(app.state.mongo.database)
     app.state.admin_store = AdminStore(app.state.mongo.database)
+    app.state.discovery_store = DiscoveryStore(app.state.mongo.database)
 
     # Tests substitute the Kubernetes adapter before the lifespan runs; nothing else
     # is ever substituted.
@@ -146,6 +149,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(snapshots_router, prefix="/api/v1")
     app.include_router(validations_router, prefix="/api/v1")
     app.include_router(admin_router, prefix="/api/v1")
+    app.include_router(adoption_router, prefix="/api/v1")
     return app
 
 

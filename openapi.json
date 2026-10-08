@@ -459,6 +459,62 @@
         "title": "ClientCertificate",
         "type": "object"
       },
+      "DiscoveryView": {
+        "additionalProperties": false,
+        "description": "A discovery as an Admin reads it.",
+        "properties": {
+          "admin_values": {
+            "additionalProperties": true,
+            "description": "Configuration that belongs to the Admin rather than the Candidate: rules Apchi's models cannot express, kept working beneath the Operator's own.",
+            "title": "Admin Values",
+            "type": "object"
+          },
+          "changed_since_last_read": {
+            "description": "What the Cluster changed between the previous reading and this one.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Changed Since Last Read",
+            "type": "array"
+          },
+          "complete": {
+            "description": "Whether everything Apchi could not read has been supplied. Seeding and adopting both require it.",
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "outstanding": {
+            "description": "Problems no amendment has answered yet, each naming where it is.",
+            "items": {
+              "$ref": "#/components/schemas/Problem"
+            },
+            "title": "Outstanding",
+            "type": "array"
+          },
+          "read_at": {
+            "title": "Read At",
+            "type": "string"
+          },
+          "sections": {
+            "description": "Per Section: what was read, where Apchi looked, and what it amended.",
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Sections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "read_at",
+          "complete",
+          "outstanding",
+          "changed_since_last_read",
+          "sections",
+          "admin_values"
+        ],
+        "title": "DiscoveryView",
+        "type": "object"
+      },
       "EngagedBy": {
         "enum": [
           "admin",
@@ -859,6 +915,65 @@
           "privileges"
         ],
         "title": "PrivilegesWrite",
+        "type": "object"
+      },
+      "Problem": {
+        "description": "One reason a discovery is not the whole truth.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "unreadable",
+              "unaccounted",
+              "lossy",
+              "unreadable_section",
+              "precondition",
+              "cutover",
+              "incomplete",
+              "not_loaded"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          },
+          "section": {
+            "anyOf": [
+              {
+                "enum": [
+                  "catalogs",
+                  "client_certificates",
+                  "certificate_mapping",
+                  "permissions",
+                  "resource_groups",
+                  "event_listeners"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Section"
+          }
+        },
+        "required": [
+          "kind",
+          "detail"
+        ],
+        "title": "Problem",
         "type": "object"
       },
       "ResourceChange": {
@@ -1924,6 +2039,174 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/admin/adoption/discoveries": {
+      "post": {
+        "description": "Reads and records. Touches no part of the Cluster and not the Candidate.\n\nRe-reading keeps whatever has been amended and reports what the Cluster changed, because\nan Admin re-reads precisely when they are unsure -- the worst moment to take their work\naway.",
+        "operationId": "create_discovery_api_v1_admin_adoption_discoveries_post",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Read the Cluster's configuration, changing nothing",
+        "tags": [
+          "adoption"
+        ]
+      }
+    },
+    "/api/v1/admin/adoption/discovery": {
+      "delete": {
+        "description": "Discards Apchi's reading and the amendments with it. Nothing on the Cluster is\ntouched -- a discovery never reached it.",
+        "operationId": "discard_discovery_api_v1_admin_adoption_discovery_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Discard the discovery and everything supplied for it",
+        "tags": [
+          "adoption"
+        ]
+      },
+      "get": {
+        "operationId": "get_discovery_api_v1_admin_adoption_discovery_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "The current discovery",
+        "tags": [
+          "adoption"
+        ]
+      }
+    },
+    "/api/v1/admin/adoption/discovery/catalogs/{name}": {
+      "put": {
+        "description": "Judged exactly as `POST /catalogs` judges a staged Catalog, through the same code.\n\nThe name in the path wins: an amendment answers a question Apchi asked about a named\nCatalog, so a body naming a different one is a mistake worth refusing rather than\nquietly resolving.",
+        "operationId": "amend_catalog_api_v1_admin_adoption_discovery_catalogs__name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Supply the properties of a Catalog Apchi could not read",
+        "tags": [
+          "adoption"
+        ]
+      }
+    },
+    "/api/v1/admin/adoption/discovery/{section}/{resource}": {
+      "delete": {
+        "operationId": "withdraw_amendment_api_v1_admin_adoption_discovery__section___resource__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "section",
+            "required": true,
+            "schema": {
+              "enum": [
+                "catalogs",
+                "client_certificates",
+                "certificate_mapping",
+                "permissions",
+                "resource_groups",
+                "event_listeners"
+              ],
+              "title": "Section",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "resource",
+            "required": true,
+            "schema": {
+              "title": "Resource",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Withdraw something supplied for a discovery",
+        "tags": [
+          "adoption"
+        ]
+      }
+    },
     "/api/v1/admin/applies": {
       "post": {
         "description": "The same pipeline, over the latest Snapshot merged with today's Admin values.\n\nNot the Candidate: an Admin Apply must not push an Operator's staged, unreviewed\nchanges to the Cluster. And no Snapshot at the end, because nothing an Operator owns\nchanged -- what this Apply did is recorded as an Apply and nowhere else (section 14).\n\nIt freezes the Candidate exactly as an Operator Apply does. Both mutate one Cluster,\nand the pipeline's guarantees depend on nothing else changing underneath.",
