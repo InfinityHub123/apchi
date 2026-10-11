@@ -9,23 +9,37 @@ tests (#53).
 bootstrap that survives `helm upgrade`, and a CI gate that runs Apchi's own preconditions
 against what it renders.
 
-The two are the same where it matters — the coordinator's mounts and volumes are identical,
-which is the part Apchi's preconditions are about — but they are kept in step **by hand**,
-which is the kind of duplication this repository otherwise refuses. Generating these
-manifests from the chart, the way `openapi.json` and the two Secrets below are generated, is
-#95.
+They cannot disagree, because these manifests are **generated from the chart**.
+`scripts/export_trino_dev.py` renders `charts/trino` with `deploy/trino-dev.values.yaml` and
+writes `00-config.yaml`, `10-coordinator.yaml` and `20-worker.yaml`; CI fails on a diff. Edit
+the chart or the values and regenerate — never these three files.
+
+The values file sits *beside* this directory rather than in it, because everything here is
+applied with `kubectl apply -f deploy/trino-dev/`, which sweeps in every `.yaml` it finds and
+fails on one that is not a manifest.
 
 ```sh
 kubectl apply -f deploy/trino-dev/
-kubectl wait --for=condition=ready pod -l app=trino --timeout=300s
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=trino --timeout=300s
 ```
+
+These carry the chart's `app.kubernetes.io/*` labels, which they inherited when they became
+generated output. If you have a cluster from before that, `kubectl apply` will refuse both
+Deployments with `spec.selector: field is immutable` — delete them once and re-apply. The
+tier 2 fixture does this for you.
+
+`01-secrets.yaml` is the one file here written by hand, and there is no chart to generate it
+from: `charts/trino` creates no Secrets, because they hold configuration Apchi writes and
+Apchi's chart creates them. Tier 2 does not install Apchi's chart, so the fixture ships its
+own copies.
 
 `05-access-control.yaml` and `06-user-mapping.yaml` are **generated** —
 `scripts/export_access_control.py` and `scripts/export_user_mapping.py` write them from Apchi's
 own generators, and CI fails if the two disagree. Do not edit them by hand. They are committed
 only because Trino refuses to boot without either file, so the coordinator has to be able to
 start before Apchi has ever run; Apchi rewrites both Secrets as the configuration changes. The
-same generators write `charts/trino/files/`, so there is one source and no second copy to drift.
+same generators write `charts/apchi/files/`, which the Apchi chart's bootstrap reads, so there
+is one source and no second copy to drift.
 
 The coordinator sets `http-server.authentication.insecure.user-mapping.file` rather than the
 certificate variant, because there is no TLS here and Trino rejects

@@ -49,6 +49,11 @@ jobs:
           # than a second opinion about what they mean. A chart that ships with Apchi must
           # not be able to drift into something Apchi refuses to Apply against.
           uv run python scripts/check_trino_chart.py
+          # deploy/trino-dev is rendered from that same chart, and it is what every tier 2
+          # test runs against -- so a chart fix not mirrored into it was a fix no
+          # end-to-end test exercised. Here rather than beside the other three export
+          # checks because it is the only one that needs Helm.
+          uv run python scripts/export_trino_dev.py --check
 
       # Real MongoDB and real Trino via Testcontainers; only Kubernetes is faked.
       - name: Tier 1 -- behavioural
