@@ -28,11 +28,12 @@ from pydantic import BaseModel, Field
 
 from app.adapters.kubernetes import KubernetesAdapter
 from app.config import Settings
+from app.pipeline import preconditions
 from app.pipeline.coordinator import PodSpec, source_of
 from app.pipeline.discoveries import StoredDiscovery
 from app.pipeline.files import by_secret
 from app.sections.admin import AdminValues
-from app.sections.base import CoordinatorDirectory
+from app.sections.base import Section
 from app.sections.catalogs import SECTION as CATALOGS
 from app.sections.catalogs.generator import render_secret as render_catalog_seed
 from app.sections.registry import REGISTERED
@@ -99,67 +100,82 @@ def _contents(stored: StoredDiscovery, settings: Settings) -> dict[str, dict[str
     return secrets
 
 
-def _cutover(spec: PodSpec, settings: Settings) -> list[CutoverChange]:
-    """What the deployment still has to change, read off the pod template as it stands.
+async def cutover_changes(
+    kubernetes: KubernetesAdapter, settings: Settings, stored: StoredDiscovery
+) -> list[CutoverChange]:
+    """What the Admin's deployment must change before Apchi's copies are what Trino reads.
 
-    The same gaps discovery reports as preconditions (#87), expressed as the change to make
-    rather than as what is wrong. An Admin moving to `charts/trino` gets all of it at once;
-    an Admin keeping their own chart needs the list.
+    Two kinds, and the first version of this got the set wrong by asking a third thing.
+
+    **The §16 preconditions**, which are already the list of what Apchi needs from a
+    deployment -- the whole-volume mounts, the catalog seed initContainer, the refresh
+    period. Expressed here as the change to make rather than as what is wrong.
+
+    **Paths that point at the Admin's files rather than Apchi's.** Discovery located each
+    Section's configuration by following Trino's own configuration (#87), so a Section found
+    somewhere other than where Apchi writes is a Section Trino will still be reading from the
+    old place after the seed.
+
+    What it must *not* ask is that every file Apchi declares be mounted. Apchi adds and
+    removes those volumes itself during an Apply, and for Event Listeners and Resource Groups
+    the **absence** of the mount is how "none configured" is expressed -- demanding them
+    mounted made a correctly cut-over Cluster look as though nothing had been done.
     """
     changes: list[CutoverChange] = []
-    for section in REGISTERED:
-        for declared in section.coordinator_files(settings):
-            path = declared.path
-            whole = isinstance(declared, CoordinatorDirectory)
-            source = source_of(spec, None, path)
-            if source is not None and source.volume.secret_name == declared.secret:
-                if whole and source.mount.sub_path is not None:
-                    changes.append(
-                        CutoverChange(
-                            secret=declared.secret,
-                            path=path,
-                            whole_volume=True,
-                            why=(
-                                "mounted with subPath, which is frozen at pod creation -- "
-                                "Apchi's writes would never reach the coordinator"
-                            ),
-                        )
-                    )
-                continue
+    spec = PodSpec.model_validate(
+        await kubernetes.deployment_pod_spec(settings.coordinator_deployment_name)
+    )
+    try:
+        await preconditions.check(kubernetes, spec, settings)
+    except preconditions.PreconditionFailed as failed:
+        for problem in failed.problems:
+            seeding = settings.catalog_secret_name in problem
             changes.append(
                 CutoverChange(
-                    secret=declared.secret,
-                    path=path,
-                    whole_volume=whole,
+                    secret=settings.catalog_secret_name if seeding else None,
+                    path=settings.catalog_store_dir if seeding else "the coordinator's deployment",
+                    whole_volume=True,
                     why=(
-                        "nothing mounts Apchi's Secret here, so Trino is still reading the "
-                        "configuration this Cluster had before Apchi"
-                        if source is None
-                        else f"the volume here is {source.volume.name!r}, not Apchi's Secret"
+                        # Said here because it is the one change whose *order* matters, and
+                        # getting the order wrong is destructive rather than inconvenient.
+                        f"{problem} This is the one change that must come after the seed: "
+                        "adding it first copies an empty Secret over the catalog store and "
+                        "loses every catalog."
+                        if seeding
+                        else problem
                     ),
                 )
             )
-    if not any(
-        volume.secret_name == settings.catalog_secret_name
-        for container in spec.init_containers
-        for mount in container.volume_mounts
-        for volume in spec.volumes
-        if volume.name == mount.name
-    ):
-        changes.append(
-            CutoverChange(
-                secret=settings.catalog_secret_name,
-                path=settings.catalog_store_dir,
-                whole_volume=True,
-                why=(
-                    "no initContainer seeds the catalog store from Apchi's Secret, so the "
-                    "catalogs Apchi now holds would not be loaded at the next start. This is "
-                    "the one change that must come *after* the seed: adding it first would "
-                    "seed an empty store and lose every catalog"
-                ),
-            )
-        )
+
+    for section in stored.read.sections:
+        declared = {
+            spec_.path for spec_ in _section_named(section.section).coordinator_files(settings)
+        }
+        for path in section.looked_at:
+            if path.startswith("Secret ") or path == "system.metadata.catalogs":
+                continue
+            if declared and path not in declared and not _within(path, declared):
+                changes.append(
+                    CutoverChange(
+                        path=path,
+                        whole_volume=False,
+                        why=(
+                            f"Trino reads {section.section} from here, and Apchi writes "
+                            f"{sorted(declared)[0]}. Until the deployment points at Apchi's "
+                            "path, an Apply changes a file nothing reads"
+                        ),
+                    )
+                )
     return changes
+
+
+def _section_named(name: str) -> Section:
+    return next(section for section in REGISTERED if section.name == name)
+
+
+def _within(path: str, declared: set[str]) -> bool:
+    """Whether a path is inside a directory Apchi declares, which is the same place."""
+    return any(path.startswith(f"{candidate.rstrip('/')}/") for candidate in declared)
 
 
 async def seed(
@@ -207,7 +223,7 @@ async def seed(
     seeded = Seeded(
         secrets=sorted(contents),
         changed=changed,
-        cutover=_cutover(spec, settings),
+        cutover=await cutover_changes(kubernetes, settings, stored),
         untouched=read_from,
     )
     logger.info(
@@ -215,3 +231,21 @@ async def seed(
         extra={"written": len(changed), "cutover": len(seeded.cutover)},
     )
     return seeded
+
+
+async def unseeded(
+    kubernetes: KubernetesAdapter, settings: Settings, stored: StoredDiscovery
+) -> list[str]:
+    """Apchi's Secrets whose contents are not what this discovery says they should be.
+
+    How Adoption knows the seed has actually run, and run against *this* reading. A cutover
+    performed without a seed points the coordinator at empty Secrets, which Validation and
+    Verification would eventually catch -- but catching it here means saying "seed first"
+    instead of failing an Apply halfway and rolling a Cluster back.
+    """
+    contents = _contents(stored, settings)
+    stale: list[str] = []
+    for name in sorted(contents):
+        if await kubernetes.read_secret(name) != contents[name]:
+            stale.append(name)
+    return stale

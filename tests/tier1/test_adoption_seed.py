@@ -193,17 +193,49 @@ async def test_seeding_twice_changes_nothing_and_says_so(
 # --- what the cutover still needs ---------------------------------------------------
 
 
+async def test_a_cluster_already_cut_over_needs_no_cutover_change(
+    applying_client: AsyncClient,
+) -> None:
+    """The healthy fixture mirrors deploy/trino-dev, which is what a Cluster looks like
+    *after* the Admin's deployment change -- so there is nothing left to do.
+
+    The first version of this check demanded every file Apchi declares be mounted, which made
+    a correctly cut-over Cluster look as though nothing had been done: Apchi mounts those
+    itself, and for Event Listeners and Resource Groups the absence of the mount is how "none
+    configured" is expressed.
+    """
+    await _complete_discovery(applying_client)
+
+    assert (await applying_client.post(f"{BASE}/seed")).json()["cutover"] == []
+
+
 async def test_the_seed_says_what_the_cutover_must_change(
-    applying_client: AsyncClient, fake_kubernetes: FakeKubernetes, settings
+    applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
 ) -> None:
     """Apchi does not perform the cutover -- it is the Admin's deployment. What it owes them
-    is knowing exactly what to change."""
+    is knowing exactly what to change.
+
+    Set up the way a Cluster being onboarded is: Trino reads its rules from a file of the
+    Admin's, somewhere Apchi does not write.
+    """
+    fake_kubernetes.secrets["their-rules"] = {"rules.json": '{"catalogs": [{"allow": "all"}]}'}
+    fake_kubernetes.config_maps["trino-config"]["access-control.properties"] = (
+        "access-control.name=file\n"
+        "security.config-file=/etc/trino/theirs/rules.json\n"
+        "security.refresh-period=1s\n"
+    )
+    fake_kubernetes.pod_spec["containers"][0]["volumeMounts"].append(
+        {"name": "their-rules", "mountPath": "/etc/trino/theirs"}
+    )
+    fake_kubernetes.pod_spec["volumes"].append(
+        {"name": "their-rules", "secret": {"secretName": "their-rules"}}
+    )
     await _complete_discovery(applying_client)
 
     cutover = (await applying_client.post(f"{BASE}/seed")).json()["cutover"]
 
-    assert cutover
-    assert all({"path", "why", "whole_volume"} <= set(change) for change in cutover)
+    assert [change["path"] for change in cutover] == ["/etc/trino/theirs/rules.json"]
+    assert "Apchi writes" in cutover[0]["why"]
 
 
 async def test_the_catalog_seed_initcontainer_is_named_as_a_change_that_comes_after(
@@ -218,7 +250,8 @@ async def test_the_catalog_seed_initcontainer_is_named_as_a_change_that_comes_af
     seeding = [c for c in cutover if c["secret"] == settings.catalog_secret_name]
 
     assert seeding
-    assert "after* the seed" in seeding[0]["why"] or "after the seed" in seeding[0]["why"]
+    assert "must come after the seed" in seeding[0]["why"]
+    assert "loses every catalog" in seeding[0]["why"]
 
 
 async def test_a_subpath_mount_of_an_apchi_managed_file_is_named_in_the_cutover(
