@@ -165,7 +165,7 @@ charts/
   apchi/      Apchi, and the Secrets it writes configuration into
   trino/      a Trino that Apchi can configure, and that creates no Secrets of its own
 deploy/
-  trino-dev/  the same Trino as raw manifests, for the end-to-end tests
+  trino-dev/  the same Trino as raw manifests, rendered from the chart, for the tests
 docs/
   adr/        the decisions, and what was tried before them
 scripts/

@@ -230,9 +230,24 @@ def _apchi_volumes_present() -> list[str]:
     return [name for name in ("apchi-event-listener", "apchi-resource-groups") if name in volumes]
 
 
+def trino_selector(component: str) -> str:
+    """How `deploy/trino-dev` labels a Trino pod.
+
+    The chart's scheme, which the manifests inherited when they became generated output
+    (#95). Stated once because it is a real selector -- the Deployments match on exactly
+    these labels, and a stale copy of it silently selects nothing, which looks like a
+    Cluster with no pods rather than like a test looking in the wrong place.
+    """
+    return (
+        "app.kubernetes.io/name=trino,"
+        "app.kubernetes.io/instance=trino,"
+        f"app.kubernetes.io/component={component}"
+    )
+
+
 def _coordinator_pods() -> int:
     """How many coordinator pods exist, Terminating included."""
-    listed = kubectl("get", "pods", "-l", "app=trino,component=coordinator", "--no-headers")
+    listed = kubectl("get", "pods", "-l", trino_selector("coordinator"), "--no-headers")
     return len([line for line in listed.splitlines() if line.strip()])
 
 
@@ -367,6 +382,48 @@ def _divergence(settings: Settings) -> list[str]:
     return problems
 
 
+def _manifest_selectors() -> dict[str, dict[str, str]]:
+    """Each Deployment the manifests ship, with the selector it declares."""
+    selectors: dict[str, dict[str, str]] = {}
+    for path in sorted(MANIFESTS.glob("*.yaml")):
+        for document in yaml.safe_load_all(path.read_text()):
+            if document and document.get("kind") == "Deployment":
+                selectors[document["metadata"]["name"]] = document["spec"]["selector"][
+                    "matchLabels"
+                ]
+    return selectors
+
+
+def _drop_deployments_with_a_stale_selector() -> None:
+    """Delete a Deployment whose selector the manifests no longer declare.
+
+    `spec.selector` is immutable, so `kubectl apply` cannot change it -- it fails with
+    "field is immutable", and the baseline apply fails with it. CI never sees this, because
+    its cluster is new every run; a developer's cluster sees it the first time the labels
+    change, as a setup error that says nothing about what to do.
+
+    It happened when deploy/trino-dev became generated output and inherited the chart's
+    `app.kubernetes.io/*` labels in place of its own `app`/`component` ones (#95). Deleting
+    the Deployment costs one coordinator start, which the baseline was going to wait for
+    anyway.
+    """
+    for name, wanted in _manifest_selectors().items():
+        live = kubectl(
+            "get",
+            "deployment",
+            name,
+            "-o",
+            "jsonpath={.spec.selector.matchLabels}",
+            "--ignore-not-found",
+        ).strip()
+        if not live or json.loads(live) == wanted:
+            continue
+        # Said out loud rather than logged: this path is unreachable in CI, so the only
+        # person who ever sees it is someone whose cluster just lost a Deployment.
+        print(f"deleting {name}: its selector {live} is not the {wanted} these manifests use")
+        kubectl("delete", "deployment", name, "--wait=true")
+
+
 def _restore_baseline(settings: Settings) -> None:
     """Put the cluster back to what the manifests ship, and prove it worked.
 
@@ -376,6 +433,7 @@ def _restore_baseline(settings: Settings) -> None:
     """
     for name in manifest_secrets():
         kubectl("delete", "secret", name, "--ignore-not-found")
+    _drop_deployments_with_a_stale_selector()
     kubectl("apply", "-f", str(MANIFESTS))
 
     if volumes := [

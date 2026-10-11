@@ -23,7 +23,7 @@ from httpx import AsyncClient
 
 from app.adapters.trino import Trino
 from app.pipeline.applies import TERMINAL
-from tests.tier2.conftest import PortForward, kubectl
+from tests.tier2.conftest import PortForward, kubectl, trino_selector
 
 pytestmark = pytest.mark.tier2
 
@@ -94,7 +94,7 @@ def _worker_pods() -> dict[str, str]:
         "get",
         "pods",
         "-l",
-        "app=trino,component=worker",
+        trino_selector("worker"),
         "-o",
         "jsonpath={range .items[*]}{.metadata.name} {.metadata.uid}{'\\n'}{end}",
     )
