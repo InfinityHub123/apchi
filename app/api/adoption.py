@@ -13,15 +13,26 @@ the cutover that follow it (#101, #91).
 import logging
 from typing import Any
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.deps import DiscoveryStoreDep, KubernetesDep, SettingsDep, TrinoDep
+from app.api.deps import (
+    AdminStoreDep,
+    ApplyStoreDep,
+    CandidateStoreDep,
+    DiscoveryStoreDep,
+    KubernetesDep,
+    SettingsDep,
+    SnapshotStoreDep,
+    TrinoDep,
+)
 from app.api.errors import Conflict, NotFound
+from app.pipeline.applies import ApplyRecord, ApplyRunner
 from app.pipeline.discoveries import StoredDiscovery
 from app.pipeline.discovery import DiscoveryFailed, Problem, discover
-from app.pipeline.seed import Seeded, SeedRefused, seed
+from app.pipeline.seed import Seeded, SeedRefused, cutover_changes, seed, unseeded
 from app.sections import SectionName
+from app.sections.admin import AdminValues
 from app.sections.catalogs import SECTION as CATALOGS
 from app.sections.catalogs.model import CatalogWrite
 from app.sections.catalogs.section import validated as validated_catalog
@@ -148,6 +159,82 @@ async def seed_cluster(
         return await seed(kubernetes, settings, stored)
     except SeedRefused as refused:
         raise Conflict(str(refused)) from refused
+
+
+@router.post(
+    "/adopt",
+    response_model=ApplyRecord,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Adopt the Cluster, producing Snapshot 1",
+)
+async def adopt(
+    request: Request,
+    store: DiscoveryStoreDep,
+    candidate_store: CandidateStoreDep,
+    snapshots: SnapshotStoreDep,
+    applies: ApplyStoreDep,
+    admin_store: AdminStoreDep,
+    kubernetes: KubernetesDep,
+    settings: SettingsDep,
+) -> ApplyRecord:
+    """Stages the completed discovery and then gets out of the way.
+
+    Deliberately the smallest thing in Adoption. §15 is explicit that this is not a special
+    case of Commit: the discovered configuration is validated, applied to the real Cluster
+    and verified, and the Snapshot it produces is a Snapshot like any other (invariant 2).
+    So `/validations` and `/applies` do the rest, unchanged, and there is no second route to
+    the Cluster.
+
+    Which leaves the refusals as the substance, and all four protect something:
+    """
+    if await snapshots.latest() is not None:
+        raise Conflict(
+            "This Cluster already has Snapshots, so it is already managed. Adoption produces "
+            "Snapshot 1 and runs once; editing the Candidate is how a managed Cluster "
+            "changes."
+        )
+    if (running := await applies.in_flight()) is not None:
+        raise Conflict(f"Apply {running.id} is already in flight.")
+
+    stored = await store.load()
+    if stored is None:
+        raise NotFound("No discovery has been read. POST /admin/adoption/discoveries first.")
+    if not stored.complete:
+        raise Conflict(
+            f"This discovery still has {len(stored.outstanding)} thing(s) Apchi could not "
+            "account for. Nothing half-understood should reach the Cluster."
+        )
+
+    if outstanding := await cutover_changes(kubernetes, settings, stored):
+        raise Conflict(
+            "The cutover has not happened: "
+            + "; ".join(f"{change.path} -- {change.why}" for change in outstanding)
+            + ". Until the coordinator reads Apchi's Secrets there is nothing for "
+            "Verification to verify, and a Snapshot claiming otherwise would be the "
+            "never-verified Snapshot §15 refuses to create."
+        )
+    if stale := await unseeded(kubernetes, settings, stored):
+        raise Conflict(
+            f"Apchi's Secrets do not hold this discovery yet ({', '.join(stale)}). "
+            "POST /admin/adoption/seed first -- the coordinator is reading Secrets that do "
+            "not say what was discovered."
+        )
+
+    # Admin values first. They are applied and never recorded in a Snapshot (invariant 9), so
+    # the Apply has to be able to read them -- and the preserved access-control rules are the
+    # reason a Cluster keeps the access it had on the day it was onboarded.
+    await admin_store.save(AdminValues.model_validate(stored.read.admin_values))
+
+    candidate = await candidate_store.load()
+    for section in stored.read.sections:
+        candidate.sections[section.section] = stored.resolved(section.section)
+    await candidate_store.save(candidate)
+
+    record = await applies.create(base_snapshot=candidate.base_snapshot)
+    runner: ApplyRunner = request.app.state.apply_runner
+    runner.start(record)
+    logger.info("adoption started", extra={"apply": record.id})
+    return record
 
 
 @router.put(

@@ -2122,6 +2122,28 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/admin/adoption/adopt": {
+      "post": {
+        "description": "Stages the completed discovery and then gets out of the way.\n\nDeliberately the smallest thing in Adoption. \u00a715 is explicit that this is not a special\ncase of Commit: the discovered configuration is validated, applied to the real Cluster\nand verified, and the Snapshot it produces is a Snapshot like any other (invariant 2).\nSo `/validations` and `/applies` do the rest, unchanged, and there is no second route to\nthe Cluster.\n\nWhich leaves the refusals as the substance, and all four protect something:",
+        "operationId": "adopt_api_v1_admin_adoption_adopt_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplyRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Adopt the Cluster, producing Snapshot 1",
+        "tags": [
+          "adoption"
+        ]
+      }
+    },
     "/api/v1/admin/adoption/discoveries": {
       "post": {
         "description": "Reads and records. Touches no part of the Cluster and not the Candidate.\n\nRe-reading keeps whatever has been amended and reports what the Cluster changed, because\nan Admin re-reads precisely when they are unsure -- the worst moment to take their work\naway.",
