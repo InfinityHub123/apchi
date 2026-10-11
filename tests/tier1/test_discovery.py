@@ -318,7 +318,7 @@ async def test_trino_told_to_read_a_file_nothing_mounts_is_reported(
     found = _of(discovery, "certificate_mapping")
 
     assert [p.kind for p in found.problems] == ["unreadable"]
-    assert "nothing mounts it" in found.problems[0].detail
+    assert "it is not there" in found.problems[0].detail
     assert found.problems[0].path == "/etc/trino/nowhere/mapping.json"
 
 
@@ -492,7 +492,7 @@ async def test_rules_named_by_the_properties_file_but_mounted_nowhere_are_report
         ("unreadable", "/etc/trino/gone.json"),
         ("unaccounted", MANAGER_PATH),
     ]
-    assert "nothing mounts it" in found.problems[0].detail
+    assert "it is not there" in found.problems[0].detail
     assert "not there" in found.problems[1].detail
 
 

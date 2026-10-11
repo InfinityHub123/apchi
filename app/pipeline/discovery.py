@@ -288,23 +288,8 @@ async def _discover_section(
         content = await content_at(kubernetes, spec, path)
         if content is not None:
             found[canonical] = content
-        elif source is not None:
-            # Something mounts the path and Apchi still cannot read it: an emptyDir, or a
-            # key deeper inside a directory mount than a ConfigMap key can express.
-            problems.append(
-                Problem(
-                    kind="unreadable",
-                    section=section.name,
-                    path=path,
-                    detail=(
-                        f"volume {source.volume.name!r} provides this path, but Apchi cannot "
-                        "read its content -- it is not a Secret or ConfigMap key it can "
-                        "resolve."
-                    ),
-                )
-            )
         elif path in properties.values():
-            # Trino is configured to read a file nothing mounts. The Cluster is already
+            # Trino is configured to read a file that is not there. The Cluster is already
             # broken; an Admin should hear it from Apchi rather than from a failed restart.
             problems.append(
                 Problem(
@@ -312,11 +297,29 @@ async def _discover_section(
                     section=section.name,
                     path=path,
                     detail=(
-                        "Trino is configured to read this file and nothing mounts it. The "
+                        "Trino is configured to read this file and it is not there. The "
                         "coordinator will not come back from its next restart."
                     ),
                 )
             )
+        elif source is not None and source.key is None:
+            # Mounted, and genuinely unresolvable: a subPath directory mount, or a path
+            # deeper inside one than a ConfigMap key can express.
+            problems.append(
+                Problem(
+                    kind="unreadable",
+                    section=section.name,
+                    path=path,
+                    detail=(
+                        f"volume {source.volume.name!r} provides this path, but Apchi cannot "
+                        "resolve a Secret or ConfigMap key for it."
+                    ),
+                )
+            )
+        # Otherwise the file is simply absent, which is a legitimate state rather than a
+        # fault: an empty Secret mounts as an empty directory, and half the Sections express
+        # "nothing configured" as the absence of their file. Reporting absence as unreadable
+        # made a Cluster with no Resource Groups look like one Apchi could not read.
 
     for canonical, directory in sorted(where.directories.items()):
         listed = await files_under(kubernetes, spec, directory)

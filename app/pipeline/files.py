@@ -35,7 +35,7 @@ async def deliver(section: Section, cluster: Cluster, desired: Resources) -> Non
         return
 
     contents = section.render_files(desired, cluster.settings, cluster.admin)
-    for secret, data in _by_secret(declared, contents).items():
+    for secret, data in by_secret(declared, contents).items():
         await cluster.kubernetes.write_secret(secret, data)
 
     # Grouped by volume, because a volume and the mounts that name it can only be removed
@@ -76,10 +76,14 @@ def _by_volume(declared: tuple[Delivery, ...]) -> dict[str, list[CoordinatorFile
     return volumes
 
 
-def _by_secret(
+def by_secret(
     declared: tuple[Delivery, ...], contents: dict[str, str]
 ) -> dict[str, dict[str, str]]:
     """One write per Secret, holding exactly what the Section rendered into it.
+
+    Public because Adoption's seed writes the same Secrets without the mounting that goes
+    with them (#101): what a seed writes has to be byte-identical to what an Apply would,
+    or the Apply after the cutover becomes a change rather than a confirmation.
 
     Written whole rather than key by key, so a file that stopped being rendered -- a removed
     certificate, a Section emptied -- stops being in the Secret rather than lingering in the
@@ -121,7 +125,7 @@ async def would_change(section: Section, cluster: Cluster, resources: Resources)
     if not declared:
         return False
     contents = section.render_files(resources, cluster.settings, cluster.admin)
-    for secret, data in _by_secret(declared, contents).items():
+    for secret, data in by_secret(declared, contents).items():
         if await cluster.kubernetes.read_secret(secret) != data:
             return True
     return False
