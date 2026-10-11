@@ -23,6 +23,8 @@ from app.main import create_app
 from app.sections.certificate_mapping.generator import FILE_KEY as MAPPING_KEY
 from app.sections.certificate_mapping.generator import MOUNT_PATH as MAPPING_PATH
 from app.sections.certificate_mapping.generator import render_rules
+from app.sections.permissions.generator import RULES_KEY
+from app.sections.permissions.generator import render_rules as render_access_control
 
 # Pinned to match deploy/trino-dev and the supported range in section 8, so a
 # Trino upgrade breaks CI rather than production.
@@ -88,16 +90,27 @@ def _trino_container() -> DockerContainer:
 
 _SETTINGS = Settings()
 MAPPING_SECRET = _SETTINGS.certificate_mapping_secret_name
+RULES_SECRET = _SETTINGS.access_control_secret_name
 
 
 def bootstrap_secrets() -> dict[str, dict[str, str]]:
     """What a Cluster holds before Apchi has ever applied to it.
 
-    Not empty: the coordinator is configured to read a user-mapping file and will not start
-    without one, so deploy/trino-dev ships the generated default. A fake that started empty
-    would make the first Apply look like a change and restart a coordinator for nothing.
+    Not empty, and for a reason that applies to both files here: the coordinator is
+    configured to read a user-mapping file and an access-control rules file, and refuses to
+    start when either is missing -- which is exactly why deploy/trino-dev ships the generated
+    default of each. A fake that started empty would make the first Apply look like a change
+    and restart a coordinator for nothing.
+
+    The rules file joined this when Adoption started reading the Cluster (#101). Discovery
+    reported, correctly, that Trino was configured to read a file that was not there -- a
+    Cluster that could not come back from its next restart. The fake was wrong rather than
+    the report, in exactly the way this docstring already argued it would be.
     """
-    return {MAPPING_SECRET: {MAPPING_KEY: render_rules({}, _SETTINGS.trino_user)}}
+    return {
+        MAPPING_SECRET: {MAPPING_KEY: render_rules({}, _SETTINGS.trino_user)},
+        RULES_SECRET: {RULES_KEY: render_access_control(_SETTINGS.trino_user)},
+    }
 
 
 def healthy_pod_spec() -> dict[str, Any]:

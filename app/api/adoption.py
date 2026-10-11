@@ -20,6 +20,7 @@ from app.api.deps import DiscoveryStoreDep, KubernetesDep, SettingsDep, TrinoDep
 from app.api.errors import Conflict, NotFound
 from app.pipeline.discoveries import StoredDiscovery
 from app.pipeline.discovery import DiscoveryFailed, Problem, discover
+from app.pipeline.seed import Seeded, SeedRefused, seed
 from app.sections import SectionName
 from app.sections.catalogs import SECTION as CATALOGS
 from app.sections.catalogs.model import CatalogWrite
@@ -119,6 +120,34 @@ async def discard_discovery(store: DiscoveryStoreDep) -> None:
     """Discards Apchi's reading and the amendments with it. Nothing on the Cluster is
     touched -- a discovery never reached it."""
     await store.discard()
+
+
+@router.post(
+    "/seed",
+    response_model=Seeded,
+    summary="Write Apchi's own Secrets from a completed discovery",
+)
+async def seed_cluster(
+    store: DiscoveryStoreDep,
+    kubernetes: KubernetesDep,
+    settings: SettingsDep,
+) -> Seeded:
+    """Writes Apchi's Secrets and nothing else: no mount, no Rollout, no Snapshot, and not
+    one byte of the Secrets Apchi read the configuration out of.
+
+    So the Cluster goes on serving exactly what it was serving. Making these copies live is
+    the next step and it is the Admin's: re-point the deployment, add the catalog-seed
+    initContainer, set a refresh period. The response says precisely what is left.
+
+    Reversible at this point by deleting the Secrets -- nothing has happened yet.
+    """
+    stored = await store.load()
+    if stored is None:
+        raise NotFound("No discovery has been read. POST /admin/adoption/discoveries first.")
+    try:
+        return await seed(kubernetes, settings, stored)
+    except SeedRefused as refused:
+        raise Conflict(str(refused)) from refused
 
 
 @router.put(

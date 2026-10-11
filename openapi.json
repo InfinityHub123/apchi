@@ -459,6 +459,44 @@
         "title": "ClientCertificate",
         "type": "object"
       },
+      "CutoverChange": {
+        "description": "One thing the Admin's deployment still has to do for Apchi's copies to be in force.",
+        "properties": {
+          "path": {
+            "description": "Where it belongs in the coordinator.",
+            "title": "Path",
+            "type": "string"
+          },
+          "secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Secret to mount, if any.",
+            "title": "Secret"
+          },
+          "whole_volume": {
+            "description": "Whether it must be mounted as a whole volume rather than with subPath. A subPath mount is frozen at pod creation, so Apchi's later writes never arrive.",
+            "title": "Whole Volume",
+            "type": "boolean"
+          },
+          "why": {
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "whole_volume",
+          "why"
+        ],
+        "title": "CutoverChange",
+        "type": "object"
+      },
       "DiscoveryView": {
         "additionalProperties": false,
         "description": "A discovery as an Admin reads it.",
@@ -1618,6 +1656,51 @@
         "title": "SectionDiff",
         "type": "object"
       },
+      "Seeded": {
+        "description": "What the seed wrote, and what the cutover still needs.",
+        "properties": {
+          "changed": {
+            "description": "The Secrets whose contents this seed actually altered. Empty on a second seed of an unchanged discovery.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Changed",
+            "type": "array"
+          },
+          "cutover": {
+            "description": "What the Admin's deployment must change before Apchi's copies are what Trino reads. Apchi does not do this -- it is their deployment.",
+            "items": {
+              "$ref": "#/components/schemas/CutoverChange"
+            },
+            "title": "Cutover",
+            "type": "array"
+          },
+          "secrets": {
+            "description": "The Secrets Apchi wrote, in the order written.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Secrets",
+            "type": "array"
+          },
+          "untouched": {
+            "description": "Secrets and ConfigMaps Apchi read the configuration out of and did not write. The Cluster is still serving these.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Untouched",
+            "type": "array"
+          }
+        },
+        "required": [
+          "secrets",
+          "changed",
+          "cutover",
+          "untouched"
+        ],
+        "title": "Seeded",
+        "type": "object"
+      },
       "Selector": {
         "additionalProperties": false,
         "description": "One rule choosing a group for a query. First match wins, so position matters.\n\nEvery field but `group` is optional and every one given must match. An empty selector\ntherefore matches everything, which is the usual last rule.",
@@ -2202,6 +2285,28 @@
           }
         },
         "summary": "Withdraw something supplied for a discovery",
+        "tags": [
+          "adoption"
+        ]
+      }
+    },
+    "/api/v1/admin/adoption/seed": {
+      "post": {
+        "description": "Writes Apchi's Secrets and nothing else: no mount, no Rollout, no Snapshot, and not\none byte of the Secrets Apchi read the configuration out of.\n\nSo the Cluster goes on serving exactly what it was serving. Making these copies live is\nthe next step and it is the Admin's: re-point the deployment, add the catalog-seed\ninitContainer, set a refresh period. The response says precisely what is left.\n\nReversible at this point by deleting the Secrets -- nothing has happened yet.",
+        "operationId": "seed_cluster_api_v1_admin_adoption_seed_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Seeded"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Write Apchi's own Secrets from a completed discovery",
         "tags": [
           "adoption"
         ]
