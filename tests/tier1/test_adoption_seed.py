@@ -305,3 +305,51 @@ async def test_the_seed_names_what_it_read_from_and_left_alone(
 
     assert "their-mapping" in body["untouched"]
     assert fake_kubernetes.secrets["their-mapping"] == {"mapping.json": '{"rules": []}'}
+
+
+async def test_the_cutover_is_judged_by_the_live_coordinator_not_the_stored_reading(
+    applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
+) -> None:
+    """The cutover check has to clear once the Admin has cut over, and the discovery it is
+    judging still records the Admin's old paths.
+
+    Found by tests/tier2/test_adoption.py: after a real cutover, `POST /adopt` went on
+    refusing with "the cutover has not happened: /etc/trino/theirs/user-mapping.json". The
+    check was reading `looked_at` out of the stored discovery, which is by definition where
+    Trino read *before* -- and that discovery is deliberately never re-read (#82), because
+    re-reading mid-migration finds a Cluster whose resource groups have been taken away and
+    whose replacements Apchi does not mount until the Apply. So the one question worth asking
+    is where the coordinator reads from *now*.
+    """
+    fake_kubernetes.secrets["their-rules"] = {"rules.json": '{"catalogs": [{"allow": "all"}]}'}
+    theirs = (
+        "access-control.name=file\n"
+        "security.config-file=/etc/trino/theirs/rules.json\n"
+        "security.refresh-period=1s\n"
+    )
+    fake_kubernetes.config_maps["trino-config"]["access-control.properties"] = theirs
+    fake_kubernetes.pod_spec["containers"][0]["volumeMounts"].append(
+        {"name": "their-rules", "mountPath": "/etc/trino/theirs"}
+    )
+    fake_kubernetes.pod_spec["volumes"].append(
+        {"name": "their-rules", "secret": {"secretName": "their-rules"}}
+    )
+    await _complete_discovery(applying_client)
+
+    assert [
+        change["path"] for change in (await applying_client.post(f"{BASE}/seed")).json()["cutover"]
+    ] == ["/etc/trino/theirs/rules.json"]
+
+    # The Admin's deployment change: Trino now reads Apchi's file. Nothing re-reads the
+    # discovery, which still says the rules were found under /etc/trino/theirs.
+    fake_kubernetes.config_maps["trino-config"]["access-control.properties"] = (
+        "access-control.name=file\n"
+        "security.config-file=/etc/trino/access-control/rules.json\n"
+        "security.refresh-period=1s\n"
+    )
+
+    seeded = (await applying_client.post(f"{BASE}/seed")).json()
+    assert seeded["cutover"] == [], (
+        "the coordinator reads Apchi's rules now, so there is nothing left for the Admin "
+        "to change -- however the stored reading found them"
+    )

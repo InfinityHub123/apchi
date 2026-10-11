@@ -473,6 +473,9 @@ class ForwardedKubernetes:
     async def read_secret(self, name: str) -> dict[str, str]:
         return await self._real.read_secret(name)
 
+    async def read_secret_if_present(self, name: str) -> dict[str, str] | None:
+        return await self._real.read_secret_if_present(name)
+
     async def write_secret(self, name: str, data: dict[str, str]) -> None:
         await self._real.write_secret(name, data)
 

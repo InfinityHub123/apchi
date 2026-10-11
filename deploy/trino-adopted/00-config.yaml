@@ -1,0 +1,98 @@
+# Hand-written. Not generated, not drift-checked -- see README.md.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: adopted-config
+data:
+  # Every path here is somewhere Apchi would not have put it, which is the point: discovery
+  # has to find them by following these properties rather than by assuming Apchi's layout.
+  coordinator-config.properties: |
+    coordinator=true
+    node-scheduler.include-coordinator=false
+    http-server.http.port=8080
+    discovery.uri=http://adopted:8080
+    catalog.management=dynamic
+    catalog.store=file
+    http-server.authentication.insecure.user-mapping.file=/etc/trino/theirs/user-mapping.json
+  worker-config.properties: |
+    coordinator=false
+    http-server.http.port=8080
+    discovery.uri=http://adopted:8080
+    catalog.management=dynamic
+  node.properties: |
+    node.environment=adopted
+  jvm.config: |
+    -server
+    -Xmx1G
+    -XX:+UseG1GC
+    -XX:+ExitOnOutOfMemoryError
+  # The catalogs live in a ConfigMap mounted here -- read-only, which is a §16 violation on
+  # purpose. It is what the cutover has to change, and changing it before the seed is what
+  # would lose every catalog.
+  catalog-store.properties: |
+    catalog.config-dir=/etc/trino/catalog
+  access-control.properties: |
+    access-control.name=file
+    security.config-file=/etc/trino/theirs/rules.json
+    security.refresh-period=1s
+  resource-groups.properties: |
+    resource-groups.configuration-manager=file
+    resource-groups.config-file=/etc/trino/theirs/groups.json
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: adopted-catalogs
+data:
+  # Catalogs as mounted files, which is how a Cluster that predates Apchi usually holds them.
+  bench.properties: |
+    connector.name=tpch
+    tpch.splits-per-node=2
+  notes.properties: |
+    connector.name=memory
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: adopted-theirs
+data:
+  # Hand-written rules. Three things here Apchi's grant model cannot hold and one it can.
+  #
+  # `platform` has owner on every catalog, which is how this Cluster's own admin creates
+  # them -- and the reason a catalog can exist here that Apchi did not make. Note that
+  # nobody is given owner by `allow: all`, so without this rule no identity on this Cluster
+  # could issue CREATE CATALOG at all, which is itself worth knowing about an un-adopted
+  # Trino.
+  rules.json: |
+    {
+      "catalogs": [
+        {"user": "platform", "allow": "owner"},
+        {"user": "reporting", "allow": "read-only"},
+        {"allow": "all"}
+      ],
+      "tables": [
+        {"user": "^analyst$", "catalog": "^bench$", "privileges": ["SELECT"]},
+        {"user": "^legacy$", "catalog": "^(bench|notes)$", "privileges": ["SELECT"]},
+        {"privileges": ["SELECT", "INSERT", "UPDATE", "DELETE", "OWNERSHIP", "GRANT_SELECT"]}
+      ],
+      "impersonation": [
+        {"original_user": "^svc_.*$", "new_user": ".*"}
+      ]
+    }
+  # Two patterns where Apchi holds one. The second becomes an Admin value (§13.3).
+  user-mapping.json: |
+    {
+      "rules": [
+        {"pattern": "^(.*)@example[.]com$", "user": "$1"},
+        {"pattern": "(.*)"}
+      ]
+    }
+  groups.json: |
+    {
+      "rootGroups": [
+        {"name": "reports", "hardConcurrencyLimit": 20, "maxQueued": 100}
+      ],
+      "selectors": [
+        {"group": "reports"}
+      ]
+    }

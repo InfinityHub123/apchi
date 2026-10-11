@@ -205,7 +205,7 @@ async def adopt(
             "account for. Nothing half-understood should reach the Cluster."
         )
 
-    if outstanding := await cutover_changes(kubernetes, settings, stored):
+    if outstanding := await cutover_changes(kubernetes, settings):
         raise Conflict(
             "The cutover has not happened: "
             + "; ".join(f"{change.path} -- {change.why}" for change in outstanding)

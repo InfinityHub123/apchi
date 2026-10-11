@@ -242,11 +242,18 @@ class CatalogsSection:
         start, so the Secret write needs no wait before the DDL.
         """
         assert isinstance(plan, apply.CatalogPlan)
-        await cluster.kubernetes.write_secret(
-            cluster.settings.catalog_secret_name, render_secret({SECTION: desired})
+        durable_copy = render_secret({SECTION: desired})
+        # Read before the write, for the same reason `restore` does: afterwards there is no
+        # way to tell a catalog this Apply is about to create from one Apchi already held.
+        settled = apply.settled(
+            plan,
+            await cluster.trino.catalogs(),
+            await cluster.kubernetes.read_secret(cluster.settings.catalog_secret_name),
+            durable_copy,
         )
+        await cluster.kubernetes.write_secret(cluster.settings.catalog_secret_name, durable_copy)
         logger.info("patched the catalog Secret")
-        await apply.execute(cluster.trino, desired, plan)
+        await apply.execute(cluster.trino, desired, settled)
 
     async def restore(self, cluster: Cluster, snapshot: Resources) -> bool:
         """Rewrite the Secret and issue the compensating DDL.
@@ -280,7 +287,14 @@ class CatalogsSection:
         assert isinstance(plan, apply.CatalogPlan)
         if not plan.created:
             return []
-        return apply.collision_failures(plan.created, await cluster.trino.catalogs())
+        live = await cluster.trino.catalogs()
+        settled = apply.settled(
+            plan,
+            live,
+            await cluster.kubernetes.read_secret(cluster.settings.catalog_secret_name),
+            render_secret({SECTION: desired}),
+        )
+        return apply.collision_failures(settled.created, live)
 
     def needs_probe(self, desired: Resources) -> bool:
         return bool(desired)

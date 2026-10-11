@@ -27,7 +27,6 @@ from app.sections.base import (
 )
 from app.sections.resource_groups import SECTION, SELECTORS, SEPARATOR, SETTINGS
 from app.sections.resource_groups.generator import (
-    MANAGER_FILE,
     MANAGER_PATH,
     RULES_PATH,
     Unreadable,
@@ -225,21 +224,19 @@ class ResourceGroupsSection:
         except Unreadable as exc:
             raise ParseProblem(exc.path, exc.reason) from exc
 
-        found = tuple(
-            Unaccounted(path=RULES_PATH, what=what, content=content)
-            for what, content in unaccounted
+        # Nothing is reported about a properties file that is not the one Apchi writes,
+        # though an earlier version did. It fired on every Cluster being adopted and said
+        # nothing true: the Admin's properties file names the Admin's rules, and those are
+        # the rules discovery just read -- so they *are* the rules in force. The divergence
+        # that matters is that Trino reads them from somewhere Apchi does not write, and the
+        # cutover check reports that, where there is something actionable to say about it.
+        return Parsed(
+            resources=resources,
+            unaccounted=tuple(
+                Unaccounted(path=RULES_PATH, what=what, content=content)
+                for what, content in unaccounted
+            ),
         )
-        if manager is not None and manager != MANAGER_FILE:
-            # Trino reads whatever config-file names, so a properties file that is not the
-            # one Apchi writes means the rules above may not be the rules in force.
-            found += (
-                Unaccounted(
-                    path=MANAGER_PATH,
-                    what="the properties file is not the one Apchi writes",
-                    content=manager,
-                ),
-            )
-        return Parsed(resources=resources, unaccounted=found)
 
     def plan(self, desired: Resources, current: Resources) -> ResourceGroupsPlan:
         before, after = groups_of(current), groups_of(desired)
