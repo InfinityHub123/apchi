@@ -65,9 +65,11 @@ ProblemKind = Literal[
     #: A Section Apchi cannot read back yet. Reported rather than reported as empty,
     #: because empty looks like a Cluster with nothing configured.
     "unreadable_section",
-    #: A §16 precondition the deployment does not meet.
-    "precondition",
-    #: A §16 precondition that can only be met at the cutover, not before.
+    #: A §16 precondition the deployment does not meet. Always a cutover requirement: §16
+    #: is the list of what the deployment must provide, and the deployment change is the
+    #: cutover. Never counted against a discovery's completeness, because the cutover comes
+    #: after the seed and a precondition that blocked the seed would block the step that has
+    #: to happen first.
     "cutover",
     #: Trino is serving a catalog Apchi can name and cannot reconstruct. The Operator has
     #: to supply its properties; Apchi will not invent them.
@@ -160,7 +162,7 @@ class DiscoveryFailed(Exception):
     """Discovery could not run at all, which is different from finding problems."""
 
 
-async def _configuration(kubernetes: KubernetesAdapter, spec: PodSpec) -> dict[str, str]:
+async def trino_configuration(kubernetes: KubernetesAdapter, spec: PodSpec) -> dict[str, str]:
     """Trino's own configuration, merged, as far as Apchi can read it.
 
     An absent file is not a problem here: a Cluster with no resource groups has no
@@ -185,21 +187,36 @@ async def _configuration(kubernetes: KubernetesAdapter, spec: PodSpec) -> dict[s
 async def _precondition_problems(
     kubernetes: KubernetesAdapter, spec: PodSpec, settings: Settings
 ) -> list[Problem]:
-    """Every §16 precondition failure, with the one the cutover owns separated out.
+    """Every §16 precondition failure, all of them as cutover requirements.
 
-    §15 says Adoption asserts the preconditions and fails loudly. Four of the five can be
-    met before adoption. The fifth cannot: the catalog-seed initContainer copies from a
-    Secret Apchi has not written yet, so meeting it early means the next restart seeds an
-    empty store and every catalog disappears. It is reported as a cutover requirement
-    instead -- see §82's amendment.
+    §15 says Adoption asserts the preconditions and fails loudly, and the first version of
+    this took that literally: anything but the catalog-seed initContainer counted against
+    the discovery. That made the ordering impossible. §16 is exactly the list of what the
+    *deployment* must provide, so every item on it is a deployment change -- and the
+    deployment change is the cutover, which §82's amendment puts after the seed. A
+    precondition failure blocking the seed blocks the step that has to come first.
+
+    Found by adopting a Cluster configured by hand, where the Admin's own
+    `resource-groups.properties` sits exactly where Apchi writes its own: a real conflict,
+    reported correctly, and one only the cutover can resolve.
+
+    So none of these count against completeness. What stops an Apply reaching a Cluster whose
+    deployment is still wrong is `adopt` refusing while any cutover change remains -- which
+    is a better place for it, because by then there is something to be specific about.
     """
     try:
         await preconditions.check(kubernetes, spec, settings)
     except preconditions.PreconditionFailed as failed:
         return [
             Problem(
-                kind="cutover" if settings.catalog_secret_name in problem else "precondition",
-                detail=problem,
+                kind="cutover",
+                detail=(
+                    f"{problem} This one must come after the seed: adding the initContainer "
+                    "first copies an empty Secret over the catalog store and loses every "
+                    "catalog."
+                    if settings.catalog_secret_name in problem
+                    else problem
+                ),
             )
             for problem in failed.problems
         ]
@@ -227,7 +244,7 @@ async def discover(
         ) from exc
 
     spec = PodSpec.model_validate(raw)
-    properties = await _configuration(kubernetes, spec)
+    properties = await trino_configuration(kubernetes, spec)
     logger.info(
         "read the coordinator's configuration",
         extra={"properties": len(properties), "volumes": len(spec.volumes)},

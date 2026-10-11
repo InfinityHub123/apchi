@@ -78,6 +78,8 @@ _HOPELESS = frozenset(
 class KubernetesAdapter(Protocol):
     async def read_secret(self, name: str) -> dict[str, str]: ...
 
+    async def read_secret_if_present(self, name: str) -> dict[str, str] | None: ...
+
     async def read_config_map(self, name: str) -> dict[str, str]: ...
 
     async def write_secret(self, name: str, data: dict[str, str]) -> None: ...
@@ -155,21 +157,65 @@ class RealKubernetes:
         return self._apps_api
 
     async def read_secret(self, name: str) -> dict[str, str]:
+        """A Secret's contents, or empty when there is no such Secret.
+
+        Absence is not an error here, and treating it as one was a real bug: on a Cluster
+        being adopted none of Apchi's Secrets exist yet, so discovery reading the catalog
+        seed raised a 404 from the API server and failed the whole read (§15). The fake in
+        the tests returned an empty mapping all along, which is why only tier 2 found it.
+        """
         import base64
 
-        secret = await run_in_threadpool(self._core.read_namespaced_secret, name, self._namespace)
+        secret = await self._read(self._core.read_namespaced_secret, name)
+        if secret is None:
+            return {}
+        return {k: base64.b64decode(v).decode() for k, v in (secret.data or {}).items()}
+
+    async def read_secret_if_present(self, name: str) -> dict[str, str] | None:
+        """The same read, with absence distinguishable from emptiness.
+
+        `read_secret` folds the two together, which is right for almost every caller and
+        wrong for one: Adoption's seed skips a Secret whose contents already match, and an
+        empty Secret that does not exist matches an empty one that does. It skipped creating
+        the client-certificate Secret for a Cluster with no certificates, and the cutover
+        then could not mount it -- `MountVolume.SetUp failed ... secret not found`, with the
+        coordinator stuck in Init forever.
+
+        So the distinction lives in the type rather than in a comment somewhere.
+        """
+        import base64
+
+        secret = await self._read(self._core.read_namespaced_secret, name)
+        if secret is None:
+            return None
         return {k: base64.b64decode(v).decode() for k, v in (secret.data or {}).items()}
 
     async def read_config_map(self, name: str) -> dict[str, str]:
-        """A ConfigMap's contents, for reading the Admin's configuration.
+        """A ConfigMap's contents, or empty when there is no such ConfigMap.
 
-        Apchi writes no ConfigMap. It reads one to check a precondition it cannot check any
-        other way: whether Trino was told to re-read the rules file Apchi writes.
+        Apchi writes no ConfigMap. It reads them to check a precondition it cannot check any
+        other way -- whether Trino was told to re-read the rules file -- and, since §15, to
+        find configuration an Admin put somewhere Apchi would not have.
         """
-        config_map = await run_in_threadpool(
-            self._core.read_namespaced_config_map, name, self._namespace
-        )
-        return dict(config_map.data or {})
+        config_map = await self._read(self._core.read_namespaced_config_map, name)
+        return {} if config_map is None else dict(config_map.data or {})
+
+    async def _read(self, read: Any, name: str) -> Any:
+        """One read, with "there is no such object" distinguished from a real failure.
+
+        Only a 404 is swallowed. A 403 means Apchi's Role is wrong and a 500 means the API
+        server is unwell, and reporting either as an empty object would make a Cluster look
+        unconfigured -- which during Adoption is the difference between importing nothing and
+        knowing Apchi cannot see.
+        """
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            return await run_in_threadpool(read, name, self._namespace)
+        except ApiException as exc:
+            if exc.status == 404:
+                return None
+            raise
 
     async def write_secret(self, name: str, data: dict[str, str]) -> None:
         """The Secret's contents become exactly `data`.
@@ -183,12 +229,32 @@ class RealKubernetes:
         stale = {key: None for key in existing if key not in data}
         if stale:
             body["data"] = stale
-        await run_in_threadpool(
-            self._core.patch_namespaced_secret,
-            name,
-            self._namespace,
-            body,
-        )
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            await run_in_threadpool(
+                self._core.patch_namespaced_secret,
+                name,
+                self._namespace,
+                body,
+            )
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+            # A patch cannot create, and on a Cluster being adopted none of Apchi's Secrets
+            # exist yet -- so the seed that writes them for the first time got a 404 from
+            # the API server (§15). Creating is the same operation from Apchi's side: the
+            # Secret's contents become exactly `data` either way.
+            await run_in_threadpool(
+                self._core.create_namespaced_secret,
+                self._namespace,
+                {
+                    "apiVersion": "v1",
+                    "kind": "Secret",
+                    "metadata": {"name": name},
+                    "stringData": data,
+                },
+            )
 
     async def ready_replicas(self, deployment: str) -> int:
         dep = await run_in_threadpool(

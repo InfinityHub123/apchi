@@ -968,7 +968,6 @@
               "unaccounted",
               "lossy",
               "unreadable_section",
-              "precondition",
               "cutover",
               "incomplete",
               "not_loaded"

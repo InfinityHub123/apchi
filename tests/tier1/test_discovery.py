@@ -374,7 +374,10 @@ async def test_every_precondition_failure_is_reported_not_just_the_first(
     discovery = await discover(fake_kubernetes, settings)
 
     assert len(discovery.problems) >= 2
-    assert "precondition" in _kinds(discovery)
+    # All of them cutover requirements: §16 is the list of what the deployment must provide,
+    # and the deployment change is the cutover. A precondition counted against completeness
+    # would block the seed, which has to happen first (§82's amendment).
+    assert {problem.kind for problem in discovery.problems} == {"cutover"}
 
 
 async def test_the_seed_initcontainer_is_a_cutover_requirement_not_a_fault(
@@ -390,7 +393,9 @@ async def test_the_seed_initcontainer_is_a_cutover_requirement_not_a_fault(
     cutover = [p for p in discovery.problems if p.kind == "cutover"]
     assert len(cutover) == 1
     assert settings.catalog_secret_name in cutover[0].detail
-    assert "precondition" not in {p.kind for p in discovery.problems}
+    # Said out loud, because this is the one whose *order* matters and getting it wrong is
+    # destructive rather than inconvenient.
+    assert "must come after the seed" in cutover[0].detail
 
 
 async def test_a_cutover_requirement_alone_does_not_make_a_discovery_incomplete(
@@ -496,12 +501,15 @@ async def test_rules_named_by_the_properties_file_but_mounted_nowhere_are_report
     assert "not there" in found.problems[1].detail
 
 
-async def test_a_properties_file_that_is_not_apchis_is_reported_alongside_the_rules(
+async def test_rules_read_through_the_admins_own_properties_file_are_still_read(
     settings: Settings, fake_kubernetes: FakeKubernetes
 ) -> None:
-    """The rules are readable and are the ones in force, but the file pointing at them is
-    the Admin's rather than Apchi's -- so after the cutover Trino would be reading a
-    different file. Worth saying while the rules themselves import cleanly."""
+    """A Cluster being adopted names its rules from its own properties file, and those are
+    the rules in force -- so reading them is correct and reporting a problem about it is not.
+
+    An earlier version warned here on every such Cluster. What replaced it is the cutover
+    check, which names the path divergence where it can be acted on (#92).
+    """
     fake_kubernetes.config_maps["trino-config"]["resource-groups-manager.properties"] = (
         "resource-groups.configuration-manager=file\n"
         "resource-groups.config-file=/etc/trino/theirs/groups.json\n"
@@ -527,4 +535,4 @@ async def test_a_properties_file_that_is_not_apchis_is_reported_alongside_the_ru
     found = _of(discovery, "resource_groups")
 
     assert found.resources["g"]["hard_concurrency_limit"] == 1
-    assert any("not the one Apchi writes" in p.detail for p in found.problems)
+    assert found.problems == []

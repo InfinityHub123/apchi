@@ -225,3 +225,53 @@ async def test_a_failed_adoption_leaves_no_snapshot_and_can_be_retried(
 
     assert retried["stage"] == "succeeded", retried["failure_reason"]
     assert retried["snapshot"] == 1
+
+
+async def test_a_catalog_already_live_and_seeded_is_not_a_collision_with_itself(
+    applying_client: AsyncClient, trino_cluster: DockerContainer
+) -> None:
+    """The adopting Apply's catalogs are, by definition, catalogs that already exist.
+
+    Found by tests/tier2/test_adoption.py against a hand-configured Cluster: adoption got
+    all the way to its Apply and then failed Validation with "A catalog named 'bench'
+    already exists on the Cluster and is not managed by Apchi. Adopt it or choose another
+    name." -- raised by the check whose entire purpose is to stop an Operator creating a
+    catalog over one nobody manages, firing on the operation that manages them.
+
+    The plan measured the Candidate against the Snapshot it derives from, and adoption has
+    none, so every discovered catalog looked new. The seed had already written the Secret
+    and the cutover had already loaded it, so every one of them was live.
+
+    Tier 1's own fixture cannot catch this: its Trino starts with no catalogs at all, so
+    there is nothing for a discovered catalog to collide with. Here one is made the way a
+    real one is -- by DDL, going round Apchi -- and then supplied, which is exactly the
+    state the seed leaves behind.
+    """
+    cluster = _cluster(trino_cluster)
+    await cluster.create_catalog("legacy", "tpch", {})
+    try:
+        await applying_client.post(f"{BASE}/discoveries")
+        # Trino will not report a catalog's properties back (#88), so adoption asks. This is
+        # the Operator answering, and it makes the discovery complete.
+        amended = await applying_client.put(
+            f"{BASE}/discovery/catalogs/legacy",
+            json={"name": "legacy", "connector": "tpch", "properties": {}},
+        )
+        assert amended.status_code == 200, amended.json()
+        assert amended.json()["complete"], amended.json()["outstanding"]
+        seeded = await applying_client.post(f"{BASE}/seed")
+        assert seeded.status_code == 200, seeded.json()
+
+        started = await applying_client.post(f"{BASE}/adopt")
+        assert started.status_code == 202, started.json()
+        record = await _settled(applying_client, started.json()["id"])
+
+        assert record["stage"] == "succeeded", record["failure_reason"]
+        assert (await applying_client.get("/api/v1/snapshots/1")).json()["sections"]["catalogs"][
+            "legacy"
+        ]["connector"] == "tpch"
+        assert "legacy" in await cluster.catalogs(), (
+            "and the catalog is still there -- the narrowing must skip the CREATE, not the catalog"
+        )
+    finally:
+        await cluster.drop_catalog("legacy")

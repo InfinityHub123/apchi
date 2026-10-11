@@ -98,6 +98,46 @@ def rollback_plan(
     )
 
 
+def settled(
+    plan_: CatalogPlan, live: set[str], durable: dict[str, str], desired_copy: dict[str, str]
+) -> CatalogPlan:
+    """The same plan, less the catalogs the Cluster is already running exactly as asked.
+
+    `plan` measures the Candidate against the Snapshot it derives from, which is the right
+    baseline for an Operator's change and the wrong one for the two cases where Apchi's
+    durable record is ahead of its Snapshots:
+
+    **Adoption.** The seed writes the catalog Secret and the cutover's initContainer loads it,
+    so by the time the adopting Apply runs the catalogs are live and recorded -- and there is
+    no Snapshot 1 yet to measure against. The plan said "create bench, notes", Validation
+    refused them as collisions with unmanaged catalogs, and the one Apply that must not fail
+    failed (#92).
+
+    **A retried Apply.** §10's order writes the Secret before issuing DDL, so an Apply that
+    died between the two leaves catalogs live and recorded against an older Snapshot. The
+    retry should finish the job, not collide with itself.
+
+    The condition is deliberately narrow: live **and** named in Apchi's own Secret **and**
+    byte-identical to what this Apply would write. A live catalog Apchi does not hold is
+    still a collision, which is what `collision_failures` is for; a live catalog Apchi holds
+    differently is still a change, and goes on being one.
+    """
+    satisfied = {
+        name
+        for name in plan_.created
+        if name in live
+        and durable.get(f"{name}.properties") == desired_copy.get(f"{name}.properties")
+    }
+    if not satisfied:
+        return plan_
+    logger.info("already live and recorded", extra={"catalogs": sorted(satisfied)})
+    return CatalogPlan(
+        created=[name for name in plan_.created if name not in satisfied],
+        replaced=list(plan_.replaced),
+        dropped=list(plan_.dropped),
+    )
+
+
 def collision_failures(created: Sequence[str], live: set[str]) -> list[ValidationFailure]:
     """A Catalog the Candidate would create must not already exist on the Cluster.
 

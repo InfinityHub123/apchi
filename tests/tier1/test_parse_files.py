@@ -280,22 +280,24 @@ def test_a_properties_file_with_no_rules_is_reported() -> None:
     assert "not there" in parsed.unaccounted[0].what
 
 
-def test_a_properties_file_pointing_elsewhere_is_reported_not_followed() -> None:
-    """Trino reads whatever config-file names, so the rules Apchi just read may not be the
-    rules in force."""
+def test_a_properties_file_pointing_elsewhere_is_not_reported_by_the_parser() -> None:
+    """It fired on every Cluster being adopted and said nothing true.
+
+    The Admin's properties file names the Admin's rules, and on a Cluster being adopted those
+    are the rules discovery read -- so they *are* the rules in force. What matters is that
+    Trino reads them from a path Apchi does not write, and the cutover check says so, where
+    there is something actionable to say about it (#92).
+    """
     section = ResourceGroupsSection()
     files = {
         RULES_PATH: '{"rootGroups": [{"name": "g", "hardConcurrencyLimit": 1}], "selectors": []}',
-        MANAGER_PATH: (
-            "resource-groups.configuration-manager=file\n"
-            "resource-groups.config-file=/etc/trino/somebody-elses.json\n"
-        ),
+        MANAGER_PATH: MANAGER_FILE.replace(RULES_PATH, "/etc/trino/somebody-elses.json"),
     }
 
     parsed = section.parse_files(files, SETTINGS_OBJ)
 
     assert parsed.resources["g"]["hard_concurrency_limit"] == 1
-    assert any("not the one Apchi writes" in found.what for found in parsed.unaccounted)
+    assert parsed.unaccounted == ()
 
 
 # --- event listeners ----------------------------------------------------------------

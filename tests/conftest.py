@@ -235,6 +235,17 @@ class FakeKubernetes:
     async def read_secret(self, name: str) -> dict[str, str]:
         return dict(self.secrets.get(name, {}))
 
+    async def read_secret_if_present(self, name: str) -> dict[str, str] | None:
+        """Absence distinguishable from emptiness, as the real adapter has it.
+
+        The fake folding the two together is what let the seed skip creating a Secret for a
+        Section with nothing in it -- every tier 1 test passed and the cutover then could not
+        mount it.
+        """
+        if name not in self.secrets:
+            return None
+        return dict(self.secrets[name])
+
     async def read_config_map(self, name: str) -> dict[str, str]:
         return dict(self.config_maps.get(name, {}))
 

@@ -31,9 +31,10 @@ from app.config import Settings
 from app.pipeline import preconditions
 from app.pipeline.coordinator import PodSpec, source_of
 from app.pipeline.discoveries import StoredDiscovery
+from app.pipeline.discovery import trino_configuration
 from app.pipeline.files import by_secret
 from app.sections.admin import AdminValues
-from app.sections.base import Section
+from app.sections.base import parses_files
 from app.sections.catalogs import SECTION as CATALOGS
 from app.sections.catalogs.generator import render_secret as render_catalog_seed
 from app.sections.registry import REGISTERED
@@ -100,9 +101,7 @@ def _contents(stored: StoredDiscovery, settings: Settings) -> dict[str, dict[str
     return secrets
 
 
-async def cutover_changes(
-    kubernetes: KubernetesAdapter, settings: Settings, stored: StoredDiscovery
-) -> list[CutoverChange]:
+async def cutover_changes(kubernetes: KubernetesAdapter, settings: Settings) -> list[CutoverChange]:
     """What the Admin's deployment must change before Apchi's copies are what Trino reads.
 
     Two kinds, and the first version of this got the set wrong by asking a third thing.
@@ -111,10 +110,10 @@ async def cutover_changes(
     deployment -- the whole-volume mounts, the catalog seed initContainer, the refresh
     period. Expressed here as the change to make rather than as what is wrong.
 
-    **Paths that point at the Admin's files rather than Apchi's.** Discovery located each
-    Section's configuration by following Trino's own configuration (#87), so a Section found
-    somewhere other than where Apchi writes is a Section Trino will still be reading from the
-    old place after the seed.
+    **Paths that point at the Admin's files rather than Apchi's.** Located the way discovery
+    locates them -- by following Trino's own configuration (#87) -- but read from the
+    coordinator as it stands now rather than from the stored reading, so that the answer
+    changes when the Admin cuts over.
 
     What it must *not* ask is that every file Apchi declares be mounted. Apchi adds and
     removes those volumes itself during an Apply, and for Event Listeners and Resource Groups
@@ -147,30 +146,31 @@ async def cutover_changes(
                 )
             )
 
-    for section in stored.read.sections:
-        declared = {
-            spec_.path for spec_ in _section_named(section.section).coordinator_files(settings)
-        }
-        for path in section.looked_at:
-            if path.startswith("Secret ") or path == "system.metadata.catalogs":
-                continue
-            if declared and path not in declared and not _within(path, declared):
+    # Asked of the coordinator as it is now, not of the discovery. The stored reading
+    # records where Trino read *before* the cutover, so a check against it can never clear:
+    # the discovery being adopted is deliberately the pre-cutover one (#82), because
+    # re-reading mid-migration finds a Cluster with no resource groups at all. Reading the
+    # live configuration asks the only question that matters -- where does Trino read this
+    # Section from right now -- and gets "the Admin's path" before and "Apchi's" after.
+    properties = await trino_configuration(kubernetes, spec)
+    for section in REGISTERED:
+        declared = {spec_.path for spec_ in section.coordinator_files(settings)}
+        if not declared or not parses_files(section):
+            continue
+        for path in section.discover_paths(settings, properties).everywhere_looked:
+            if path not in declared and not _within(path, declared):
                 changes.append(
                     CutoverChange(
                         path=path,
                         whole_volume=False,
                         why=(
-                            f"Trino reads {section.section} from here, and Apchi writes "
+                            f"Trino reads {section.name} from here, and Apchi writes "
                             f"{sorted(declared)[0]}. Until the deployment points at Apchi's "
                             "path, an Apply changes a file nothing reads"
                         ),
                     )
                 )
     return changes
-
-
-def _section_named(name: str) -> Section:
-    return next(section for section in REGISTERED if section.name == name)
 
 
 def _within(path: str, declared: set[str]) -> bool:
@@ -197,10 +197,16 @@ async def seed(
     contents = _contents(stored, settings)
     changed: list[str] = []
     for name in sorted(contents):
-        before = await kubernetes.read_secret(name)
-        if before == contents[name]:
+        before = await kubernetes.read_secret_if_present(name)
+        if before is not None and before == contents[name]:
             # Seeding twice is harmless and says so. An Admin who is unsure whether they
             # seeded should be able to find out by doing it again.
+            #
+            # `is not None` is load-bearing: a Secret that does not exist reads as empty,
+            # so an empty Section's Secret looked as though it were already correct and was
+            # never created. The cutover then could not mount it and the coordinator stuck
+            # in Init -- which is how the Secrets Apchi owns must exist even when a Section
+            # has nothing in it.
             continue
         await kubernetes.write_secret(name, contents[name])
         changed.append(name)
@@ -223,7 +229,7 @@ async def seed(
     seeded = Seeded(
         secrets=sorted(contents),
         changed=changed,
-        cutover=await cutover_changes(kubernetes, settings, stored),
+        cutover=await cutover_changes(kubernetes, settings),
         untouched=read_from,
     )
     logger.info(
@@ -246,6 +252,7 @@ async def unseeded(
     contents = _contents(stored, settings)
     stale: list[str] = []
     for name in sorted(contents):
-        if await kubernetes.read_secret(name) != contents[name]:
+        before = await kubernetes.read_secret_if_present(name)
+        if before is None or before != contents[name]:
             stale.append(name)
     return stale

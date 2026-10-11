@@ -1,0 +1,123 @@
+# The same Trino, after the cutover. Hand-written; not generated, not drift-checked.
+#
+# In a subdirectory on purpose. `kubectl apply -f deploy/trino-adopted/` must bring up the
+# Cluster as it was *before* Apchi, and applying this with it points the coordinator at
+# Secrets that do not exist yet -- Trino then refuses to boot with "file does not exist:
+# /etc/trino/user-mapping.json", which is how this was found.
+#
+# This is step 4 of §82's five: the deployment change an Admin makes once Apchi has seeded
+# its own Secrets. Committed as a manifest rather than applied as patches because it is also
+# the clearest statement of what the cutover *is* -- a diff against 00-config.yaml and
+# 10-trino.yaml is the whole answer to "what do I have to change".
+#
+# Four changes, and the order matters for exactly one of them:
+#
+#   1. Trino's configuration now names Apchi's paths instead of the Admin's.
+#   2. Apchi's access-control Secret is mounted whole-volume at /etc/trino/access-control.
+#   3. Apchi's user-mapping Secret is mounted under the volume name Apchi manages, so Apchi
+#      can take the mount over without fighting the Admin for the path.
+#   4. The catalog store becomes a writable emptyDir, seeded by an initContainer from the
+#      Secret Apchi now holds -- and this is the one that had to wait. Applied before the
+#      seed, the initContainer copies an empty Secret over the catalogs and loses all of
+#      them.
+#
+# The Admin's own files are left in place and still mounted at /etc/trino/theirs. Nothing
+# reads them any more, and that is what makes this reversible: revert this manifest and the
+# Cluster is back on the configuration it had.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: adopted-config
+data:
+  coordinator-config.properties: |
+    coordinator=true
+    node-scheduler.include-coordinator=false
+    http-server.http.port=8080
+    discovery.uri=http://adopted:8080
+    catalog.management=dynamic
+    catalog.store=file
+    http-server.authentication.insecure.user-mapping.file=/etc/trino/user-mapping.json
+  worker-config.properties: |
+    coordinator=false
+    http-server.http.port=8080
+    discovery.uri=http://adopted:8080
+    catalog.management=dynamic
+  node.properties: |
+    node.environment=adopted
+  jvm.config: |
+    -server
+    -Xmx1G
+    -XX:+UseG1GC
+    -XX:+ExitOnOutOfMemoryError
+  catalog-store.properties: |
+    catalog.config-dir=/data/trino/catalogs
+  access-control.properties: |
+    access-control.name=file
+    security.config-file=/etc/trino/access-control/rules.json
+    security.refresh-period=1s
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adopted-coordinator
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate. A rolling update briefly runs two coordinators, which
+  # is a second 1G JVM on a machine already running two Trino clusters -- and Apchi wants
+  # one coordinator anyway, because Trino cannot drain one (ADR-0003).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: adopted, component: coordinator}
+  template:
+    metadata:
+      labels: {app: adopted, component: coordinator}
+    spec:
+      initContainers:
+        - name: seed-catalogs
+          image: trinodb/trino:483
+          command: ["sh", "-c"]
+          args:
+            - mkdir -p /data/trino/catalogs &&
+              cp -L /data/trino/catalog-seed/*.properties /data/trino/catalogs/ 2>/dev/null || true;
+              ls -l /data/trino/catalogs
+          volumeMounts:
+            - {name: catalog-seed, mountPath: /data/trino/catalog-seed, readOnly: true}
+            - {name: catalog-store, mountPath: /data/trino/catalogs}
+      containers:
+        - name: trino
+          image: trinodb/trino:483
+          ports: [{containerPort: 8080, name: http}]
+          readinessProbe:
+            exec: {command: ["/usr/lib/trino/bin/health-check"]}
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 40
+          volumeMounts:
+            - {name: config, mountPath: /etc/trino/config.properties, subPath: coordinator-config.properties}
+            - {name: config, mountPath: /etc/trino/node.properties, subPath: node.properties}
+            - {name: config, mountPath: /etc/trino/jvm.config, subPath: jvm.config}
+            - {name: config, mountPath: /etc/trino/catalog-store.properties, subPath: catalog-store.properties}
+            - {name: config, mountPath: /etc/trino/access-control.properties, subPath: access-control.properties}
+            # Apchi's, whole volume: a subPath mount is frozen at pod creation, so a rewritten
+            # rules file would never arrive.
+            - {name: access-control, mountPath: /etc/trino/access-control, readOnly: true}
+            # Under the volume name Apchi manages, so Apchi takes the mount over rather than
+            # contending for the path. Trino reads this file once at startup, so subPath is
+            # right here and a Rollout is what makes a change take.
+            - {name: apchi-user-mapping, mountPath: /etc/trino/user-mapping.json, subPath: user-mapping.json, readOnly: true}
+            - {name: client-certificates, mountPath: /etc/trino/certs, readOnly: true}
+            # The Admin's originals, still here and no longer read. This is what reverting
+            # this manifest would go back to.
+            - {name: theirs, mountPath: /etc/trino/theirs, readOnly: true}
+            - {name: catalog-store, mountPath: /data/trino/catalogs}
+      volumes:
+        - {name: config, configMap: {name: adopted-config}}
+        - {name: theirs, configMap: {name: adopted-theirs}}
+        - {name: access-control, secret: {secretName: adopted-access-control}}
+        - {name: apchi-user-mapping, secret: {secretName: adopted-user-mapping}}
+        - {name: catalog-seed, secret: {secretName: adopted-catalog-seed}}
+        - {name: client-certificates, secret: {secretName: adopted-client-certificates}}
+        # Writable, and an emptyDir rather than the ConfigMap it was: Trino writes this
+        # directory itself, and a ConfigMap mount is always read-only.
+        - {name: catalog-store, emptyDir: {}}
