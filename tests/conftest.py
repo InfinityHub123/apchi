@@ -307,7 +307,23 @@ class FakeKubernetes:
     async def mount_secret_file(
         self, deployment: str, container: str, volume: str, secret: str, path: str, key: str
     ) -> None:
+        """Record the mount, and put it on the pod template the way the API server would.
+
+        Both halves are needed. `mounts` is what a test asserts against; `pod_spec` is what
+        Apchi itself reads -- the preconditions, and every Section's `discover_paths`. The
+        first version of this kept only `mounts`, so a Section Apchi had just mounted was
+        invisible to Apchi: a discovery run after an Apply reported no Resource Groups and a
+        seed then wrote that emptiness into the Secret. Nothing was wrong with Apchi. The
+        fake was describing a Cluster that does not exist.
+        """
         self.mounts[path] = {"volume": volume, "secret": secret, "key": key}
+        volumes = self.pod_spec.setdefault("volumes", [])
+        if not any(existing["name"] == volume for existing in volumes):
+            volumes.append({"name": volume, "secret": {"secretName": secret}})
+        container_spec = next(c for c in self.pod_spec["containers"] if c["name"] == container)
+        mounts = container_spec.setdefault("volumeMounts", [])
+        if not any(mount["mountPath"] == path for mount in mounts):
+            mounts.append({"name": volume, "mountPath": path, "subPath": key, "readOnly": True})
 
     async def unmount_secret_files(
         self, deployment: str, container: str, volume: str, paths: Sequence[str], drop_volume: bool
@@ -321,6 +337,18 @@ class FakeKubernetes:
         assert not (drop_volume and remaining), (
             f"volume {volume!r} dropped while {remaining} still mount it"
         )
+        for container_spec in self.pod_spec["containers"]:
+            container_spec["volumeMounts"] = [
+                mount
+                for mount in container_spec.get("volumeMounts", [])
+                if mount["mountPath"] not in set(paths)
+            ]
+        if drop_volume:
+            self.pod_spec["volumes"] = [
+                existing
+                for existing in self.pod_spec.get("volumes", [])
+                if existing["name"] != volume
+            ]
 
     def attach_cluster(self, container: DockerContainer) -> None:
         """The container standing in for the Cluster, so a Rollout can really restart it."""

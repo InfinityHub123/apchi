@@ -107,6 +107,53 @@ async def test_the_listener_file_is_mounted_when_one_is_configured(
     }
 
 
+async def test_a_mount_apchi_adds_is_on_the_pod_spec_apchi_reads(
+    applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
+) -> None:
+    """The mount has to appear where Apchi *looks*, which is the Deployment's pod template.
+
+    Two places record a mount and only one of them is Apchi's own view. `mounts` is what
+    these tests assert against; `deployment_pod_spec` is what Apchi reads -- the §16
+    preconditions, and every Section's `discover_paths`. The fake used to keep only the
+    first, so a file Apchi had just mounted was invisible to Apchi: a discovery run after an
+    Apply reported the Section as empty, and a seed then wrote that emptiness into the
+    Secret. Nothing was wrong with Apchi; the fake was describing a Cluster that cannot
+    exist, because the API server has no way to accept a mount and not show it.
+
+    Found while establishing what survives losing Mongo (#110): it looked exactly like
+    Apchi losing a Section's configuration on recovery.
+    """
+    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+
+    await _apply(applying_client)
+
+    spec = await fake_kubernetes.deployment_pod_spec("trino-coordinator")
+    container = next(c for c in spec["containers"] if c["name"] == "trino")
+    mounted = {mount["mountPath"]: mount["name"] for mount in container["volumeMounts"]}
+    assert mounted.get(MOUNT_PATH) == VOLUME
+    assert any(volume["name"] == VOLUME for volume in spec["volumes"]), (
+        "a mount naming a volume the pod template does not declare is one the API server "
+        "would reject outright"
+    )
+
+
+async def test_unmounting_takes_the_mount_off_the_pod_spec_too(
+    applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
+) -> None:
+    """The other half: a stale mount left on the template would make a removed Section look
+    configured to the next discovery, which is the same failure facing the other way."""
+    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+    await _apply(applying_client)
+
+    await applying_client.delete("/api/v1/event-listeners/audit")
+    await _apply(applying_client)
+
+    spec = await fake_kubernetes.deployment_pod_spec("trino-coordinator")
+    container = next(c for c in spec["containers"] if c["name"] == "trino")
+    assert MOUNT_PATH not in {mount["mountPath"] for mount in container["volumeMounts"]}
+    assert not any(volume["name"] == VOLUME for volume in spec["volumes"])
+
+
 async def test_removing_the_listener_unmounts_the_file(
     applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
 ) -> None:
