@@ -246,6 +246,9 @@ class FakeKubernetes:
             return None
         return dict(self.secrets[name])
 
+    async def write_config_map(self, name: str, data: dict[str, str]) -> None:
+        self.config_maps[name] = dict(data)
+
     async def read_config_map(self, name: str) -> dict[str, str]:
         return dict(self.config_maps.get(name, {}))
 

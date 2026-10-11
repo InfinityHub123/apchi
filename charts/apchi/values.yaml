@@ -78,6 +78,16 @@ mongodb:
 # The Secrets Apchi generates configuration into. These must be the names the Trino
 # deployment mounts -- Apchi writes them, Trino reads them, and nothing reconciles a
 # disagreement.
+# Where Apchi records the highest Snapshot number it has ever committed. The one piece of
+# its own state that does not live in MongoDB, because MongoDB is what a disaster loses
+# (§18) -- an empty database is otherwise indistinguishable from a new install, and the two
+# call for opposite actions. A ConfigMap rather than a Secret: it holds a number.
+#
+# Apchi creates and updates it directly, so it is not part of this release and `helm
+# uninstall` leaves it behind. That is correct: it is evidence about a Cluster's history,
+# and the next install into this namespace should find it. Default: <release>-high-water.
+highWaterConfigMap: ""
+
 secrets:
   catalogSeed: trino-catalog-seed
   accessControl: trino-access-control

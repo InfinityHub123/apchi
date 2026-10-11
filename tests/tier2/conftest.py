@@ -528,6 +528,9 @@ class ForwardedKubernetes:
     async def read_config_map(self, name: str) -> dict[str, str]:
         return await self._real.read_config_map(name)
 
+    async def write_config_map(self, name: str, data: dict[str, str]) -> None:
+        await self._real.write_config_map(name, data)
+
     async def read_secret(self, name: str) -> dict[str, str]:
         return await self._real.read_secret(name)
 
@@ -668,6 +671,13 @@ async def cluster_state(
     mongo = Mongo(settings)
     admin = AdminStore(mongo.database)
     admin_before = await admin.load()
+
+    # The high-water mark belongs with the MongoDB it describes, and every test here gets a
+    # fresh database. Leaving the mark behind would hand the next test an Apchi that has
+    # "lost" every Snapshot the previous one committed -- health reporting a disaster and
+    # Adoption refusing outright (§18). A fresh database is a new install, so it starts
+    # with no mark, which is what a new install has.
+    kubectl("delete", "configmap", settings.high_water_config_map, "--ignore-not-found")
 
     secrets = (
         CATALOG_SEED_SECRET,

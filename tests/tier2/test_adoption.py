@@ -73,6 +73,10 @@ def _settings(base: Settings) -> Settings:
             client_certificate_secret_name="adopted-client-certificates",
             event_listener_secret_name="adopted-event-listener",
             resource_groups_secret_name="adopted-resource-groups",
+            # Its own, because this is a different Cluster. Sharing the trino-dev mark
+            # would mean a Snapshot committed against that Cluster makes this one look as
+            # though it had lost its history, and Adoption would refuse (§18).
+            high_water_config_map="adopted-high-water",
         )
     )
 
@@ -111,6 +115,7 @@ def hand_configured(cluster: None) -> Iterator[None]:
         kubectl("delete", "-f", str(ADOPTED), "--ignore-not-found")
         for secret in APCHI_SECRETS:
             kubectl("delete", "secret", secret, "--ignore-not-found")
+        kubectl("delete", "configmap", "adopted-high-water", "--ignore-not-found")
 
 
 async def _settled(client: AsyncClient, apply_id: str) -> dict:

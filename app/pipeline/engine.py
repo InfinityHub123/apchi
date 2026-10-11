@@ -20,6 +20,7 @@ from app.pipeline.admin_values import AdminStore
 from app.pipeline.auto_rollback import declare_incident, restore
 from app.pipeline.candidate import CandidateStore
 from app.pipeline.files import deliver
+from app.pipeline.history import HighWaterMark
 from app.pipeline.impact import sections_needing_rollout
 from app.pipeline.maintenance import MaintenanceStore
 from app.pipeline.rollout import roll_out
@@ -194,6 +195,19 @@ class Engine:
         because it is otherwise only findable by noticing the numbering.
         """
         snapshot = await self._snapshots.commit(self._desired, self._apply_id)
+        # Outside MongoDB, so that losing MongoDB leaves evidence that this Snapshot
+        # existed (§18). Best-effort on purpose: a Snapshot that was applied and verified
+        # is real whatever the API server says, and failing the Apply because a ConfigMap
+        # could not be written would report a healthy Cluster as broken.
+        try:
+            await HighWaterMark(self._kubernetes, self._settings).record(snapshot.number)
+        except Exception:
+            logger.warning(
+                "committed Snapshot %s but could not raise the high-water mark; a MongoDB "
+                "loss from here would not know this Snapshot existed",
+                snapshot.number,
+                exc_info=True,
+            )
         try:
             # The Candidate is re-derived from the new Snapshot, so its diff is empty.
             await self._candidates.reset(base_snapshot=snapshot.number)

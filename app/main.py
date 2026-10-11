@@ -30,6 +30,7 @@ from app.pipeline.applies import ApplyEngine, ApplyRunner, ApplyStore, recover_i
 from app.pipeline.candidate import CandidateStore
 from app.pipeline.discoveries import DiscoveryStore
 from app.pipeline.engine import AdminEngine, Engine
+from app.pipeline.history import HighWaterMark, History
 from app.pipeline.maintenance import MaintenanceStore
 from app.pipeline.snapshots import SnapshotStore
 from app.pipeline.validation import VALIDATION_SELECTOR
@@ -80,7 +81,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.apply_runner = ApplyRunner(app.state.apply_store, build_engine)
     app.state.admin_apply_runner = ApplyRunner(app.state.apply_store, build_admin_engine)
     app.state.validation_runner = ValidationRunner(app.state.validation_store, build_engine)
+    app.state.high_water = HighWaterMark(app.state.kubernetes, settings)
     logger.info("apchi starting", extra={"environment": settings.environment})
+
+    # Read once, here, rather than on every health check. /api/v1/health is both probe in
+    # the chart and is polled every five seconds; asking the API server each time would put
+    # Kubernetes in the path of Apchi's liveness, which it is not otherwise in. The answer
+    # does not change on its own -- only a Commit or a restore moves it -- so each of those
+    # refreshes it.
+    try:
+        app.state.history = await app.state.high_water.history(
+            latest.number if (latest := await app.state.snapshot_store.latest()) else None
+        )
+    except Exception:
+        logger.warning("could not establish whether Apchi's history is intact", exc_info=True)
+        app.state.history = History(intact=True, held=None)
+    if app.state.history.lost:
+        logger.error(
+            "Apchi has lost Snapshots: %s. The Cluster is still serving what it was, and "
+            "its configuration can be recovered -- but the history cannot. Restore a backup "
+            "before adopting, because adopting starts again at Snapshot 1 (§18)",
+            app.state.history,
+        )
 
     # An Apply left in flight by a restart would freeze the Candidate forever, and may
     # also have left the Cluster diverged -- so recovery unfreezes it and then rolls the

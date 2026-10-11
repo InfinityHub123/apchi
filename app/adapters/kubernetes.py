@@ -82,6 +82,8 @@ class KubernetesAdapter(Protocol):
 
     async def read_config_map(self, name: str) -> dict[str, str]: ...
 
+    async def write_config_map(self, name: str, data: dict[str, str]) -> None: ...
+
     async def write_secret(self, name: str, data: dict[str, str]) -> None: ...
 
     async def ready_replicas(self, deployment: str) -> int: ...
@@ -193,12 +195,43 @@ class RealKubernetes:
     async def read_config_map(self, name: str) -> dict[str, str]:
         """A ConfigMap's contents, or empty when there is no such ConfigMap.
 
-        Apchi writes no ConfigMap. It reads them to check a precondition it cannot check any
-        other way -- whether Trino was told to re-read the rules file -- and, since §15, to
-        find configuration an Admin put somewhere Apchi would not have.
+        Mostly read-only: Apchi reads an Admin's ConfigMaps to check a precondition it
+        cannot check any other way -- whether Trino was told to re-read the rules file --
+        and, since §15, to find configuration an Admin put somewhere Apchi would not have.
+        It writes exactly one of its own, the high-water mark (§18).
         """
         config_map = await self._read(self._core.read_namespaced_config_map, name)
         return {} if config_map is None else dict(config_map.data or {})
+
+    async def write_config_map(self, name: str, data: dict[str, str]) -> None:
+        """The ConfigMap's contents become exactly `data`, creating it if absent.
+
+        The only ConfigMap Apchi writes, and it writes it for one reason: the high-water
+        mark has to outlive MongoDB, so it cannot live in MongoDB. An Admin's ConfigMaps are
+        read and never touched.
+
+        Patch-then-create for the same reason `write_secret` does it: a patch cannot create,
+        and on first commit this ConfigMap does not exist yet.
+        """
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            await run_in_threadpool(
+                self._core.patch_namespaced_config_map, name, self._namespace, {"data": data}
+            )
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+            await run_in_threadpool(
+                self._core.create_namespaced_config_map,
+                self._namespace,
+                {
+                    "apiVersion": "v1",
+                    "kind": "ConfigMap",
+                    "metadata": {"name": name},
+                    "data": data,
+                },
+            )
 
     async def _read(self, read: Any, name: str) -> Any:
         """One read, with "there is no such object" distinguished from a real failure.

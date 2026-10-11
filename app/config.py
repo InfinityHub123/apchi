@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     #: Holds the durable copy of every catalog. Apchi patches it; an initContainer
     #: seeds the coordinator's store directory from it at pod start.
     catalog_secret_name: str = "trino-catalog-seed"
+    #: The one thing Apchi keeps outside MongoDB, because MongoDB is what can be lost:
+    #: the highest Snapshot number ever committed here. An empty Mongo is otherwise
+    #: indistinguishable from a new install, and the two call for opposite actions (§18).
+    #: A ConfigMap rather than a Secret -- it holds a number, not configuration.
+    high_water_config_map: str = "apchi-high-water"
     #: Holds the generated system access-control file. Mounted as a whole volume so the
     #: kubelet keeps it current; never with subPath (§16).
     access_control_secret_name: str = "trino-access-control"
