@@ -13,7 +13,7 @@ the cutover that follow it (#101, #91).
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import (
@@ -30,6 +30,7 @@ from app.api.errors import Conflict, NotFound
 from app.pipeline.applies import ApplyRecord, ApplyRunner
 from app.pipeline.discoveries import StoredDiscovery
 from app.pipeline.discovery import DiscoveryFailed, Problem, discover
+from app.pipeline.history import HighWaterMark
 from app.pipeline.seed import Seeded, SeedRefused, cutover_changes, seed, unseeded
 from app.sections import SectionName
 from app.sections.admin import AdminValues
@@ -176,6 +177,14 @@ async def adopt(
     admin_store: AdminStoreDep,
     kubernetes: KubernetesDep,
     settings: SettingsDep,
+    discard_history_through: int | None = Query(
+        default=None,
+        description=(
+            "Only for a Cluster whose Snapshots are gone. Repeat the Snapshot number Apchi "
+            "says it once reached, to confirm that adopting may start again at 1 without "
+            "it. A number rather than a flag, so it cannot be set out of habit."
+        ),
+    ),
 ) -> ApplyRecord:
     """Stages the completed discovery and then gets out of the way.
 
@@ -192,6 +201,21 @@ async def adopt(
             "This Cluster already has Snapshots, so it is already managed. Adoption produces "
             "Snapshot 1 and runs once; editing the Candidate is how a managed Cluster "
             "changes."
+        )
+
+    # The check above is the only thing that ever stood between an Operator and this, and
+    # after a MongoDB loss it passes: there are no Snapshots left to refuse on. So adopting
+    # would mint Snapshot 1 over a Cluster that once had thirteen and destroy the evidence
+    # that a backup was worth restoring. Read live rather than from app.state, because
+    # adopting is rare and deliberate and this is the moment the answer has to be current.
+    history = await HighWaterMark(kubernetes, settings).history(None)
+    if history.lost and discard_history_through != history.ever:
+        raise Conflict(
+            f"This Cluster committed Snapshot {history.ever}, and MongoDB holds none of "
+            "them. Adopting now produces a new Snapshot 1 and does not get the history "
+            f"back. Restore a backup first, or -- if the history is genuinely gone and you "
+            "want to start again from what the Cluster is running -- repeat the number: "
+            f"POST /api/v1/admin/adoption/adopt?discard_history_through={history.ever}"
         )
     if (running := await applies.in_flight()) is not None:
         raise Conflict(f"Apply {running.id} is already in flight.")

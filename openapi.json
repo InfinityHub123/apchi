@@ -827,9 +827,42 @@
       },
       "Health": {
         "properties": {
+          "history": {
+            "description": "Whether MongoDB still holds every Snapshot this Cluster committed. `lost` means it does not, and the Cluster is running a configuration Apchi can no longer reproduce from its own records (\u00a718).",
+            "enum": [
+              "intact",
+              "lost"
+            ],
+            "title": "History",
+            "type": "string"
+          },
           "mongo": {
             "title": "Mongo",
             "type": "string"
+          },
+          "snapshots_ever": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The highest Snapshot ever committed here, read from outside MongoDB.",
+            "title": "Snapshots Ever"
+          },
+          "snapshots_held": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The highest Snapshot MongoDB holds.",
+            "title": "Snapshots Held"
           },
           "status": {
             "title": "Status",
@@ -838,7 +871,8 @@
         },
         "required": [
           "status",
-          "mongo"
+          "mongo",
+          "history"
         ],
         "title": "Health",
         "type": "object"
@@ -2125,6 +2159,26 @@
       "post": {
         "description": "Stages the completed discovery and then gets out of the way.\n\nDeliberately the smallest thing in Adoption. \u00a715 is explicit that this is not a special\ncase of Commit: the discovered configuration is validated, applied to the real Cluster\nand verified, and the Snapshot it produces is a Snapshot like any other (invariant 2).\nSo `/validations` and `/applies` do the rest, unchanged, and there is no second route to\nthe Cluster.\n\nWhich leaves the refusals as the substance, and all four protect something:",
         "operationId": "adopt_api_v1_admin_adoption_adopt_post",
+        "parameters": [
+          {
+            "description": "Only for a Cluster whose Snapshots are gone. Repeat the Snapshot number Apchi says it once reached, to confirm that adopting may start again at 1 without it. A number rather than a flag, so it cannot be set out of habit.",
+            "in": "query",
+            "name": "discard_history_through",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only for a Cluster whose Snapshots are gone. Repeat the Snapshot number Apchi says it once reached, to confirm that adopting may start again at 1 without it. A number rather than a flag, so it cannot be set out of habit.",
+              "title": "Discard History Through"
+            }
+          }
+        ],
         "responses": {
           "202": {
             "content": {
@@ -2135,6 +2189,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Adopt the Cluster, producing Snapshot 1",
@@ -3534,6 +3598,7 @@
     },
     "/api/v1/health": {
       "get": {
+        "description": "Apchi's own liveness, and whether its memory is all there.\n\nLost history does **not** make this 503, and that is deliberate rather than lenient.\nThis endpoint is the chart's readiness *and* liveness probe, so a 503 here is how\nKubernetes is told to stop sending traffic and then to kill the pod -- which is right\nwhile MongoDB is unreachable and exactly wrong after a loss, because restoring a backup\nmeans talking to an Apchi that is up. A pod crashlooping on the one condition an\nOperator has to log in and fix would make \u00a718 unrecoverable through Apchi's own API.",
         "operationId": "health_api_v1_health_get",
         "responses": {
           "200": {

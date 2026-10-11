@@ -135,3 +135,9 @@ the requirements themselves.
 
 **MongoDB, properly.** `mongodb.deploy` is for trying Apchi out. MongoDB is the single copy of
 every Snapshot (§18), so a real install points `mongodb.uri` at something backed up.
+
+Apchi keeps one thing outside it: `highWaterConfigMap`, holding the highest Snapshot number
+ever committed. That is how `/api/v1/health` can report `history: "lost"` rather than looking
+like a new install, and how Adoption knows to refuse rather than quietly starting again at
+Snapshot 1. Apchi creates it itself, so it is not part of the release and `helm uninstall`
+leaves it behind -- deliberately, because it is evidence about this Cluster's history.

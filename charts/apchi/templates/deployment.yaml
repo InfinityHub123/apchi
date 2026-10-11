@@ -63,6 +63,11 @@ spec:
               value: {{ .Values.trino.verificationCatalog | quote }}
             - name: APCHI_CATALOG_SECRET_NAME
               value: {{ .Values.secrets.catalogSeed | quote }}
+            # Apchi's own, and not a Secret: the highest Snapshot number ever committed,
+            # kept where losing MongoDB cannot take it (§18). Defaulted per release, so two
+            # Apchis sharing a namespace do not overwrite each other's history.
+            - name: APCHI_HIGH_WATER_CONFIG_MAP
+              value: {{ .Values.highWaterConfigMap | default (printf "%s-high-water" (include "apchi.fullname" .)) | quote }}
             - name: APCHI_ACCESS_CONTROL_SECRET_NAME
               value: {{ .Values.secrets.accessControl | quote }}
             - name: APCHI_EVENT_LISTENER_SECRET_NAME

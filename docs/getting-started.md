@@ -111,8 +111,13 @@ curl -s localhost:8000/api/v1/health
 ```
 
 ```json
-{"status":"ok","mongo":"up"}
+{"status":"ok","mongo":"up","history":"intact","snapshots_held":null,"snapshots_ever":null}
 ```
+
+`history` is about Apchi's own memory. MongoDB holds the only copy of every Snapshot, so
+Apchi also records the highest Snapshot number it has ever committed in a ConfigMap, where
+losing MongoDB cannot take it. `"lost"` means the two disagree: the Cluster is still serving
+what it was, and its current configuration can still be recovered, but the history cannot.
 
 `localhost:8000/docs` is the interactive API reference, generated from the same contract as
 the committed `openapi.json`.

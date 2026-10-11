@@ -24,13 +24,17 @@ rules:
   - apiGroups: [""]
     resources: [secrets]
     verbs: [get, list, create, patch, delete]
-  # Read-only, and one check only: whether the access-control properties the Admin
-  # mounted carry a refresh period. Without it Trino reads the rules once at startup
-  # and Apchi would report a permission change the Cluster never sees. Apchi never
-  # writes a ConfigMap.
+  # Read, for two things Apchi cannot learn any other way: whether the access-control
+  # properties the Admin mounted carry a refresh period -- without it Trino reads the rules
+  # once at startup and Apchi would report a permission change the Cluster never sees --
+  # and, since §15, where an Admin put configuration Apchi would not have.
+  #
+  # `create` and `patch` are for exactly one ConfigMap of Apchi's own: the high-water mark,
+  # the highest Snapshot number ever committed here. It has to survive MongoDB being lost,
+  # so it cannot live in MongoDB (§18). An Admin's ConfigMaps are read and never written.
   - apiGroups: [""]
     resources: [configmaps]
-    verbs: [get]
+    verbs: [get, create, patch]
   # The ephemeral validation coordinator: created, watched, read and deleted. Its log
   # is the only place a Trino that refuses to start explains itself.
   - apiGroups: [""]
