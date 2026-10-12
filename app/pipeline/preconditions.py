@@ -140,9 +140,59 @@ async def check(kubernetes: KubernetesAdapter, spec: PodSpec, settings: Settings
     #    that reads the Admin's configuration rather than their pod template.
     problems.extend(await _refresh_period_problems(kubernetes, spec, volumes))
 
+    # 6. Apchi's single-file mounts need a parent directory the kubelet can bind into. A
+    #    subPath mount of one key at a path inside a ConfigMap or Secret directory mount has
+    #    no file to bind onto -- the key is not in that read-only volume -- and runc fails
+    #    the container with "not a directory". The pod never starts, so Trino logs nothing
+    #    while the Apply that added the mount reported success. Verified against the
+    #    official trino/trino chart, which mounts the whole of /etc/trino (§16).
+    problems.extend(_directory_mounts_over_apchis_files(spec, volumes, apchi_owned))
+
     if problems:
         raise PreconditionFailed(problems)
     logger.debug("deployment preconditions hold")
+
+
+def _directory_mounts_over_apchis_files(
+    spec: PodSpec, volumes: dict[str, Volume], owned: dict[str, str]
+) -> list[str]:
+    """Read-only volumes mounted at or above the directory any Apchi file lives in.
+
+    Every declared path is checked, not only the ones the current Candidate would mount.
+    Three of today's four appear the first time an Operator configures their Section, so
+    checking lazily would leave a Cluster running for months and then crashlooping on that
+    edit -- which is the failure this exists to refuse, arriving later and looking like the
+    Operator's doing.
+
+    Only read-only volumes, because that is the case the "not a directory" failure was
+    verified for. A writable parent -- an emptyDir over the config directory -- is left
+    alone rather than guessed at: refusing a deployment that may work is the opposite of
+    what these checks are for.
+    """
+    problems: list[str] = []
+    for container in spec.containers:
+        for mount in container.volume_mounts:
+            volume = volumes.get(mount.name)
+            if volume is None or not volume.read_only_by_nature:
+                continue
+            # At or above the *parent*. A mount at the file path itself is Apchi's own, and
+            # a mount below the parent is a nested directory, which the kubelet layers
+            # happily -- the official chart's own /etc/trino/catalog is one.
+            covered = sorted(
+                path for path in owned if _covers(mount.mount_path, str(PurePosixPath(path).parent))
+            )
+            if not covered:
+                continue
+            problems.append(
+                f"Container {container.name!r} mounts {mount.name!r} as a directory at "
+                f"{mount.mount_path}, and Apchi mounts {', '.join(covered)} inside it. "
+                "Kubernetes cannot place a single file inside a read-only ConfigMap or "
+                "Secret directory: the key is not in that volume, so there is nothing to "
+                'bind onto and the container fails to start with "not a directory". Trino '
+                "logs nothing, because it never runs. Mount the files under "
+                f"{mount.mount_path} one at a time instead of mounting the whole directory."
+            )
+    return problems
 
 
 async def _refresh_period_problems(

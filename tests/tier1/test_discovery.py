@@ -442,8 +442,11 @@ async def test_a_file_inside_a_whole_directory_mount_is_read(
     discovery = await discover(fake_kubernetes, settings)
 
     # The refresh period is in that ConfigMap, so reading it through the directory mount is
-    # what keeps the precondition satisfied.
-    assert discovery.problems == []
+    # what keeps that precondition satisfied. One problem is left and it is a different one:
+    # a read-only mount over /etc/trino leaves nowhere for Apchi's own single-file mounts, so
+    # adopting this Cluster needs that part of the deployment changed first (#93).
+    assert [p for p in discovery.problems if "not a directory" not in p.detail] == []
+    assert [p.kind for p in discovery.problems] == ["cutover"]
 
 
 async def test_certificates_are_not_listed_out_of_a_mount_that_only_contains_them(
