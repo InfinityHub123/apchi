@@ -1,7 +1,7 @@
 {{- if .Values.mongodb.deploy }}
 # For trying Apchi out. One replica, no authentication, and an emptyDir: restarting
-# this pod discards every Snapshot. Point mongodb.uri at a real MongoDB for anything
-# you intend to keep -- Apchi's own durability requirement is §18.
+# this pod discards every Snapshot. Point mongodb.uri at a real MongoDB for anything you
+# intend to keep: operating that database is the platform's job, not Apchi's.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

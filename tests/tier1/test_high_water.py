@@ -1,20 +1,21 @@
-"""The high-water mark: Apchi knowing it has lost Snapshots.
+"""The high-water mark, and the Adoption precondition it exists for.
 
-§18's disaster is that MongoDB holds the only copy of every Snapshot. The first thing wrong
-with it is not the loss, it is that Apchi could not tell: against an empty database it
-reported itself healthy, `/snapshots` returned `[]` and `/candidate` returned 404, and none
-of that distinguishes a fresh install from a catastrophic loss -- while the safe action in
-each case is the opposite one.
+Adoption runs once, over a Cluster Apchi does not yet manage (§15), and it decides whether a
+Cluster is already managed by asking whether MongoDB holds Snapshots. An empty `snapshots`
+collection is two situations -- never managed, and managed by an Apchi pointed at an empty
+database -- and Adoption's answer differs: configure the first, refuse the second. Adopting
+the second mints Snapshot 1 over a Cluster that already reached thirteen, and that is not
+undoable.
 
-The irreversible consequence was in Adoption, which refuses only when Snapshots exist. After
-a loss there are none, so the obvious thing an Operator would try ran happily, minted a new
-Snapshot 1, and destroyed the evidence that a backup was worth restoring.
+So Apchi records the highest Snapshot number it has ever committed in a ConfigMap, where an
+empty database cannot deny it. Keeping MongoDB is the platform's job, not Apchi's, so this is
+not a backup or a recovery mechanism: it answers one question for one route.
 """
 
 from httpx import AsyncClient
 
 from app.config import Settings
-from app.pipeline.history import CLUSTER_KEY, HIGHEST_KEY, HighWaterMark
+from app.pipeline.high_water import HIGHEST_KEY, HighWaterMark
 from tests.conftest import FakeKubernetes
 
 BASE = "/api/v1/admin/adoption"
@@ -41,83 +42,22 @@ async def test_committing_raises_the_mark(
 async def test_the_mark_is_never_lowered(
     fake_kubernetes: FakeKubernetes, settings: Settings
 ) -> None:
-    """Its whole value is remembering a Snapshot MongoDB has forgotten.
-
-    A restore from an old backup legitimately leaves MongoDB behind, and a mark that
-    followed it down would quietly agree that the newer Snapshots never existed -- which is
-    the agreement this exists to refuse.
-    """
+    """Lowering it would let a Cluster pointed at an older copy of its own database look
+    like one that never went further -- the single thing the mark is here to prevent."""
     mark = HighWaterMark(fake_kubernetes, settings)
     await mark.record(13)
 
     await mark.record(7)
 
-    recorded = await mark.read()
-    assert recorded is not None
-    assert recorded.highest_snapshot == 13
+    assert await mark.read() == 13
 
 
-async def test_the_cluster_id_is_minted_once_and_kept(
+async def test_no_mark_reads_as_no_evidence(
     fake_kubernetes: FakeKubernetes, settings: Settings
 ) -> None:
-    """Identity for #114 to check a backup against, so one Cluster's credentials cannot be
-    restored into another."""
-    mark = HighWaterMark(fake_kubernetes, settings)
-    await mark.record(1)
-    first = (await _mark(fake_kubernetes, settings))[CLUSTER_KEY]
-
-    await mark.record(2)
-
-    assert (await _mark(fake_kubernetes, settings))[CLUSTER_KEY] == first
-    assert first
-
-
-# --- what it concludes --------------------------------------------------------------
-
-
-async def test_no_mark_is_a_new_install_not_a_disaster(
-    fake_kubernetes: FakeKubernetes, settings: Settings
-) -> None:
-    """Three situations look like this and none of them is a loss: a first run, an Apchi
-    that predates the mark, and a mark somebody deleted. Claiming a disaster without
-    evidence is worse than staying quiet."""
-    history = await HighWaterMark(fake_kubernetes, settings).history(None)
-
-    assert history.intact
-
-
-async def test_a_mark_ahead_of_mongo_is_a_loss(
-    fake_kubernetes: FakeKubernetes, settings: Settings
-) -> None:
-    await HighWaterMark(fake_kubernetes, settings).record(13)
-
-    history = await HighWaterMark(fake_kubernetes, settings).history(None)
-
-    assert history.lost
-    assert history.ever == 13
-    assert "committed 13" in str(history)
-
-
-async def test_a_mark_mongo_has_caught_up_with_is_intact(
-    fake_kubernetes: FakeKubernetes, settings: Settings
-) -> None:
-    await HighWaterMark(fake_kubernetes, settings).record(13)
-
-    assert (await HighWaterMark(fake_kubernetes, settings).history(13)).intact
-
-
-async def test_an_unreadable_mark_does_not_accuse_apchi_of_a_loss(
-    fake_kubernetes: FakeKubernetes, settings: Settings
-) -> None:
-    """Apchi tolerates an unreachable Kubernetes by design. A transient 403 or a refused
-    connection must not be reported as the loss of every Snapshot."""
-
-    async def refuse(name: str) -> dict[str, str]:
-        raise RuntimeError("the API server is not answering")
-
-    fake_kubernetes.read_config_map = refuse  # type: ignore[method-assign]
-
-    assert (await HighWaterMark(fake_kubernetes, settings).history(None)).intact
+    """Three situations look like this and none of them should block an Adoption: a first
+    run, an Apchi that predates the mark, and a mark somebody deleted."""
+    assert await HighWaterMark(fake_kubernetes, settings).read() is None
 
 
 async def test_a_hand_edited_mark_is_reported_and_not_fatal(
@@ -132,39 +72,11 @@ async def test_a_hand_edited_mark_is_reported_and_not_fatal(
 # --- what it refuses ----------------------------------------------------------------
 
 
-async def test_health_says_the_history_is_lost(
-    fake_kubernetes: FakeKubernetes, settings: Settings
-) -> None:
-    """And does not 503 doing it. This endpoint is the chart's readiness *and* liveness
-    probe, so a 503 is how Kubernetes is told to kill the pod -- right while MongoDB is
-    unreachable, and exactly wrong after a loss, because restoring a backup means talking
-    to an Apchi that is up."""
-    from httpx import ASGITransport
-
-    from app.main import create_app
-
-    await HighWaterMark(fake_kubernetes, settings).record(13)
-    app = create_app(settings)
-    # Substituted before the lifespan, which is how every test here gives Apchi a
-    # Kubernetes -- so the answer below is the one Apchi's own startup worked out, not one
-    # this test put there.
-    app.state.kubernetes = fake_kubernetes
-    async with (
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as client,
-        app.router.lifespan_context(app),
-    ):
-        response = await client.get("/api/v1/health")
-
-    assert response.status_code == 200, "a lost history must not crashloop the pod"
-    assert response.json()["history"] == "lost"
-    assert response.json()["snapshots_ever"] == 13
-
-
-async def test_adopting_a_cluster_whose_history_was_lost_is_refused(
+async def test_adopting_a_cluster_that_has_committed_snapshots_is_refused(
     applying_client: AsyncClient, fake_kubernetes: FakeKubernetes, settings: Settings
 ) -> None:
-    """The check that used to stand here -- "this Cluster already has Snapshots" -- passes
-    after a loss, because there are none left to refuse on."""
+    """The check that used to stand alone -- "this Cluster already has Snapshots" -- asks
+    MongoDB, and passes when MongoDB is empty whatever the reason."""
     await HighWaterMark(fake_kubernetes, settings).record(13)
     await _ready_to_adopt(applying_client)
 
@@ -194,8 +106,8 @@ async def test_the_override_requires_the_number_apchi_named(
 async def test_the_override_lets_a_deliberate_restart_through(
     applying_client: AsyncClient, fake_kubernetes: FakeKubernetes, settings: Settings
 ) -> None:
-    """Someone whose history is genuinely gone has to be able to start again from what the
-    Cluster is running. Refusing forever would make §18 unrecoverable rather than careful."""
+    """Someone whose Snapshots are genuinely gone has to be able to start again from what
+    the Cluster is running. Refusing forever would be a trap rather than a precaution."""
     await HighWaterMark(fake_kubernetes, settings).record(13)
     await _ready_to_adopt(applying_client)
 
@@ -207,8 +119,8 @@ async def test_the_override_lets_a_deliberate_restart_through(
 async def test_an_ordinary_adoption_is_untouched(
     applying_client: AsyncClient, fake_kubernetes: FakeKubernetes, settings: Settings
 ) -> None:
-    """No mark and no Snapshots is the ordinary first onboarding, and it must not be
-    reported as a disaster or need an override."""
+    """No mark and no Snapshots is the ordinary first onboarding, and it must not need an
+    override."""
     await _ready_to_adopt(applying_client)
 
     started = await applying_client.post(f"{BASE}/adopt")

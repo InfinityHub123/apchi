@@ -78,54 +78,35 @@ Neither rewrites history. Rolling back to Snapshot 1 while Snapshot 2 is current
 Snapshot 3, whose content equals Snapshot 1's. So a rollback is itself something you can roll
 back, and the sequence of Snapshots is always the sequence of things that were really live.
 
-### If Apchi loses its own storage
+### Where Apchi's own state lives
 
-All four of those read from Snapshots, and MongoDB holds the only copy of every Snapshot. If
-it is lost, the cluster is unaffected — Trino keeps serving, because what it reads are
-Kubernetes Secrets, and those are untouched. What is lost is Apchi's memory of it.
+All four of those read from Snapshots, and Snapshots live in MongoDB. Keeping that MongoDB is
+your platform's job, not Apchi's — the same division Apchi draws for the Trino deployment it
+configures. Point `mongodb.uri` at a MongoDB that is operated and backed up the way your other
+databases are. The MongoDB the chart can deploy for you is for trying Apchi out and runs on an
+emptyDir.
 
-`/api/v1/health` tells you, because Apchi records the highest Snapshot number it has ever
-committed in a ConfigMap, outside MongoDB:
+If Apchi's database were empty, the cluster itself would be unaffected — Trino keeps serving,
+because what it reads are Kubernetes Secrets and those are untouched. What would be missing is
+Apchi's record of it, and that matters in one place worth knowing about: **adoption**.
 
-```json
-{"status":"ok","mongo":"up","history":"lost","snapshots_held":null,"snapshots_ever":13}
-```
+Adoption onboards a cluster Apchi does not manage yet, and it decides "do I manage this
+already?" by looking for Snapshots. An empty database answers no in two different situations —
+a cluster that was never managed, and one that is managed but whose database is not in front
+of Apchi right now. Adopting the second renumbers it from Snapshot 1.
 
-**The configuration can be recovered. The history cannot.** Adoption reads a cluster's
-configuration out of its coordinator, and after a loss what it reads is Apchi's own output,
-so re-adopting rebuilds every section exactly — catalogs with their connection URLs, grants,
-mapping patterns, resource groups. What no amount of reading gets back is Snapshot 7: nothing
-in Kubernetes holds it. After recovering this way you have Snapshot 1 and nothing behind it,
-so section revert and full rollback have nothing to target until you have applied a few more
-times. A staged edit you never applied is gone too — it was never on the cluster to read.
-
-So re-adoption is the recovery of last resort, and it says so: adopting a cluster whose
-history Apchi knows it has lost is refused until you repeat the number it names.
+So Apchi keeps one number outside MongoDB, in a ConfigMap: the highest Snapshot it has ever
+committed. Adoption reads it and refuses, naming the number, until you repeat it back:
 
 ```sh
 curl -XPOST '.../admin/adoption/adopt?discard_history_through=13'
 ```
 
-### Backing up what re-adoption cannot reach
-
-Re-adoption gets the configuration back. Everything else is in MongoDB and nowhere else, so
-there are two ways to keep it, and they answer different questions.
-
-`mongodump` is the ordinary one, and it keeps everything, activity records included.
-
-`GET /api/v1/admin/backup` returns one JSON document holding the part that matters — every
-snapshot with its number, the candidate including edits staged but never applied, the admin
-values, and whether maintenance mode is engaged — plus when it was taken, which Apchi took
-it, and which install's history it is. It deliberately leaves out the records of applies,
-validations and discoveries: those describe what happened rather than what is configured, and
-keeping them is `mongodump`'s job. It is refused with 409 while an apply is in flight, rather
-than handing you a candidate caught mid-promotion.
-
-**Either one is every credential the cluster has ever used.** Snapshots store real secret
-values rather than references, and snapshots are immutable, so a password rotated away years
-ago is still in there and cannot be taken out. That is why the export is on the admin surface,
-and whatever you pipe it into inherits the problem — treat it the way you treat a password
-database, not the way you treat a config dump.
+A number rather than a flag, so it cannot be set out of habit. And worth knowing if you ever
+do take that route: adoption reads the configuration back off the coordinator, so every
+section comes back — catalogs with their connection URLs, grants, mapping patterns, resource
+groups. What does not come back is the numbered history behind it, or an edit you staged and
+never applied.
 
 ## Sections, and what an apply costs
 

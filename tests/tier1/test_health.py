@@ -10,9 +10,6 @@ async def test_health_reports_ok_when_mongo_is_reachable(client: AsyncClient) ->
     assert response.json() == {
         "status": "ok",
         "mongo": "up",
-        "history": "intact",
-        "snapshots_held": None,
-        "snapshots_ever": None,
     }
 
 
@@ -34,12 +31,6 @@ async def test_health_is_degraded_when_mongo_is_unreachable(client: AsyncClient)
     assert response.json() == {
         "status": "degraded",
         "mongo": "down",
-        # Not "lost". With MongoDB unreachable Apchi cannot count its Snapshots, and
-        # cannot tell an outage from a loss -- so it reports the outage it can see and
-        # does not accuse itself of the loss it cannot (§18).
-        "history": "intact",
-        "snapshots_held": None,
-        "snapshots_ever": None,
     }
 
 

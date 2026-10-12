@@ -20,7 +20,7 @@ from app.pipeline.admin_values import AdminStore
 from app.pipeline.auto_rollback import declare_incident, restore
 from app.pipeline.candidate import CandidateStore
 from app.pipeline.files import deliver
-from app.pipeline.history import HighWaterMark
+from app.pipeline.high_water import HighWaterMark
 from app.pipeline.impact import sections_needing_rollout
 from app.pipeline.maintenance import MaintenanceStore
 from app.pipeline.rollout import roll_out

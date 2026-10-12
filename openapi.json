@@ -209,18 +209,6 @@
             ],
             "description": "The stored Configuration Candidate, including edits staged but never applied. Null when nothing is stored, in which case the Candidate is derived from the newest Snapshot and this document already holds it."
           },
-          "cluster_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The Apchi install this history belongs to, from the high-water mark. Null when Kubernetes would not answer or no Snapshot has been committed yet; a restore into a different install is the thing this identifies.",
-            "title": "Cluster Id"
-          },
           "format": {
             "const": "apchi.backup/v1",
             "default": "apchi.backup/v1",
@@ -247,7 +235,7 @@
                 "type": "null"
               }
             ],
-            "description": "The highest Snapshot number ever committed here. Higher than the last Snapshot below means this export was itself taken after a loss, and is incomplete.",
+            "description": "The highest Snapshot number ever committed here, from the mark Adoption reads. Higher than the last Snapshot below means MongoDB does not hold all of them.",
             "title": "Snapshots Ever"
           },
           "taken_at": {
@@ -259,7 +247,6 @@
         "required": [
           "taken_at",
           "apchi_version",
-          "cluster_id",
           "snapshots_ever",
           "snapshots",
           "candidate",
@@ -993,42 +980,9 @@
       },
       "Health": {
         "properties": {
-          "history": {
-            "description": "Whether MongoDB still holds every Snapshot this Cluster committed. `lost` means it does not, and the Cluster is running a configuration Apchi can no longer reproduce from its own records (\u00a718).",
-            "enum": [
-              "intact",
-              "lost"
-            ],
-            "title": "History",
-            "type": "string"
-          },
           "mongo": {
             "title": "Mongo",
             "type": "string"
-          },
-          "snapshots_ever": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The highest Snapshot ever committed here, read from outside MongoDB.",
-            "title": "Snapshots Ever"
-          },
-          "snapshots_held": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The highest Snapshot MongoDB holds.",
-            "title": "Snapshots Held"
           },
           "status": {
             "title": "Status",
@@ -1037,8 +991,7 @@
         },
         "required": [
           "status",
-          "mongo",
-          "history"
+          "mongo"
         ],
         "title": "Health",
         "type": "object"
@@ -2327,7 +2280,7 @@
         "operationId": "adopt_api_v1_admin_adoption_adopt_post",
         "parameters": [
           {
-            "description": "Only for a Cluster whose Snapshots are gone. Repeat the Snapshot number Apchi says it once reached, to confirm that adopting may start again at 1 without it. A number rather than a flag, so it cannot be set out of habit.",
+            "description": "Only for a Cluster that has committed Snapshots MongoDB no longer holds. Repeat the Snapshot number Apchi says it once reached, to confirm that adopting may start again at 1 without those Snapshots. A number rather than a flag, so it cannot be set out of habit.",
             "in": "query",
             "name": "discard_history_through",
             "required": false,
@@ -2340,7 +2293,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Only for a Cluster whose Snapshots are gone. Repeat the Snapshot number Apchi says it once reached, to confirm that adopting may start again at 1 without it. A number rather than a flag, so it cannot be set out of habit.",
+              "description": "Only for a Cluster that has committed Snapshots MongoDB no longer holds. Repeat the Snapshot number Apchi says it once reached, to confirm that adopting may start again at 1 without those Snapshots. A number rather than a flag, so it cannot be set out of habit.",
               "title": "Discard History Through"
             }
           }
@@ -3786,7 +3739,7 @@
     },
     "/api/v1/health": {
       "get": {
-        "description": "Apchi's own liveness, and whether its memory is all there.\n\nLost history does **not** make this 503, and that is deliberate rather than lenient.\nThis endpoint is the chart's readiness *and* liveness probe, so a 503 here is how\nKubernetes is told to stop sending traffic and then to kill the pod -- which is right\nwhile MongoDB is unreachable and exactly wrong after a loss, because restoring a backup\nmeans talking to an Apchi that is up. A pod crashlooping on the one condition an\nOperator has to log in and fix would make \u00a718 unrecoverable through Apchi's own API.",
+        "description": "Reports 503 while MongoDB is unreachable.\n\nThis endpoint is the chart's readiness *and* liveness probe, so a 503 here is how\nKubernetes is told to stop sending traffic and then to kill the pod. Nothing else\nbelongs in it for that reason: a condition reported here that an Operator has to log in\nand fix would crashloop the pod they need to reach.",
         "operationId": "health_api_v1_health_get",
         "responses": {
           "200": {

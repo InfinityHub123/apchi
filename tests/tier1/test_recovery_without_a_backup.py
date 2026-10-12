@@ -135,10 +135,6 @@ async def test_the_recovered_cluster_is_managed_again(
         "and it is derived from the recovered Snapshot, so the next edit applies on top of "
         "what the Cluster is actually running rather than on top of nothing"
     )
-    assert (await applying_client.get("/api/v1/health")).json()["history"] == "intact", (
-        "and the history is intact again: Snapshot 1 is now the whole of it, which is true "
-        "rather than merely reassuring"
-    )
 
 
 async def test_what_recovery_does_not_bring_back(
