@@ -1447,9 +1447,32 @@ This keeps persistence separate from Trino implementation details. If a mechanis
 later — resource groups moving from a file to an external database, permissions moving to
 OPA — the Operator-facing model need not change.
 
-**Mongo holds the only copy of every Snapshot and the entire audit trail.** If it is lost,
-the Cluster keeps running configuration nobody can reproduce. This is the real disaster
-scenario the design creates, and it is not currently addressed.
+**Operating that MongoDB is the platform's job, not Apchi's.** This is §16's ownership
+boundary applied to Apchi's own storage: the platform runs the Trino deployment and Apchi
+configures it, and the same division puts running, replicating and backing up the database
+on the side that already does those things for every other database it owns. Apchi has no
+backup feature, no restore path and no opinion about either. Point it at a MongoDB that is
+operated the way the rest of the platform's state is operated.
+
+Mongo does hold the only copy of every Snapshot, and that is a fact about where to point it
+rather than a disaster the design has to answer. Losing it would not take the Cluster down:
+Trino reads Kubernetes Secrets, and those are untouched. What would be missing is Apchi's
+record — the numbered history that Section Revert and Full Rollback aim at, and any edit
+staged but never applied.
+
+Two things follow from that boundary rather than from a recovery plan:
+
+- **Apchi keeps exactly one number outside MongoDB**: the highest Snapshot it has ever
+  committed, in a ConfigMap. It is not a second source of truth and nothing reads it to
+  decide what the configuration is. It exists because an empty `snapshots` collection is two
+  different situations — a Cluster that was never managed, and one that is managed by an
+  Apchi whose database is not in front of it right now — and §15's Adoption answers those
+  differently.
+- **Configuration is portable, which is not the same as backed up.** A configuration can be
+  exported as a document and imported as the Configuration Candidate, at Operator scope (the
+  six Sections) and at Admin scope (those plus the Admin values, which no Snapshot records).
+  That exists so a configuration can be moved, shared and edited elsewhere — not so a
+  database can be reconstructed. An export holds one configuration, never the history.
 
 # 19. API design
 

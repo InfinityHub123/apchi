@@ -63,10 +63,11 @@ def store_settings(stored: Resources, settings: ResourceGroupSettings) -> None:
 
     Absent and all-unset are the same configuration -- `settings_of` above reads a missing
     key as the defaults -- so storing an empty one puts a resource in a Snapshot that
-    describes nothing. That is harmless until recovery. §18's no-backup path rebuilds a
-    Snapshot by parsing the Cluster, and "the recovered Snapshot is the one that was lost"
-    has to be literally true to be worth asserting; with an empty key written on one path
-    and omitted on the other, two identical Clusters produced unequal Snapshots.
+    describes nothing. That is harmless until something reads a Cluster back: Adoption
+    rebuilds a Section by parsing what is mounted (§15), and "the parsed Section equals the
+    one that wrote the file" has to be literally true to be worth asserting; with an empty
+    key written on one path and omitted on the other, two identical Clusters produced
+    unequal Snapshots.
     """
     fields = settings.model_dump(mode="json")
     if any(value is not None for value in fields.values()):
