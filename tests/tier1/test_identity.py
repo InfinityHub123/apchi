@@ -23,10 +23,16 @@ from app.config import AuthMode, Settings
 from app.main import create_app
 from tests.conftest import FakeKubernetes
 
-#: The one path with no gate. It is the chart's readiness *and* liveness probe, so a condition
-#: an Operator must log in to clear would crashloop the pod they need alive to reach it -- the
-#: argument api/health.py already makes about what may go in it.
-OPEN = "/api/v1/health"
+#: The paths with no gate, and why each one is allowed to be.
+#:
+#: /health is the chart's readiness *and* liveness probe, so a condition an Operator must log
+#: in to clear would crashloop the pod they need alive to reach it -- the argument
+#: api/health.py already makes about what may go in it.
+#:
+#: /auth/login is how a caller gets an identity, so it cannot require one. It is covered by
+#: test_password_mode.py instead, which is the stricter test: not "does it refuse nobody" but
+#: "does it refuse the wrong password, the unknown user and the disabled account alike".
+OPEN = {"/api/v1/health", "/api/v1/auth/login"}
 
 OPERATOR = Identity(subject="jo", role="operator", via="password")
 
@@ -141,7 +147,7 @@ async def test_every_route_but_health_requires_an_identity(
     ungated = [
         f"{method.upper()} {path}"
         for method, path in _operations()
-        if path != OPEN and await _status(unauthenticatable, method, path) != 401
+        if path not in OPEN and await _status(unauthenticatable, method, path) != 401
     ]
 
     assert ungated == [], f"these answer without an identity: {ungated}"
@@ -150,7 +156,7 @@ async def test_every_route_but_health_requires_an_identity(
 async def test_health_needs_no_identity(unauthenticatable: AsyncClient) -> None:
     """Deliberately open, even in a mode nobody can authenticate against. An authenticated
     liveness probe is a pod that kills itself."""
-    response = await unauthenticatable.get(OPEN)
+    response = await unauthenticatable.get("/api/v1/health")
 
     assert response.status_code in {200, 503}, response.text
 

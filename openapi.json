@@ -663,6 +663,29 @@
         "title": "Configuration",
         "type": "object"
       },
+      "Credentials": {
+        "additionalProperties": false,
+        "properties": {
+          "password": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Password",
+            "type": "string"
+          },
+          "username": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "Credentials",
+        "type": "object"
+      },
       "CutoverChange": {
         "description": "One thing the Admin's deployment still has to do for Apchi's copies to be in force.",
         "properties": {
@@ -1045,6 +1068,51 @@
           "mongo"
         ],
         "title": "Health",
+        "type": "object"
+      },
+      "Identity": {
+        "description": "One caller, for one request.",
+        "properties": {
+          "role": {
+            "enum": [
+              "operator",
+              "admin"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          },
+          "token_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Id"
+          },
+          "via": {
+            "enum": [
+              "none",
+              "password",
+              "sso",
+              "token"
+            ],
+            "title": "Via",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "role",
+          "via"
+        ],
+        "title": "Identity",
         "type": "object"
       },
       "Import": {
@@ -3421,6 +3489,115 @@
         "summary": "Stream stage transitions",
         "tags": [
           "applies"
+        ]
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "description": "Sets a session cookie, and says who you now are.\n\nOne refusal for every reason. \"No such user\", \"wrong password\" and \"that account is\ndisabled\" are the same 401 with the same message, because telling them apart is how\nsomebody enumerates the platform staff who have accounts here. The verification is paid\neven when the username is unknown, so the *timing* does not tell them either.",
+        "operationId": "login_api_v1_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Credentials"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Identity"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sign in with a password",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "description": "Deletes the session row, so it stops working on the next request rather than at expiry.\n\nThat immediacy is the whole reason sessions are rows rather than signed cookies: clearing\nthe browser's copy alone would leave a credential that still works to whoever kept it.",
+        "operationId": "logout_api_v1_auth_logout_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          }
+        },
+        "summary": "End this session",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "description": "Answers in every mode, `none` included, where it reports the anonymous Admin.\n\nA UI asks this once instead of branching on the configured mode, and an Operator reading\nit can tell a 403 they expected from one they did not.",
+        "operationId": "me_api_v1_auth_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Identity"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          }
+        },
+        "summary": "Who Apchi thinks you are",
+        "tags": [
+          "auth"
         ]
       }
     },
