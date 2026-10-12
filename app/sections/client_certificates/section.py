@@ -9,6 +9,7 @@ is why the Catalog DDL that references a certificate is retried rather than issu
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.adapters.trino import Trino
 from app.api.errors import NotFound, UnprocessablePayload
@@ -26,13 +27,25 @@ from app.sections.base import (
     SmokeQuery,
     Unaccounted,
     ValidationFailure,
+    unreadable_each,
 )
 from app.sections.client_certificates import SECTION
 from app.sections.client_certificates.bundle import Bundle
 from app.sections.client_certificates.generator import MOUNT_DIR, parse, render, rendered_size
-from app.sections.client_certificates.model import ClientCertificate, describe
+from app.sections.client_certificates.model import ClientCertificate, StoredBundle, describe
 
 logger = logging.getLogger(__name__)
+
+
+def _bundle_of(stored: Any) -> ClientCertificate:
+    """A stored resource read back as the pair it must be, with the PEM proved to parse.
+
+    Expiry is deliberately not a reason to refuse: an expired certificate is still a
+    certificate this Section stored, and whether to renew it is an Operator's call rather
+    than grounds for rejecting the file it arrived in.
+    """
+    bundle = StoredBundle.model_validate(stored)
+    return describe("imported", bundle.certificate, 0)
 
 
 def list_certificates(
@@ -166,6 +179,12 @@ class ClientCertificatesSection:
                 for path, what, content in unaccounted
             ),
         )
+
+    def read_back(self, resources: Resources) -> list[ValidationFailure]:
+        """Read as a stored bundle rather than as a `ClientCertificate`: describing one
+        parses the PEM, and a certificate that has expired is still a certificate this
+        Section stored. Expiry is an Operator's problem, not a reason to refuse a file."""
+        return unreadable_each(SECTION, resources, lambda name: _bundle_of(resources[name]))
 
     def plan(self, desired: Resources, current: Resources) -> CertificatesPlan:
         return CertificatesPlan(
