@@ -24,8 +24,10 @@ from app.sections.base import (
     SmokeQuery,
     Unaccounted,
     ValidationFailure,
+    unreadable,
+    unreadable_each,
 )
-from app.sections.resource_groups import SECTION, SELECTORS, SEPARATOR
+from app.sections.resource_groups import SECTION, SELECTORS, SEPARATOR, SETTINGS
 from app.sections.resource_groups.generator import (
     MANAGER_PATH,
     RULES_PATH,
@@ -239,6 +241,23 @@ class ResourceGroupsSection:
                 for what, content in unaccounted
             ),
         )
+
+    def read_back(self, resources: Resources) -> list[ValidationFailure]:
+        """Three shapes, not one: the groups by path, and the two reserved keys.
+
+        `settings` and `selectors` are resources of this Section that are not groups, and
+        an import carries them like any other -- so each is read back through the reader
+        the write path uses, rather than assumed.
+        """
+        groups = groups_of(resources)
+        found = unreadable_each(
+            SECTION, groups, lambda path: ResourceGroup(path=path, **groups[path])
+        )
+        reserved = [
+            unreadable(SECTION, SETTINGS, lambda _: settings_of(resources)),
+            unreadable(SECTION, SELECTORS, lambda _: get_selectors(resources)),
+        ]
+        return found + [problem for problem in reserved if problem is not None]
 
     def plan(self, desired: Resources, current: Resources) -> ResourceGroupsPlan:
         before, after = groups_of(current), groups_of(desired)

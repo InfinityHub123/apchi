@@ -30,6 +30,7 @@ from app.sections.base import (
     SectionPlan,
     SmokeQuery,
     ValidationFailure,
+    unreadable_each,
 )
 from app.sections.permissions import SECTION
 from app.sections.permissions.generator import (
@@ -288,6 +289,9 @@ class PermissionsSection:
             resources=grants,
             admin={"preserved_access_control": preserved, "enforce_permissions": enforced},
         )
+
+    def read_back(self, resources: Resources) -> list[ValidationFailure]:
+        return unreadable_each(SECTION, resources, lambda key: Grant(key=key, **resources[key]))
 
     def plan(self, desired: Resources, current: Resources) -> PermissionsPlan:
         return PermissionsPlan(

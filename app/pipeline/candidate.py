@@ -90,6 +90,26 @@ class CandidateStore:
             upsert=True,
         )
 
+    async def replace(self, sections: dict[SectionName, dict[str, Any]]) -> Candidate:
+        """Replace the Candidate wholesale with an imported configuration (#121).
+
+        `base_snapshot` is **this** Cluster's latest Snapshot, never anything the document
+        says. A Candidate's base is what Review diffs against, and Review has to keep
+        meaning "what would applying this change here": a base taken from the document
+        would diff an imported configuration against a Cluster this one is not, and report
+        a change nobody is about to make.
+
+        Distinct from `reset`, which re-derives from a Snapshot and so always produces an
+        empty diff. This one is expected to produce a large one -- that is what importing
+        somebody else's configuration looks like.
+        """
+        latest = await self._snapshots.latest()
+        fresh = Candidate(
+            base_snapshot=None if latest is None else latest.number, sections=sections
+        )
+        await self.save(fresh)
+        return fresh
+
     async def reset(self, base_snapshot: int | None = None) -> Candidate:
         """Discard the Candidate's changes and re-derive it from a Snapshot.
 

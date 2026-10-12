@@ -24,6 +24,7 @@ from app.sections.base import (
     SmokeQuery,
     Unaccounted,
     ValidationFailure,
+    unreadable,
 )
 from app.sections.certificate_mapping import RESOURCE, SECTION
 from app.sections.certificate_mapping.generator import (
@@ -194,6 +195,35 @@ class CertificateMappingSection:
                 for what, content in unaccounted
             ),
         )
+
+    def read_back(self, resources: Resources) -> list[ValidationFailure]:
+        """One pattern at most, so anything under another name is not a resource at all.
+
+        §13.3 gives this Section room for exactly one pattern; the rest of a Cluster's
+        patterns are Admin values beneath it. A document with a second key here was
+        written by something that does not know that, and dropping it silently would lose
+        a pattern an Operator thinks they imported.
+        """
+        problems: list[ValidationFailure] = []
+        for name in sorted(resources):
+            if name != RESOURCE:
+                problems.append(
+                    ValidationFailure(
+                        section=SECTION,
+                        resource=name,
+                        reason=(
+                            f"is not a resource this Section holds: it has room for one "
+                            f"pattern, stored as {RESOURCE!r}"
+                        ),
+                    )
+                )
+                continue
+            problem = unreadable(
+                SECTION, name, lambda key: CertificateMapping.model_validate(resources[key])
+            )
+            if problem is not None:
+                problems.append(problem)
+        return problems
 
     def plan(self, desired: Resources, current: Resources) -> "MappingPlan":
         return MappingPlan(changed=desired.get(RESOURCE) != current.get(RESOURCE))

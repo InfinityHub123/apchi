@@ -26,6 +26,7 @@ from app.sections.base import (
     SmokeQuery,
     Unaccounted,
     ValidationFailure,
+    unreadable_each,
 )
 from app.sections.event_listeners import SECTION
 from app.sections.event_listeners.generator import (
@@ -183,6 +184,9 @@ class EventListenersSection:
                 for what, found in unaccounted
             ),
         )
+
+    def read_back(self, resources: Resources) -> list[ValidationFailure]:
+        return unreadable_each(SECTION, resources, lambda name: _as_listener(name, resources[name]))
 
     def plan(self, desired: Resources, current: Resources) -> ListenerPlan:
         return ListenerPlan(

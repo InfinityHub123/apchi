@@ -25,6 +25,7 @@ from app.sections.base import (
     SmokeQuery,
     Unaccounted,
     ValidationFailure,
+    unreadable_each,
 )
 from app.sections.catalogs import SECTION, apply
 from app.sections.catalogs.certificates import WIRED, ssl_is_configured
@@ -224,6 +225,10 @@ class CatalogsSection:
             resources[name] = {"connector": connector, "properties": properties}
             unaccounted.extend(Unaccounted(path=path, what=what) for what in lost)
         return Parsed(resources=resources, unaccounted=tuple(unaccounted))
+
+    def read_back(self, resources: Resources) -> list[ValidationFailure]:
+        """Each stored catalog back through the model an Operator's POST produced."""
+        return unreadable_each(SECTION, resources, lambda name: _as_catalog(name, resources[name]))
 
     def plan(self, desired: Resources, current: Resources) -> apply.CatalogPlan:
         return apply.plan(desired, current)

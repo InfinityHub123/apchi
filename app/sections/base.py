@@ -10,12 +10,12 @@ about the pipeline, which is why the failures below are returned as data rather 
 raised: the pipeline decides what a failure means to the Apply it is running.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any, Protocol, TypeGuard
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
@@ -104,6 +104,69 @@ class ValidationFailure(BaseModel):
     def __str__(self) -> str:
         where = "/".join(part for part in (self.section, self.resource) if part)
         return f"{where}: {self.reason}" if where else self.reason
+
+
+def unreadable(
+    section: SectionName, name: str, read: Callable[[str], object]
+) -> ValidationFailure | None:
+    """Whether one stored resource reads back as the model its Section writes.
+
+    Resources in the Candidate normally came from that Section's own write path, so they
+    are valid by construction and nothing calls this. An imported document is the
+    exception: it is a file, it can say anything, and an invalid resource in the shared
+    Candidate blocks everyone's Apply (ADR-0002). See §121.
+
+    `read` takes the resource's name rather than closing over it, so a caller looping over
+    resources defines no closure over its loop variable.
+
+    The non-Pydantic errors are named because a reader reaches into the stored shape before
+    any model sees it, and because a model is not the only thing that can refuse a value:
+
+    - `KeyError` -- `stored[name]["certificate"]` on a resource missing that key.
+    - `TypeError` / `AttributeError` -- `Model(**stored[path])` on a resource that is a
+      list or a string rather than an object.
+    - `ValueError` -- a value that parses as the right type and is still not the thing, the
+      case being an unreadable PEM, which `cryptography` refuses rather than Pydantic.
+      Caught after `ValidationError`, which is itself a `ValueError` subclass, so the
+      specific message wins.
+
+    Each of those is the document being malformed just as much as a failed field is.
+    """
+    try:
+        read(name)
+    except ValidationError as invalid:
+        return ValidationFailure(section=section, resource=name, reason=_why(invalid))
+    except KeyError as missing:
+        return ValidationFailure(
+            section=section, resource=name, reason=f"is missing {missing.args[0]!r}"
+        )
+    except (TypeError, AttributeError, ValueError) as malformed:
+        return ValidationFailure(
+            section=section,
+            resource=name,
+            reason=f"is not shaped like a {section} resource ({malformed})",
+        )
+    return None
+
+
+def unreadable_each(
+    section: SectionName, resources: Resources, read: Callable[[str], object]
+) -> list[ValidationFailure]:
+    """`unreadable` over every resource in a Section, in name order.
+
+    Every problem, never the first: an Operator fixing an imported document one rejection
+    at a time is the thing a whole-document import exists to avoid.
+    """
+    found = [unreadable(section, name, read) for name in sorted(resources)]
+    return [problem for problem in found if problem is not None]
+
+
+def _why(invalid: ValidationError) -> str:
+    """A Pydantic error as one line an Operator can act on, every field it found."""
+    return "; ".join(
+        f"{'.'.join(str(part) for part in error['loc']) or 'the resource'}: {error['msg']}"
+        for error in invalid.errors()
+    )
 
 
 @dataclass(frozen=True)
@@ -328,6 +391,21 @@ class Section(Protocol):
         Admin values are passed alongside the Candidate's resources rather than merged into
         them, because the two have different lifecycles: what is rendered is the pair, and
         only the Candidate half is ever recorded in a Snapshot (§14).
+        """
+        ...
+
+    def read_back(self, resources: Resources) -> list[ValidationFailure]:
+        """Every resource here this Section cannot read as one of its own.
+
+        Only an import calls this. Resources normally reach the Candidate through this
+        Section's own write path and are valid by construction; a document is a file and
+        can say anything, and one invalid resource in the shared Candidate blocks
+        everyone's Apply (ADR-0002), so an import is rejected whole before it is stored.
+
+        Shape only, which is the line the rest of the codebase already draws: what one
+        Section's resource implies about another is checked at Validate (`references`),
+        and anything needing a real coordinator is `check_against_probe`. An import is an
+        edit, so it gets what an edit gets.
         """
         ...
 

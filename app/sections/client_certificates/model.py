@@ -51,6 +51,20 @@ def _common_name(subject: x509.Name) -> str | None:
     return value if isinstance(value, str) else value.decode()
 
 
+class StoredBundle(BaseModel):
+    """A certificate as the Candidate stores it: the pair, PEM for PEM.
+
+    The write path builds this dict directly rather than from a model, so until an import
+    arrived nothing had to state its shape. A document can say anything, so now something
+    does.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    certificate: str
+    private_key: str
+
+
 def describe(name: str, certificate_pem: str, expiring_within_days: int) -> ClientCertificate:
     """Read the certificate and say what an Operator needs to know about it.
 
