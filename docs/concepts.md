@@ -210,6 +210,11 @@ of every catalog is a Secret Apchi rewrites, and the coordinator reseeds from it
 start, so a catalog Apchi does not hold disappears at the next restart. Adopting a cluster is
 what stops that happening to configuration somebody set up by hand.
 
+**It does not authenticate anyone yet.** `auth.mode` defaults to `none`, which treats every
+caller as an admin — the same thing Apchi has always done, now with a name and a setting. So
+anything that can reach the pod can disable permission enforcement across the cluster. Put
+Apchi behind something that authenticates until the other modes land (§19, #128).
+
 It does not detect drift. Changes made to the cluster outside Apchi are not noticed,
 reconciled or reported (§17) — which is why catalog DDL is restricted to Apchi's own identity,
 since a `DROP CATALOG` issued elsewhere would delete a file Apchi believes it owns.
