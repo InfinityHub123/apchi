@@ -1549,8 +1549,45 @@ unfrozen, which is the part that must never be left to chance.
 
 ## Authentication
 
-The UI uses the normal SSO model. Machine-to-machine access uses tokens issued through the
-UI.
+One setting with three values, and tokens alongside them rather than among them.
+
+```
+APCHI_AUTH_MODE = none | password | sso        (default: none)
+```
+
+**`none`** treats every caller as an **Admin**. It is the default because it is what Apchi did
+before authentication existed — every endpoint open — and any other default would lock an
+existing install out of its own Admin surface on upgrade. A Cluster that asks nobody to
+authenticate cannot tell §3's two roles apart anyway. It is also the reason adding
+authentication is a compatible change to an API §19 calls stable.
+
+**`password`** authenticates against users Apchi stores, hashed with Argon2id. There is no
+self-registration, email verification or password reset: Operators are platform staff an Admin
+onboards (§3), not members of the public. The first Admin comes from the Secret the chart
+mounts — a username and a password *hash* — created only when the user collection is empty, so
+the setting can never resurrect a deleted account or silently reset a changed password.
+
+**`sso`** is OIDC authorization code with PKCE. Apchi is a client and never an identity
+provider, so it works against whatever the platform already runs.
+
+**Tokens are not a mode.** They are a credential any authenticated user mints for automations,
+available whenever the mode is not `none`. They are opaque rather than signed, because a signed
+token cannot be revoked without the blocklist it was supposed to avoid, and because a token
+that resolves to its owner on every request takes the role that user has *now* — so demoting a
+user demotes their tokens.
+
+Two rules hold across every mode:
+
+- **Nothing degrades.** A mode that cannot establish an identity refuses. Apchi never falls
+  back to `none` because a credential store or an identity provider is unreachable; a control
+  plane that quietly drops its own authentication under failure is worse than one that
+  refuses.
+- **`/health` needs no credential.** It is the readiness *and* liveness probe, so a condition
+  an Operator must log in to clear would crashloop the pod they need alive to reach it (§16).
+
+Roles come from §3 and there are two: Operators own the six Sections, Admins also inject
+low-level configuration and freeze mutation. Every `/api/v1/admin/*` path requires an Admin;
+every other path requires an identity.
 
 ## PATCH semantics
 

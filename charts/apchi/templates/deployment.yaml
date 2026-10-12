@@ -35,6 +35,8 @@ spec:
           env:
             - name: APCHI_ENVIRONMENT
               value: {{ .Values.environment | quote }}
+            - name: APCHI_AUTH_MODE
+              value: {{ .Values.auth.mode | quote }}
             - name: APCHI_MONGO_URI
               value: {{ include "apchi.mongoUri" . | quote }}
             - name: APCHI_MONGO_DATABASE

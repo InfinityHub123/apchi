@@ -15,6 +15,20 @@ imagePullSecrets: []
 # second pipeline against one Trino. This is not a value you want to raise.
 replicaCount: 1
 
+# How a caller proves who they are (section 19).
+#
+#   none      every request is treated as an Admin. This is the default because it is
+#             what Apchi has always done -- every endpoint open -- and changing it on
+#             upgrade would lock an existing install out of its own Admin surface.
+#   password  a username and password, against users Apchi stores. Not built yet.
+#   sso       OIDC against your identity provider. Not built yet.
+#
+# `none` means anyone who can reach the pod can disable permission enforcement across
+# the cluster. Reach it only through something that authenticates, or set a real mode
+# once one exists.
+auth:
+  mode: none
+
 service:
   type: ClusterIP
   port: 8000

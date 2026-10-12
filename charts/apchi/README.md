@@ -63,6 +63,7 @@ secrets:
 | `image.repository` | `ghcr.io/infinityhub123/apchi` | Published on every release for `linux/amd64` and `linux/arm64` |
 | `image.tag` | `""` | Empty means the chart's `appVersion`, so an install gets the image that chart version was released with rather than whatever `latest` is today |
 | `replicaCount` | `1` | Leave it. An Apply is in-process state, so a second Apchi runs a second pipeline against one Trino |
+| `auth.mode` | `none` | `none`/`password`/`sso`. **`none` means every caller is treated as an Admin**, which is what Apchi has always done; `password` and `sso` are not built yet (#128) |
 | `environment` | `np` | `np`/`test`/`prep`/`prod`. Decides the log level and format: DEBUG and console in np and test, INFO and JSON in prep and prod |
 | `logging.level`, `logging.json` | `null` | Override the above. An explicit level can be raised during an incident without a rebuild |
 | `trino.host`, `trino.port` | `trino`, `8080` | The coordinator's Service. Apchi issues catalog DDL and the smoke query through it |

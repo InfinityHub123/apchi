@@ -3,6 +3,7 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 
@@ -17,6 +18,7 @@ from app.api.candidate import router as candidate_router
 from app.api.catalogs import router as catalogs_router
 from app.api.certificate_mapping import router as certificate_mapping_router
 from app.api.client_certificates import router as certificates_router
+from app.api.deps import AdminOnly, Authenticated
 from app.api.event_listeners import router as event_listeners_router
 from app.api.health import router as health_router
 from app.api.permissions import router as permissions_router
@@ -140,19 +142,52 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
     errors.install(app)
+    # Documented on the contract rather than left to be discovered: these become reachable
+    # the moment a mode other than `none` is configured, and the mode is runtime
+    # configuration, so every gated operation can answer this way.
+    unauthenticated: dict[int | str, dict[str, Any]] = {
+        401: {"model": errors.ApiError, "description": "No usable credential."}
+    }
+    forbidden: dict[int | str, dict[str, Any]] = {
+        403: {"model": errors.ApiError, "description": "Authenticated, but not an Admin."}
+    }
+
+    # Who may call what, in one place rather than per router, so the answer is readable
+    # without opening thirteen files -- and asserted from the route table in tier 1, so a
+    # router added later cannot be left ungated silently.
+    #
+    # /health carries no gate, deliberately. It is the chart's readiness *and* liveness
+    # probe: a condition an Operator has to log in to clear would crashloop the pod they
+    # need alive to reach it (see api/health.py).
     app.include_router(health_router, prefix="/api/v1")
-    app.include_router(catalogs_router, prefix="/api/v1")
-    app.include_router(certificate_mapping_router, prefix="/api/v1")
-    app.include_router(certificates_router, prefix="/api/v1")
-    app.include_router(permissions_router, prefix="/api/v1")
-    app.include_router(resource_groups_router, prefix="/api/v1")
-    app.include_router(event_listeners_router, prefix="/api/v1")
-    app.include_router(candidate_router, prefix="/api/v1")
-    app.include_router(applies_router, prefix="/api/v1")
-    app.include_router(snapshots_router, prefix="/api/v1")
-    app.include_router(validations_router, prefix="/api/v1")
-    app.include_router(admin_router, prefix="/api/v1")
-    app.include_router(adoption_router, prefix="/api/v1")
+    for router in (
+        catalogs_router,
+        certificate_mapping_router,
+        certificates_router,
+        permissions_router,
+        resource_groups_router,
+        event_listeners_router,
+        candidate_router,
+        applies_router,
+        snapshots_router,
+        validations_router,
+    ):
+        app.include_router(
+            router,
+            prefix="/api/v1",
+            dependencies=[Authenticated],
+            responses=unauthenticated,
+        )
+    # Admin surfaces, both of them under /admin: these inject low-level configuration and
+    # freeze mutation (§3), and PUT /admin/permissions/enforcement can open a Cluster to
+    # every identity without a grant.
+    for router in (admin_router, adoption_router):
+        app.include_router(
+            router,
+            prefix="/api/v1",
+            dependencies=[AdminOnly],
+            responses=unauthenticated | forbidden,
+        )
     return app
 
 
