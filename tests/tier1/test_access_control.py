@@ -374,7 +374,13 @@ async def test_the_whole_configuration_directory_counts_as_mounting_the_properti
 ) -> None:
     """How the official Trino chart does it, and how most charts do it: one ConfigMap
     mounted at /etc/trino rather than one mount per file. Apchi used to look only for the
-    exact path, so it refused the official chart for a file that was there all along."""
+    exact path, so it refused the official chart for a file that was there all along.
+
+    That shape is refused now, but for an unrelated reason -- a read-only mount over
+    /etc/trino leaves nowhere for Apchi's own single-file mounts (precondition 6). What
+    matters here is that the refusal is not *this* check's: the properties file is still
+    found through the directory mount, and the refresh period in it is still read.
+    """
     spec = healthy_pod_spec()
     spec["containers"][0]["volumeMounts"] = [
         mount
@@ -383,7 +389,11 @@ async def test_the_whole_configuration_directory_counts_as_mounting_the_properti
     ]
     spec["containers"][0]["volumeMounts"].append({"name": "config", "mountPath": "/etc/trino"})
 
-    await check(fake_kubernetes, pod_spec(spec), settings)
+    with pytest.raises(PreconditionFailed) as raised:
+        await check(fake_kubernetes, pod_spec(spec), settings)
+
+    assert "security.refresh-period" not in str(raised.value)
+    assert "Nothing provides" not in str(raised.value)
 
 
 async def test_a_directory_mount_without_the_refresh_period_is_still_refused(
