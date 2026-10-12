@@ -25,7 +25,7 @@ from app.sections.base import (
     Unaccounted,
     ValidationFailure,
 )
-from app.sections.resource_groups import SECTION, SELECTORS, SEPARATOR, SETTINGS
+from app.sections.resource_groups import SECTION, SELECTORS, SEPARATOR
 from app.sections.resource_groups.generator import (
     MANAGER_PATH,
     RULES_PATH,
@@ -37,6 +37,8 @@ from app.sections.resource_groups.generator import (
     render,
     selectors_of,
     settings_of,
+    store_selectors,
+    store_settings,
 )
 from app.sections.resource_groups.model import (
     ResourceGroup,
@@ -108,7 +110,7 @@ def get_settings(stored: Resources) -> ResourceGroupSettings:
 
 
 def set_settings(stored: Resources, settings: ResourceGroupSettings) -> ResourceGroupSettings:
-    stored[SETTINGS] = settings.model_dump(mode="json")
+    store_settings(stored, settings)
     return settings_of(stored)
 
 
@@ -119,7 +121,7 @@ def get_selectors(stored: Resources) -> Selectors:
 def set_selectors(stored: Resources, selectors: Selectors) -> Selectors:
     """Replaced whole. The list is ordered and first match wins, so a rule cannot be edited
     without seeing what now shadows it."""
-    stored[SELECTORS] = [s.model_dump(mode="json") for s in selectors.selectors]
+    store_selectors(stored, [s.model_dump(mode="json") for s in selectors.selectors])
     return get_selectors(stored)
 
 

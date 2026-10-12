@@ -58,6 +58,31 @@ def selectors_of(stored: Resources) -> list[dict[str, Any]]:
     return selectors
 
 
+def store_settings(stored: Resources, settings: ResourceGroupSettings) -> None:
+    """Store the file's own settings, or drop the key when they carry nothing.
+
+    Absent and all-unset are the same configuration -- `settings_of` above reads a missing
+    key as the defaults -- so storing an empty one puts a resource in a Snapshot that
+    describes nothing. That is harmless until recovery. §18's no-backup path rebuilds a
+    Snapshot by parsing the Cluster, and "the recovered Snapshot is the one that was lost"
+    has to be literally true to be worth asserting; with an empty key written on one path
+    and omitted on the other, two identical Clusters produced unequal Snapshots.
+    """
+    fields = settings.model_dump(mode="json")
+    if any(value is not None for value in fields.values()):
+        stored[SETTINGS] = fields
+    else:
+        stored.pop(SETTINGS, None)
+
+
+def store_selectors(stored: Resources, selectors: list[dict[str, Any]]) -> None:
+    """Store the selector list, or drop the key when it is empty. As `store_settings`."""
+    if selectors:
+        stored[SELECTORS] = selectors
+    else:
+        stored.pop(SELECTORS, None)
+
+
 def parent_of(path: str) -> str | None:
     """The path one level up, or None for a root group."""
     head, separator, _ = path.rpartition(SEPARATOR)
@@ -235,8 +260,6 @@ def parse_rules(path: str, content: str) -> tuple[Resources, list[tuple[str, Any
             unaccounted.append((f"the file sets {key!r}", {key: document[key]}))
 
     resources: Resources = dict(groups)
-    resources[SETTINGS] = ResourceGroupSettings.model_validate(settings_fields).model_dump(
-        mode="json"
-    )
-    resources[SELECTORS] = selectors
+    store_settings(resources, ResourceGroupSettings.model_validate(settings_fields))
+    store_selectors(resources, selectors)
     return resources, unaccounted

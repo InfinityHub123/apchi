@@ -78,6 +78,38 @@ Neither rewrites history. Rolling back to Snapshot 1 while Snapshot 2 is current
 Snapshot 3, whose content equals Snapshot 1's. So a rollback is itself something you can roll
 back, and the sequence of Snapshots is always the sequence of things that were really live.
 
+### If Apchi loses its own storage
+
+All four of those read from Snapshots, and MongoDB holds the only copy of every Snapshot. If
+it is lost, the cluster is unaffected — Trino keeps serving, because what it reads are
+Kubernetes Secrets, and those are untouched. What is lost is Apchi's memory of it.
+
+`/api/v1/health` tells you, because Apchi records the highest Snapshot number it has ever
+committed in a ConfigMap, outside MongoDB:
+
+```json
+{"status":"ok","mongo":"up","history":"lost","snapshots_held":null,"snapshots_ever":13}
+```
+
+**The configuration can be recovered. The history cannot.** Adoption reads a cluster's
+configuration out of its coordinator, and after a loss what it reads is Apchi's own output,
+so re-adopting rebuilds every section exactly — catalogs with their connection URLs, grants,
+mapping patterns, resource groups. What no amount of reading gets back is Snapshot 7: nothing
+in Kubernetes holds it. After recovering this way you have Snapshot 1 and nothing behind it,
+so section revert and full rollback have nothing to target until you have applied a few more
+times. A staged edit you never applied is gone too — it was never on the cluster to read.
+
+So re-adoption is the recovery of last resort, and it says so: adopting a cluster whose
+history Apchi knows it has lost is refused until you repeat the number it names.
+
+```sh
+curl -XPOST '.../admin/adoption/adopt?discard_history_through=13'
+```
+
+Back up MongoDB if the history matters to you. It holds every Snapshot and, because Snapshots
+store real secret values, every credential the cluster has ever used — so treat those backups
+accordingly.
+
 ## Sections, and what an apply costs
 
 A **section** is one managed area of the configuration, and the unit of revert. There are six,
@@ -136,10 +168,15 @@ the one that failed rather than half-applying.
 
 It manages one cluster. One Apchi, one Trino, one namespace.
 
-And it manages what it configured. Configuration that predates Apchi is not imported yet
-(see **Adoption** in `CONTEXT.md`), which matters most for catalogs: the durable copy of every
-catalog is a Secret Apchi rewrites, and the coordinator reseeds from it at every start, so a
-catalog Apchi does not hold disappears at the next restart.
+And it manages what it configured — but configuration that predates Apchi can now be
+imported, through **Adoption** (`CONTEXT.md`). That matters most for catalogs: the durable copy
+of every catalog is a Secret Apchi rewrites, and the coordinator reseeds from it at every
+start, so a catalog Apchi does not hold disappears at the next restart. Adopting a cluster is
+what stops that happening to configuration somebody set up by hand.
+
+It does not detect drift. Changes made to the cluster outside Apchi are not noticed,
+reconciled or reported (§17) — which is why catalog DDL is restricted to Apchi's own identity,
+since a `DROP CATALOG` issued elsewhere would delete a file Apchi believes it owns.
 
 ## Further reading
 

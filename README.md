@@ -182,10 +182,16 @@ end to end against a real Trino on a real Kubernetes, for all six sections. Not 
 
 - **No authentication.** Every endpoint is open, including the Admin ones. Deploy Apchi
   where only platform staff can reach it.
-- **No adoption.** Apchi manages what Apchi configured. A cluster with existing catalogs
-  cannot yet import them, and because the coordinator reseeds its catalog store from a Secret
-  Apchi owns, a catalog Apchi does not hold disappears at the next coordinator restart.
 - **No web UI.** The REST API is the whole interface.
+- **No audit trail.** Snapshots record what was committed, not who staged it. Because the
+  Candidate is shared, that is currently unrecorded.
+- **Backing up Apchi's own storage is yours to do.** MongoDB holds the only copy of every
+  Snapshot. Apchi tells you when it has lost them — `/api/v1/health` reports
+  `history: "lost"` — and a cluster's *current* configuration can be recovered by adopting
+  it again, but the Snapshot history cannot. Point `mongodb.uri` at something backed up.
+
+Adoption is built: a cluster configured before Apchi, or by hand, can be brought under
+management without losing what it was running. See **Adoption** in `CONTEXT.md`.
 
 ## Licence
 
