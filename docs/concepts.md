@@ -108,6 +108,44 @@ section comes back — catalogs with their connection URLs, grants, mapping patt
 groups. What does not come back is the numbered history behind it, or an edit you staged and
 never applied.
 
+## Moving a configuration
+
+Export and import are about portability, not backup: you have a configuration you like — on
+another cluster, from last month, from a colleague — and you want it here to edit.
+
+| | |
+| --- | --- |
+| `GET /api/v1/snapshots/{n}/export` | one committed Snapshot's configuration |
+| `GET /api/v1/candidate/export` | what is staged right now, which is in no Snapshot |
+| `PUT /api/v1/candidate` | replace everything staged with a document |
+| `GET /api/v1/admin/configuration/export` | the six sections **and** the admin values |
+| `PUT /api/v1/admin/configuration` | replace both |
+
+The only difference between the two scopes is the admin values. They are applied through the
+pipeline and never recorded in a Snapshot, so a Snapshot export is less than what the cluster
+is running; the admin export is the pair. Operators cannot set them, so an operator's document
+does not carry them and an operator's import will not apply them.
+
+**A document holds real credentials.** Snapshots store actual secret values rather than
+references, so every connection password and private key is in the file, in the clear. That is
+what makes an imported configuration work rather than need re-entering. Handle the file the way
+you handle a password database.
+
+Three things worth knowing before you import:
+
+- **It replaces.** That is what `PUT` means. Staged edits are discarded, and every section in
+  the document is the whole of that section. A section you want empty is written as `{}`;
+  leaving it out is refused rather than treated as "empty it".
+- **It is rejected whole.** Every problem is named at once, and nothing is stored unless all of
+  it is acceptable — the Candidate is shared, so one invalid resource in it would block
+  everyone's apply, not just yours.
+- **Nothing reaches the cluster.** An import stages, exactly like any other edit. The response
+  is the review of what applying it would now change, diffed against *this* cluster's latest
+  Snapshot rather than whatever the document came from.
+
+Not included: the numbered history (that is MongoDB's, and your platform's), maintenance mode
+(operational state, not configuration), and the records of applies and validations.
+
 ## Sections, and what an apply costs
 
 A **section** is one managed area of the configuration, and the unit of revert. There are six,
