@@ -59,6 +59,17 @@ Reach for these rather than the ones most tutorials suggest:
   `system.runtime.nodes` system table, not `/v1/node` — that endpoint 404s on Trino 483.
 - **Trino in tests** — `testcontainers.community.trino`.
 
+## Tests
+
+Two tiers. Tier 1 drives the HTTP API against real MongoDB and real Trino with Kubernetes
+faked; tier 2 runs against a real cluster and is marked `tier2`.
+
+**Run tier 1 with `scripts/tier1.sh`, not `pytest tests/tier1`.** As one process the suite
+degrades until tests hit the per-test timeout -- 5519s and 18 timeouts for the same tests
+that pass in about three minutes split three ways, with no assertion ever failing. The script
+splits it; the cause is unknown and #69 holds the evidence. CI runs it as one process and is
+green every time, so this is local only.
+
 ## Types
 
 Strict type checking in `pipeline/` and `sections/`, relaxed in `adapters/`. Pydantic models
