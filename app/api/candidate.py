@@ -1,5 +1,6 @@
 """Review and Reset: seeing what is staged, and throwing it away."""
 
+import logging
 from typing import Any, Literal
 
 from fastapi import APIRouter, status
@@ -11,10 +12,13 @@ from app.api.deps import (
     OperatorMutationAllowed,
     SnapshotStoreDep,
 )
+from app.pipeline.configuration import Configuration, Import, accepted, of_candidate
 from app.pipeline.impact import ApplyCost, cost_of
 from app.pipeline.recovery import RevertEffect, RevertRequest, full_rollback
 from app.sections import SectionName
 from app.sections.registry import REGISTERED, SECTIONS
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["candidate"])
 
@@ -134,3 +138,58 @@ async def rollback(
     modified -- applying this produces a new one, so history is never rewritten.
     """
     return await full_rollback(store, snapshots, cluster, request.snapshot)
+
+
+@router.get(
+    "/candidate/export",
+    response_model=Configuration,
+    summary="What is staged, as a portable configuration",
+)
+async def export_candidate(store: CandidateStoreDep) -> Configuration:
+    """Staged work, which is in no Snapshot.
+
+    Exported as well as Snapshots because this is the case "I was working on this and want
+    it elsewhere" actually needs: an edit that has not been applied has never been
+    committed, so no Snapshot holds it.
+
+    **The response holds real credentials**, for the same reason a Snapshot export does.
+    """
+    candidate = await store.load()
+    return of_candidate(candidate.base_snapshot, candidate.sections)
+
+
+@router.put(
+    "/candidate",
+    response_model=Review,
+    summary="Replace everything staged with an imported configuration",
+    dependencies=[OperatorMutationAllowed],
+)
+async def import_candidate(
+    document: Import,
+    store: CandidateStoreDep,
+    snapshots: SnapshotStoreDep,
+    cluster: ClusterDep,
+) -> Review:
+    """PUT because it replaces the whole resource, which is what an import is.
+
+    An import is not a Reset. `POST /candidate/reset` re-derives from a Snapshot and so
+    always leaves an empty diff; this replaces from a file and is expected to leave a large
+    one. Both discard staged edits, so both take the same gate.
+
+    Rejected whole, naming every problem, before anything is stored: the Candidate is
+    shared, so one invalid resource in it would block everyone's Apply and not just the
+    importer's (ADR-0002).
+
+    Nothing reaches the Cluster. The response is the Review of what an Apply would now
+    change -- diffed against this Cluster's latest Snapshot, because that is the change
+    anyone here is about to make.
+    """
+    candidate = await store.replace(accepted(document))
+    logger.info(
+        "configuration imported",
+        extra={
+            "base_snapshot": candidate.base_snapshot,
+            "sections": {name: len(candidate.sections[name]) for name in SECTIONS},
+        },
+    )
+    return await review(store, snapshots, cluster)

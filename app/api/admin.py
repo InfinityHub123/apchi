@@ -10,6 +10,7 @@ recorded in a Snapshot (invariant 9, section 14).
 """
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Request, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -20,13 +21,18 @@ from app.api.deps import (
     CandidateStoreDep,
     MaintenanceStoreDep,
     MutationsEnabled,
-    SnapshotStoreDep,
 )
 from app.api.errors import Conflict
 from app.pipeline.applies import ApplyRecord, ApplyRunner
-from app.pipeline.backup import Backup, take
+from app.pipeline.configuration import (
+    AdminImport,
+    Configuration,
+    accepted,
+    of_cluster,
+)
 from app.pipeline.maintenance import EngagedBy, MaintenanceState
-from app.sections.admin import MAX_PRESERVED_MAPPINGS
+from app.sections import SectionName
+from app.sections.admin import MAX_PRESERVED_MAPPINGS, AdminValues
 from app.sections.certificate_mapping.model import CertificateMappingWrite
 from app.sections.certificate_mapping.section import validate_patterns
 
@@ -186,39 +192,89 @@ async def start_admin_apply(request: Request, applies: ApplyStoreDep) -> ApplyRe
     return record
 
 
+class AdminConfiguration(BaseModel):
+    """What an Admin import left behind, both halves of it."""
+
+    base_snapshot: int | None = Field(
+        description=(
+            "This Cluster's latest Snapshot, which is what Review now diffs against -- "
+            "never the Snapshot named in the imported document's provenance."
+        )
+    )
+    sections: dict[SectionName, dict[str, Any]]
+    admin: AdminValues = Field(
+        description="Every Admin value as it now stands, including the ones left unmentioned."
+    )
+
+
 @router.get(
-    "/backup",
-    response_model=Backup,
-    summary="Export everything Apchi's own storage holds",
+    "/configuration/export",
+    response_model=Configuration,
+    summary="The full configuration: the Sections and the Admin values",
 )
-async def export_state(
-    request: Request,
-    applies: ApplyStoreDep,
-    snapshots: SnapshotStoreDep,
+async def export_configuration(
+    candidates: CandidateStoreDep, admin: AdminStoreDep
+) -> Configuration:
+    """What makes this the *full* configuration is the Admin values.
+
+    Admin values are applied through the pipeline and never recorded in a Snapshot
+    (invariant 9, §14), so a Snapshot export is less than what the Cluster is running. This
+    is the pair. It is the only difference between the two scopes, and it explains itself:
+    an Operator cannot set them, so an Operator's export must not carry them.
+
+    One configuration, not every Snapshot. History lives in MongoDB, whose durability is
+    the platform's concern rather than Apchi's (#110).
+
+    **The response holds real credentials**, for the same reason a Snapshot export does.
+    """
+    candidate = await candidates.load()
+    return of_cluster(candidate.base_snapshot, candidate.sections, await admin.load())
+
+
+@router.put(
+    "/configuration",
+    response_model=AdminConfiguration,
+    summary="Replace the Sections and the Admin values together",
+    dependencies=[MutationsEnabled],
+)
+async def import_configuration(
+    document: AdminImport,
     candidates: CandidateStoreDep,
     admin: AdminStoreDep,
-    maintenance: MaintenanceStoreDep,
-) -> Backup:
-    """One document holding what no amount of reading the Cluster gets back.
+) -> AdminConfiguration:
+    """The Admin scope's import: the six Sections, and the Admin values with them.
 
-    Re-adoption recovers the configuration after a MongoDB loss (#116). It does not recover
-    the numbered Snapshots that Section Revert and Full Rollback aim at, the Admin values
-    that are never in a Snapshot, or a Candidate's staged-but-unapplied edits. That is what
-    this is for.
+    **It replaces every Admin value**, including the ones the document does not mention,
+    because that is what replacing means. A document with `enforce_permissions` absent
+    turns enforcement off across the Cluster, and one with no preserved patterns drops the
+    rules an adopted Cluster was relying on. That is why `admin` is required rather than
+    defaulted -- an omission that large should not be expressible -- and why the response
+    says what the Admin values now are instead of leaving a caller to assume only what they
+    sent changed.
 
-    **The response is every credential the Cluster has ever used.** Snapshots store actual
-    secret values rather than references (§12), and because they are immutable, a key rotated
-    away years ago is still in here and cannot be taken out. It is on the Admin surface for
-    that reason, and whatever an Admin pipes it into inherits the problem.
-
-    Refused with 409 while an Apply is in flight, rather than exporting a Candidate caught
-    mid-promotion.
+    Nothing reaches the Cluster. The next Apply is what delivers it, as with every other
+    Admin value (`PUT /admin/permissions/enforcement` and the preserved patterns are the
+    same shape).
     """
-    return await take(
-        applies=applies,
-        snapshots=snapshots,
-        candidates=candidates,
-        admin=admin,
-        maintenance=maintenance,
-        high_water=request.app.state.high_water,
+    # Both halves validated before either is written, so a refusal stores nothing. The
+    # Sections' problems are reported whole; an unusable preserved pattern is refused the
+    # way `PUT /admin/certificate-mapping/preserved` refuses one, because it is the same
+    # value reaching the same file.
+    sections = accepted(document)
+    validate_patterns(document.admin.preserved_certificate_mappings)
+
+    # Sections first, deliberately. These are two documents and there is no transaction
+    # across them, so one of them can land alone. Sections landing alone leaves an imported
+    # configuration staged against the Admin values already in force -- stale, and fixed by
+    # sending the document again. Admin values landing alone could leave permission
+    # enforcement switched off against a Candidate nobody imported, which is the half not
+    # to be left holding.
+    candidate = await candidates.replace(sections)
+    values = await admin.save(document.admin)
+    logger.info(
+        "configuration imported",
+        extra={"base_snapshot": candidate.base_snapshot, "admin": True},
+    )
+    return AdminConfiguration(
+        base_snapshot=candidate.base_snapshot, sections=candidate.sections, admin=values
     )

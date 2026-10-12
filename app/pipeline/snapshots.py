@@ -43,18 +43,6 @@ class SnapshotStore:
         document = await self._collection.find_one({"_id": number})
         return None if document is None else self._as_snapshot(document)
 
-    # Above `list` deliberately: that method shadows the builtin for the rest of the
-    # class body, so a `list[Snapshot]` annotation below it does not type check.
-    async def every(self) -> list[Snapshot]:
-        """All of them, oldest first, for an export (#113).
-
-        Unlimited and unpaged, unlike `list`: an export missing a Snapshot is not a
-        shorter export, it is a history with a hole in it. Oldest first because that is
-        the order they have to be written back in to keep their numbers.
-        """
-        cursor = self._collection.find().sort("number", 1)
-        return [self._as_snapshot(document) async for document in cursor]
-
     async def list(self, limit: int = 50) -> list[Snapshot]:
         cursor = self._collection.find().sort("number", -1).limit(limit)
         return [self._as_snapshot(document) async for document in cursor]
