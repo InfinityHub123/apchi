@@ -47,6 +47,7 @@ PARAMS = {
     "resource": "anything",
     "apply_id": "anything",
     "validation_id": "anything",
+    "token_id": "anything",
 }
 
 #: Read from the committed contract rather than from `app.routes`, which this FastAPI

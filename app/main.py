@@ -25,10 +25,12 @@ from app.api.health import router as health_router
 from app.api.permissions import router as permissions_router
 from app.api.resource_groups import router as resource_groups_router
 from app.api.snapshots import router as snapshots_router
+from app.api.tokens import router as tokens_router
 from app.api.validations import router as validations_router
 from app.auth.sessions import SessionStore
+from app.auth.tokens import TokenStore
 from app.auth.users import UserStore, bootstrap
-from app.config import Settings, get_settings
+from app.config import AuthMode, Settings, get_settings
 from app.logging import configure_logging
 from app.pipeline.admin_values import AdminStore
 from app.pipeline.applies import ApplyEngine, ApplyRunner, ApplyStore, recover_interrupted
@@ -58,6 +60,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.discovery_store = DiscoveryStore(app.state.mongo.database)
     app.state.user_store = UserStore(app.state.mongo.database)
     app.state.session_store = SessionStore(app.state.mongo.database)
+    app.state.token_store = TokenStore(app.state.mongo.database)
 
     # Tests substitute the Kubernetes adapter before the lifespan runs; nothing else
     # is ever substituted.
@@ -113,19 +116,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if recovered:
             logger.warning("released the Candidate", extra={"recovered": len(recovered)})
 
-    # Indexes and the bootstrap Admin. Both best-effort for the reason above: a MongoDB
-    # that is not there yet must not stop Apchi starting, and both are idempotent, so the
-    # next start does them.
-    try:
-        await app.state.session_store.ensure_indexes()
-        await app.state.user_store.ensure_indexes()
-        await bootstrap(
-            app.state.user_store,
-            settings.auth_initial_admin_username,
-            settings.auth_initial_admin_password_hash,
-        )
-    except Exception:
-        logger.exception("could not prepare authentication storage; retried at the next start")
+    # Authentication storage, and only what the configured mode uses. In `none` mode nobody
+    # signs in and nobody owns a token, so there are no sessions, no tokens and no users --
+    # and indexing three collections that will stay empty is work with no reader.
+    #
+    # Not a micro-optimisation. Each of those is a round trip at startup, and tier 1 starts
+    # an app per test: doing them unconditionally took the test MongoDB from about 4 to over
+    # 600 connections created in 50 seconds and then wedged it outright, with current
+    # connections never above 10 (#131). An index the mode cannot use is not worth that.
+    #
+    # Best-effort for the reason above: a MongoDB that is not there yet must not stop Apchi
+    # starting, and all of it is idempotent, so the next start does it.
+    if settings.auth_mode is not AuthMode.NONE:
+        try:
+            await app.state.session_store.ensure_indexes()
+            await app.state.token_store.ensure_indexes()
+            await app.state.user_store.ensure_indexes()
+            await bootstrap(
+                app.state.user_store,
+                settings.auth_initial_admin_username,
+                settings.auth_initial_admin_password_hash,
+            )
+        except Exception:
+            logger.exception("could not prepare authentication storage; retried at the next start")
 
     # A crash mid-validation leaks an ephemeral coordinator, and leaked Trino pods
     # are not cheap. The pods carry activeDeadlineSeconds as a second backstop, for
@@ -194,6 +207,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         applies_router,
         snapshots_router,
         validations_router,
+        tokens_router,
     ):
         app.include_router(
             router,

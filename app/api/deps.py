@@ -9,6 +9,7 @@ from app.adapters.trino import Trino
 from app.api.errors import Conflict, Forbidden, MaintenanceModeEngaged, Unauthenticated
 from app.auth.identity import NOBODY, Identity
 from app.auth.sessions import COOKIE, SessionStore
+from app.auth.tokens import PREFIX, TokenStore
 from app.auth.users import UserStore
 from app.config import AuthMode, Settings
 from app.pipeline.admin_values import AdminStore
@@ -117,10 +118,17 @@ async def caller(request: Request) -> Identity:
     if settings.auth_mode is AuthMode.NONE:
         return NOBODY
 
+    # A bearer token first: it is how automations call, and they never carry a session.
+    if (identity := await _from_bearer(request)) is not None:
+        return identity
+
     if settings.auth_mode is AuthMode.PASSWORD:
         if (identity := await _from_session(request)) is not None:
             return identity
-        raise Unauthenticated("Sign in at POST /api/v1/auth/login.")
+        raise Unauthenticated(
+            "Sign in at POST /api/v1/auth/login, or send a token as "
+            "'Authorization: Bearer apchi_...'."
+        )
 
     # sso (#132) adds its branch here. A configured mode with no backend raises rather than
     # resolving to an Admin: a control plane that drops its own authentication because a
@@ -129,6 +137,37 @@ async def caller(request: Request) -> Identity:
         f"Authentication mode {settings.auth_mode.value!r} is configured but this build has "
         "no way to authenticate against it."
     )
+
+
+async def _from_bearer(request: Request) -> Identity | None:
+    """An `Authorization: Bearer apchi_...` header, resolved to the token's **owner**.
+
+    The role is the owner's current one, read on every request. That is the whole point of an
+    opaque token: demoting somebody demotes their automations, and disabling somebody stops
+    them, without anybody remembering to go and find their tokens.
+
+    Returns None for anything that is not one of Apchi's tokens, so the caller falls through
+    to the mode's own method rather than being told a session cookie is a bad token.
+    """
+    header = request.headers.get("authorization", "")
+    scheme, _, secret = header.partition(" ")
+    if scheme.lower() != "bearer" or not secret.startswith(PREFIX):
+        return None
+
+    tokens: TokenStore = request.app.state.token_store
+    token = await tokens.find(secret)
+    if token is None or not token.live:
+        raise Unauthenticated("That token is not valid, has expired, or has been revoked.")
+
+    users: UserStore = request.app.state.user_store
+    owner = await users.get(token.owner)
+    if owner is None or owner.disabled:
+        raise Unauthenticated(
+            f"The account that owns this token ({token.owner!r}) is disabled or gone."
+        )
+
+    await tokens.touch(token.id)
+    return Identity(subject=owner.username, role=owner.role, via="token", token_id=token.id)
 
 
 async def _from_session(request: Request) -> Identity | None:
@@ -239,6 +278,14 @@ def user_store(request: Request) -> UserStore:
 
 
 UserStoreDep = Annotated[UserStore, Depends(user_store)]
+
+
+def token_store(request: Request) -> TokenStore:
+    store: TokenStore = request.app.state.token_store
+    return store
+
+
+TokenStoreDep = Annotated[TokenStore, Depends(token_store)]
 
 
 def session_store(request: Request) -> SessionStore:
