@@ -6,8 +6,9 @@ from fastapi import Depends, Request
 
 from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
-from app.api.errors import Conflict, MaintenanceModeEngaged
-from app.config import Settings
+from app.api.errors import Conflict, Forbidden, MaintenanceModeEngaged, Unauthenticated
+from app.auth.identity import NOBODY, Identity
+from app.config import AuthMode, Settings
 from app.pipeline.admin_values import AdminStore
 from app.pipeline.applies import ApplyStore
 from app.pipeline.candidate import CandidateStore
@@ -99,6 +100,59 @@ def maintenance_store(request: Request) -> MaintenanceStore:
 MaintenanceStoreDep = Annotated[MaintenanceStore, Depends(maintenance_store)]
 
 
+async def caller(request: Request) -> Identity:
+    """Who is making this request.
+
+    One resolver for every mode, so a route never asks which mode is configured. In `none`
+    mode that is the anonymous Admin (`NOBODY`), which is what keeps this slice a seam rather
+    than a behaviour change -- every route gains a gate and every caller still passes it.
+
+    There is deliberately **no fallback**. A mode that cannot establish an identity raises;
+    it never degrades to `none`. A control plane that silently drops its own authentication
+    because a credential store is unreachable is worse than one that refuses.
+    """
+    settings: Settings = request.app.state.settings
+    if settings.auth_mode is AuthMode.NONE:
+        return NOBODY
+    # Each mode adds its own branch here: password (#130), token (#131), sso (#132). Until
+    # one of them exists, a configured mode has nothing to authenticate *with*, and saying so
+    # beats resolving to an Admin and calling it authentication.
+    raise Unauthenticated(
+        f"Authentication mode {settings.auth_mode.value!r} is configured but this build has "
+        "no way to authenticate against it."
+    )
+
+
+CallerDep = Annotated[Identity, Depends(caller)]
+
+
+async def authenticated(identity: CallerDep) -> Identity:
+    """An identity, or 401. Every /api/v1 route carries this except /health."""
+    return identity
+
+
+Authenticated = Depends(authenticated)
+
+
+async def admin_only(identity: CallerDep) -> Identity:
+    """An Admin, or 403.
+
+    Built on `caller` rather than beside `Authenticated`, so it *implies* authentication
+    rather than offering an alternative to it: two independent dependencies where one implies
+    the other is how a route ends up carrying only the weaker one.
+    """
+    if not identity.is_admin:
+        raise Forbidden(
+            f"This is an Admin operation and {identity.subject!r} is an Operator. Admins "
+            "inject low-level configuration and freeze mutation; Operators own the six "
+            "Sections (§3)."
+        )
+    return identity
+
+
+AdminOnly = Depends(admin_only)
+
+
 async def mutations_enabled(maintenance: MaintenanceStoreDep) -> None:
     """Rejects a mutation while Maintenance Mode is engaged.
 
@@ -118,16 +172,20 @@ MutationsEnabled = Depends(mutations_enabled)
 
 
 async def operator_mutation_allowed(
-    applies: ApplyStoreDep, maintenance: MaintenanceStoreDep
+    identity: CallerDep, applies: ApplyStoreDep, maintenance: MaintenanceStoreDep
 ) -> None:
     """The one gate every Operator edit passes.
 
-    Two reasons an edit is refused, and they are not the same thing. Maintenance Mode
-    is the broader and is checked first. The freeze is narrower and temporary: the
-    Candidate is frozen for the whole of an Apply so that what is committed is what was
-    verified. Both are one dependency rather than two, so a new mutating route cannot
-    pick up half the gate.
+    Three reasons an edit is refused, and they are not the same thing. Not being anybody is
+    the first: an unauthenticated caller is refused before Apchi looks at whether changes are
+    allowed at all. Maintenance Mode is the broader of the other two and is checked next. The
+    freeze is narrower and temporary: the Candidate is frozen for the whole of an Apply so
+    that what is committed is what was verified.
+
+    All of it is one dependency rather than three, so a new mutating route cannot pick up
+    part of the gate -- which is why the identity belongs in here rather than beside it.
     """
+    del identity  # resolving it is the check; its value is the audit's concern (§20).
     await mutations_enabled(maintenance)
 
     running = await applies.in_flight()

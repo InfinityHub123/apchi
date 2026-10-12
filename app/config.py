@@ -13,10 +13,28 @@ class Environment(StrEnum):
     PROD = "prod"
 
 
+class AuthMode(StrEnum):
+    """How a caller proves who they are (§19, #128).
+
+    `NONE` is the default because it is what Apchi does today -- every endpoint open -- and
+    anything else would break every existing install on upgrade. Tokens are not a mode: they
+    are a credential an authenticated user mints, so they need one of the others.
+    """
+
+    NONE = "none"
+    PASSWORD = "password"
+    SSO = "sso"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="APCHI_", env_file=".env", extra="ignore")
 
     environment: Environment = Environment.NP
+
+    #: Defaults to `none`, which resolves every caller to an Admin: that is the behaviour
+    #: Apchi has today, and a default of anything else would lock existing installs out of
+    #: their own Admin surface on upgrade.
+    auth_mode: AuthMode = AuthMode.NONE
 
     mongo_uri: str = "mongodb://localhost:27017"
     mongo_database: str = "apchi"

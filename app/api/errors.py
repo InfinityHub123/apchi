@@ -56,6 +56,20 @@ class MaintenanceModeEngaged(Conflict):
     code = "maintenance_mode"
 
 
+class Unauthenticated(ApchiError):
+    """No usable credential. Distinct from Forbidden: this one is answered by logging in."""
+
+    status_code = status.HTTP_401_UNAUTHORIZED
+    code = "unauthenticated"
+
+
+class Forbidden(ApchiError):
+    """A known caller without the role for this route. Logging in again will not help."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    code = "forbidden"
+
+
 class NotFound(ApchiError):
     status_code = status.HTTP_404_NOT_FOUND
     code = "not_found"
