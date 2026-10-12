@@ -106,9 +106,26 @@ history Apchi knows it has lost is refused until you repeat the number it names.
 curl -XPOST '.../admin/adoption/adopt?discard_history_through=13'
 ```
 
-Back up MongoDB if the history matters to you. It holds every Snapshot and, because Snapshots
-store real secret values, every credential the cluster has ever used — so treat those backups
-accordingly.
+### Backing up what re-adoption cannot reach
+
+Re-adoption gets the configuration back. Everything else is in MongoDB and nowhere else, so
+there are two ways to keep it, and they answer different questions.
+
+`mongodump` is the ordinary one, and it keeps everything, activity records included.
+
+`GET /api/v1/admin/backup` returns one JSON document holding the part that matters — every
+snapshot with its number, the candidate including edits staged but never applied, the admin
+values, and whether maintenance mode is engaged — plus when it was taken, which Apchi took
+it, and which install's history it is. It deliberately leaves out the records of applies,
+validations and discoveries: those describe what happened rather than what is configured, and
+keeping them is `mongodump`'s job. It is refused with 409 while an apply is in flight, rather
+than handing you a candidate caught mid-promotion.
+
+**Either one is every credential the cluster has ever used.** Snapshots store real secret
+values rather than references, and snapshots are immutable, so a password rotated away years
+ago is still in there and cannot be taken out. That is why the export is on the admin surface,
+and whatever you pipe it into inherits the problem — treat it the way you treat a password
+database, not the way you treat a config dump.
 
 ## Sections, and what an apply costs
 

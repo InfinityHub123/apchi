@@ -60,6 +60,20 @@ class CandidateStore:
             candidate.sections.setdefault(name, {})
         return candidate
 
+    async def stored(self) -> Candidate | None:
+        """What the collection actually holds, or None when it holds nothing.
+
+        `load` answers "what are Operators editing", deriving a Candidate when none is
+        stored. An export asks the narrower question -- what would be lost -- and a
+        derived Candidate would not be lost: it comes back from the Snapshot it was
+        derived from, which the export already holds (#113).
+        """
+        document = await self._collection.find_one({"_id": CANDIDATE_ID})
+        if document is None:
+            return None
+        document.pop("_id", None)
+        return Candidate.model_validate(document)
+
     async def _derive_from_latest(self) -> Candidate:
         latest = await self._snapshots.latest()
         number = None if latest is None else latest.number

@@ -35,6 +35,7 @@ from app.pipeline.maintenance import MaintenanceStore
 from app.pipeline.snapshots import SnapshotStore
 from app.pipeline.validation import VALIDATION_SELECTOR
 from app.pipeline.validations import ValidationRunner, ValidationStore
+from app.version import VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +154,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(
         title="Apchi",
-        version="0.1.0",
+        version=VERSION,
         summary="Control plane for configuring one Trino cluster",
         lifespan=lifespan,
     )

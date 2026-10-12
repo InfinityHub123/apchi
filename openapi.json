@@ -1,6 +1,41 @@
 {
   "components": {
     "schemas": {
+      "AdminValues": {
+        "additionalProperties": false,
+        "description": "Everything Admins configure outside the Candidate. One document, so an Apply reads\nthe Admin side of the Cluster in one go and holds it frozen for its whole run.",
+        "properties": {
+          "enforce_permissions": {
+            "default": false,
+            "description": "Whether a Trino Identity may reach only what it has been granted. False -- the default -- leaves the generated rules ending in a catch-all that allows everything to everyone, which is what a Cluster did before Apchi was installed.",
+            "title": "Enforce Permissions",
+            "type": "boolean"
+          },
+          "preserved_access_control": {
+            "additionalProperties": {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "description": "Access-control rules a Cluster already ran before it was onboarded, kept working beneath the Operator's grants while the grants catch up. Keyed by the block they belong to -- the blocks Apchi generates, and the ones it does not model at all. An Admin removes them when the migration is done.",
+            "title": "Preserved Access Control",
+            "type": "object"
+          },
+          "preserved_certificate_mappings": {
+            "description": "Mapping patterns a Cluster already ran before it was onboarded, kept working while its clients migrate to the single Operator pattern. Evaluated in the order given, beneath the Operator's pattern.",
+            "items": {
+              "$ref": "#/components/schemas/CertificateMappingWrite"
+            },
+            "maxItems": 20,
+            "title": "Preserved Certificate Mappings",
+            "type": "array"
+          }
+        },
+        "title": "AdminValues",
+        "type": "object"
+      },
       "ApplyCost": {
         "description": "What an Operator is agreeing to when they Apply.",
         "properties": {
@@ -152,6 +187,88 @@
         "title": "ApplyRecord",
         "type": "object"
       },
+      "Backup": {
+        "description": "Everything Apchi's own storage holds, plus enough provenance to judge a restore.",
+        "properties": {
+          "admin_values": {
+            "$ref": "#/components/schemas/AdminValues"
+          },
+          "apchi_version": {
+            "description": "The Apchi that wrote this document.",
+            "title": "Apchi Version",
+            "type": "string"
+          },
+          "candidate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Candidate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The stored Configuration Candidate, including edits staged but never applied. Null when nothing is stored, in which case the Candidate is derived from the newest Snapshot and this document already holds it."
+          },
+          "cluster_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Apchi install this history belongs to, from the high-water mark. Null when Kubernetes would not answer or no Snapshot has been committed yet; a restore into a different install is the thing this identifies.",
+            "title": "Cluster Id"
+          },
+          "format": {
+            "const": "apchi.backup/v1",
+            "default": "apchi.backup/v1",
+            "title": "Format",
+            "type": "string"
+          },
+          "maintenance": {
+            "$ref": "#/components/schemas/MaintenanceState"
+          },
+          "snapshots": {
+            "description": "Every Snapshot, oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/Snapshot"
+            },
+            "title": "Snapshots",
+            "type": "array"
+          },
+          "snapshots_ever": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The highest Snapshot number ever committed here. Higher than the last Snapshot below means this export was itself taken after a loss, and is incomplete.",
+            "title": "Snapshots Ever"
+          },
+          "taken_at": {
+            "format": "date-time",
+            "title": "Taken At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "taken_at",
+          "apchi_version",
+          "cluster_id",
+          "snapshots_ever",
+          "snapshots",
+          "candidate",
+          "admin_values",
+          "maintenance"
+        ],
+        "title": "Backup",
+        "type": "object"
+      },
       "Body_upload_certificate_api_v1_certificates_post": {
         "properties": {
           "archive": {
@@ -174,6 +291,55 @@
           "archive"
         ],
         "title": "Body_upload_certificate_api_v1_certificates_post",
+        "type": "object"
+      },
+      "Candidate": {
+        "description": "The mutable configuration Operators edit.",
+        "properties": {
+          "base_snapshot": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Snapshot this Candidate was derived from; null before the first.",
+            "title": "Base Snapshot"
+          },
+          "sections": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "propertyNames": {
+              "enum": [
+                "catalogs",
+                "client_certificates",
+                "certificate_mapping",
+                "permissions",
+                "resource_groups",
+                "event_listeners"
+              ]
+            },
+            "title": "Sections",
+            "type": "object"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "title": "Candidate",
         "type": "object"
       },
       "Catalog": {
@@ -2414,6 +2580,28 @@
           }
         },
         "summary": "Apply an Admin change without creating a Snapshot",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/backup": {
+      "get": {
+        "description": "One document holding what no amount of reading the Cluster gets back.\n\nRe-adoption recovers the configuration after a MongoDB loss (#116). It does not recover\nthe numbered Snapshots that Section Revert and Full Rollback aim at, the Admin values\nthat are never in a Snapshot, or a Candidate's staged-but-unapplied edits. That is what\nthis is for.\n\n**The response is every credential the Cluster has ever used.** Snapshots store actual\nsecret values rather than references (\u00a712), and because they are immutable, a key rotated\naway years ago is still in here and cannot be taken out. It is on the Admin surface for\nthat reason, and whatever an Admin pipes it into inherits the problem.\n\nRefused with 409 while an Apply is in flight, rather than exporting a Candidate caught\nmid-promotion.",
+        "operationId": "export_state_api_v1_admin_backup_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Backup"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Export everything Apchi's own storage holds",
         "tags": [
           "admin"
         ]
