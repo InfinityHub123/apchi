@@ -23,7 +23,7 @@ from app.api.deps import (
 from app.api.errors import Conflict
 from app.pipeline.applies import ApplyRecord, ApplyRunner
 from app.pipeline.maintenance import EngagedBy, MaintenanceState
-from app.sections.admin import MAX_PRESERVED_MAPPINGS, AdminValues
+from app.sections.admin import MAX_PRESERVED_MAPPINGS
 from app.sections.certificate_mapping.model import CertificateMappingWrite
 from app.sections.certificate_mapping.section import validate_patterns
 
@@ -98,7 +98,13 @@ async def set_preserved_mappings(
     by accident.
     """
     validate_patterns(preserved.patterns)
-    saved = await admin.save(AdminValues(preserved_certificate_mappings=preserved.patterns))
+    # Loaded and copied rather than built fresh: `save` replaces the whole document, so an
+    # `AdminValues(...)` built from this request alone would silently reset every other
+    # Admin value to its default -- including turning permission enforcement back off.
+    values = await admin.load()
+    saved = await admin.save(
+        values.model_copy(update={"preserved_certificate_mappings": preserved.patterns})
+    )
     return PreservedMappings(patterns=saved.preserved_certificate_mappings)
 
 

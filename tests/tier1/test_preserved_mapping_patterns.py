@@ -9,7 +9,10 @@ an Admin change creates no Snapshot.
 import asyncio
 
 from httpx import AsyncClient
+from pymongo import AsyncMongoClient
 
+from app.config import Settings
+from app.pipeline.admin_values import AdminStore
 from app.pipeline.applies import TERMINAL
 from app.pipeline.impact import RESTART_WARNING
 from app.sections.certificate_mapping.generator import FILE_KEY
@@ -227,3 +230,41 @@ async def test_an_admin_apply_is_refused_while_another_apply_is_in_flight(
     refused = await client.post("/api/v1/admin/applies")
 
     assert refused.status_code == 409
+
+
+async def test_replacing_the_patterns_leaves_the_other_admin_values_alone(
+    client: AsyncClient, settings: Settings
+) -> None:
+    """One Admin document, several unrelated Admin decisions in it.
+
+    The store replaces the whole document, which is the right contract for a list an Admin
+    sends whole. It is the wrong thing to do with the fields the request never mentioned:
+    building `AdminValues` from this request alone reset every one of them to its default.
+    Two decisions live in there and both are consequential on a serving Cluster. The default
+    for enforcement is off, so preserving a mapping pattern mid-migration opened the Cluster
+    to every identity without a grant. And the default for the preserved access-control
+    rules is none, so it also dropped the rules an adopted Cluster was already running --
+    which only Adoption writes, which is why it is seeded here rather than sent.
+    """
+    assert (
+        await client.put("/api/v1/admin/permissions/enforcement", json={"enforced": True})
+    ).status_code == 200
+    mongo: AsyncMongoClient = AsyncMongoClient(settings.mongo_uri)
+    store = AdminStore(mongo[settings.mongo_database])
+    rules = {"catalog": [{"user": "legacy_etl", "catalog": ".*", "allow": "all"}]}
+    await store.save((await store.load()).model_copy(update={"preserved_access_control": rules}))
+
+    replaced = await client.put(
+        "/api/v1/admin/certificate-mapping/preserved", json={"patterns": [LEGACY]}
+    )
+
+    assert replaced.status_code == 200, replaced.json()
+    assert replaced.json()["patterns"][0]["pattern"] == LEGACY["pattern"]
+    try:
+        kept = await store.load()
+    finally:
+        await mongo.close()
+    assert kept.enforce_permissions is True, "the request said nothing about enforcement"
+    assert kept.preserved_access_control == rules, (
+        "nor about the rules the Cluster was running before Apchi adopted it"
+    )
