@@ -28,6 +28,26 @@ replicaCount: 1
 # once one exists.
 auth:
   mode: none
+  # The one Admin a new install starts with, in password mode. Applied only when Apchi's
+  # user collection is empty, so it can never resurrect a deleted account or reset a
+  # changed password on a restart.
+  #
+  # A password *hash*, never the password: values end up in the release, in `helm get
+  # values` and often in a git repository. Generate one with
+  #
+  #   python -c 'from argon2 import PasswordHasher as P; print(P().hash("your password"))'
+  #
+  # The hash is still worth protecting -- it is offline-crackable -- so point
+  # existingSecret at a Secret you manage instead of putting it here.
+  initialAdmin:
+    username: admin
+    passwordHash: ""
+    # A Secret holding the hash, used in preference to passwordHash above.
+    existingSecret: ""
+    existingSecretKey: password-hash
+  # How long an untouched browser session lasts. Sessions are rows in MongoDB, so a
+  # logout or a disabled account takes effect at once rather than when this elapses.
+  sessionHours: 12
 
 service:
   type: ClusterIP
