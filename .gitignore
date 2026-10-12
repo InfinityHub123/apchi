@@ -217,5 +217,11 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Claude Code personal overrides
-.claude/settings.local.json
+# Agent tooling
+#   Local to whoever is working here, not part of the project: installed third-party
+#   skills and their lockfile, personal settings, and agent worktrees. The project's own
+#   agent instructions are checked in -- CLAUDE.md and docs/agents/ -- so nothing here is
+#   needed to work on Apchi. Un-ignore a specific path if one ever should be shared.
+.claude/
+.agents/
+skills-lock.json
