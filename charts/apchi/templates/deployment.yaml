@@ -37,6 +37,22 @@ spec:
               value: {{ .Values.environment | quote }}
             - name: APCHI_AUTH_MODE
               value: {{ .Values.auth.mode | quote }}
+            - name: APCHI_AUTH_INITIAL_ADMIN_USERNAME
+              value: {{ .Values.auth.initialAdmin.username | quote }}
+            {{- if .Values.auth.initialAdmin.existingSecret }}
+            # From a Secret rather than from values: the hash is offline-crackable, so it is
+            # worth keeping out of the release and out of `helm get values`.
+            - name: APCHI_AUTH_INITIAL_ADMIN_PASSWORD_HASH
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.initialAdmin.existingSecret | quote }}
+                  key: {{ .Values.auth.initialAdmin.existingSecretKey | quote }}
+            {{- else if .Values.auth.initialAdmin.passwordHash }}
+            - name: APCHI_AUTH_INITIAL_ADMIN_PASSWORD_HASH
+              value: {{ .Values.auth.initialAdmin.passwordHash | quote }}
+            {{- end }}
+            - name: APCHI_AUTH_SESSION_HOURS
+              value: {{ .Values.auth.sessionHours | quote }}
             - name: APCHI_MONGO_URI
               value: {{ include "apchi.mongoUri" . | quote }}
             - name: APCHI_MONGO_DATABASE

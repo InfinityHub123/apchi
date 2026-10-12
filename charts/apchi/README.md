@@ -63,7 +63,11 @@ secrets:
 | `image.repository` | `ghcr.io/infinityhub123/apchi` | Published on every release for `linux/amd64` and `linux/arm64` |
 | `image.tag` | `""` | Empty means the chart's `appVersion`, so an install gets the image that chart version was released with rather than whatever `latest` is today |
 | `replicaCount` | `1` | Leave it. An Apply is in-process state, so a second Apchi runs a second pipeline against one Trino |
-| `auth.mode` | `none` | `none`/`password`/`sso`. **`none` means every caller is treated as an Admin**, which is what Apchi has always done; `password` and `sso` are not built yet (#128) |
+| `auth.mode` | `none` | `none`/`password`/`sso`. **`none` means every caller is treated as an Admin**, which is what Apchi has always done. `sso` is not built yet (#132) |
+| `auth.initialAdmin.username` | `admin` | The one Admin a new install starts with, in `password` mode |
+| `auth.initialAdmin.passwordHash` | `""` | An Argon2id **hash**, never the password. Applied only when Apchi has no users, so it cannot resurrect a deleted account or reset a changed password |
+| `auth.initialAdmin.existingSecret` | `""` | A Secret holding that hash, preferred over the value above: the hash is offline-crackable, so it is worth keeping out of the release |
+| `auth.sessionHours` | `12` | How long an untouched session lasts. Logout and disabling a user take effect at once regardless |
 | `environment` | `np` | `np`/`test`/`prep`/`prod`. Decides the log level and format: DEBUG and console in np and test, INFO and JSON in prep and prod |
 | `logging.level`, `logging.json` | `null` | Override the above. An explicit level can be raised during an incident without a rebuild |
 | `trino.host`, `trino.port` | `trino`, `8080` | The coordinator's Service. Apchi issues catalog DDL and the smoke query through it |

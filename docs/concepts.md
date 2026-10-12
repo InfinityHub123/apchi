@@ -210,10 +210,22 @@ of every catalog is a Secret Apchi rewrites, and the coordinator reseeds from it
 start, so a catalog Apchi does not hold disappears at the next restart. Adopting a cluster is
 what stops that happening to configuration somebody set up by hand.
 
-**It does not authenticate anyone yet.** `auth.mode` defaults to `none`, which treats every
-caller as an admin — the same thing Apchi has always done, now with a name and a setting. So
-anything that can reach the pod can disable permission enforcement across the cluster. Put
-Apchi behind something that authenticates until the other modes land (§19, #128).
+**Authentication is off by default.** `auth.mode` defaults to `none`, which treats every caller
+as an admin — the same thing Apchi has always done, now with a name and a setting. On `none`,
+anything that can reach the pod can disable permission enforcement across the cluster.
+
+`auth.mode: password` turns it on: operators and admins Apchi stores, hashed with Argon2id, and
+a session cookie. There is no self-registration or password reset, because operators are
+platform staff an admin onboards rather than members of the public. The first admin comes from
+`auth.initialAdmin` — a username and a password *hash* — and is created only when Apchi has no
+users at all, so the setting can never resurrect a deleted account or reset a changed password
+on a restart.
+
+Sessions are rows in MongoDB rather than signed cookies, which is what makes logging out, and
+disabling somebody, take effect on their next request instead of whenever their cookie would
+have expired.
+
+SSO is next (#132). Tokens for automations come with it (#131).
 
 It does not detect drift. Changes made to the cluster outside Apchi are not noticed,
 reconciled or reported (§17) — which is why catalog DDL is restricted to Apchi's own identity,

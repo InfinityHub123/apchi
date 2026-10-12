@@ -18,6 +18,10 @@ dependencies = [
     "kubernetes>=31.0",
     "cryptography>=44",
     "python-multipart>=0.0.20",
+    # Argon2id, which is OWASP's first recommendation for password hashing. Not passlib,
+    # which most FastAPI material still suggests: unmaintained since 2020 and built on the
+    # `crypt` module Python 3.13 removed.
+    "argon2-cffi>=25.1",
 ]
 
 [project.optional-dependencies]

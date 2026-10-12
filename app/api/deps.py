@@ -8,6 +8,8 @@ from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.api.errors import Conflict, Forbidden, MaintenanceModeEngaged, Unauthenticated
 from app.auth.identity import NOBODY, Identity
+from app.auth.sessions import COOKIE, SessionStore
+from app.auth.users import UserStore
 from app.config import AuthMode, Settings
 from app.pipeline.admin_values import AdminStore
 from app.pipeline.applies import ApplyStore
@@ -114,13 +116,45 @@ async def caller(request: Request) -> Identity:
     settings: Settings = request.app.state.settings
     if settings.auth_mode is AuthMode.NONE:
         return NOBODY
-    # Each mode adds its own branch here: password (#130), token (#131), sso (#132). Until
-    # one of them exists, a configured mode has nothing to authenticate *with*, and saying so
-    # beats resolving to an Admin and calling it authentication.
+
+    if settings.auth_mode is AuthMode.PASSWORD:
+        if (identity := await _from_session(request)) is not None:
+            return identity
+        raise Unauthenticated("Sign in at POST /api/v1/auth/login.")
+
+    # sso (#132) adds its branch here. A configured mode with no backend raises rather than
+    # resolving to an Admin: a control plane that drops its own authentication because a
+    # provider is unreachable is worse than one that refuses.
     raise Unauthenticated(
         f"Authentication mode {settings.auth_mode.value!r} is configured but this build has "
         "no way to authenticate against it."
     )
+
+
+async def _from_session(request: Request) -> Identity | None:
+    """The caller's session cookie, resolved against the sessions collection and the user.
+
+    Two reads, and the second one is the point: the role comes from the **user**, not from
+    the session row, and a user who has been disabled or removed since signing in stops
+    working on their next request rather than when their session would have expired. Storing
+    the role on the session would have made "disable this person now" depend on also deleting
+    their sessions -- correct only as long as nobody forgets, which is not a property worth
+    resting on.
+
+    It also means sessions and tokens (#131) answer to the same rule, so there is one
+    freshness story rather than two.
+    """
+    value = request.cookies.get(COOKIE)
+    if not value:
+        return None
+    session = await request.app.state.session_store.read(value)
+    if session is None:
+        return None
+    users: UserStore = request.app.state.user_store
+    user = await users.get(session.username)
+    if user is None or user.disabled:
+        return None
+    return user.identity()
 
 
 CallerDep = Annotated[Identity, Depends(caller)]
@@ -197,6 +231,22 @@ async def operator_mutation_allowed(
 
 
 OperatorMutationAllowed = Depends(operator_mutation_allowed)
+
+
+def user_store(request: Request) -> UserStore:
+    store: UserStore = request.app.state.user_store
+    return store
+
+
+UserStoreDep = Annotated[UserStore, Depends(user_store)]
+
+
+def session_store(request: Request) -> SessionStore:
+    store: SessionStore = request.app.state.session_store
+    return store
+
+
+SessionStoreDep = Annotated[SessionStore, Depends(session_store)]
 
 
 def discovery_store(request: Request) -> DiscoveryStore:

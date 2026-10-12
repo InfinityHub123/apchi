@@ -35,6 +35,15 @@ class Settings(BaseSettings):
     #: Apchi has today, and a default of anything else would lock existing installs out of
     #: their own Admin surface on upgrade.
     auth_mode: AuthMode = AuthMode.NONE
+    #: The one Admin a new install starts with, in `password` mode. A *hash* rather than a
+    #: password, so the plaintext is never in values, a Helm release, or `helm get values`.
+    #: Applied only when the user collection is empty, so it cannot resurrect a deleted
+    #: account or reset a changed password on a restart.
+    auth_initial_admin_username: str = "admin"
+    auth_initial_admin_password_hash: str | None = None
+    #: How long a browser session lasts. Sessions are rows, so logging out or disabling a
+    #: user takes effect at once; this is only how long an untouched one survives.
+    auth_session_hours: float = 12.0
 
     mongo_uri: str = "mongodb://localhost:27017"
     mongo_database: str = "apchi"
