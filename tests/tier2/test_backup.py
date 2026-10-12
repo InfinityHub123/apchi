@@ -41,11 +41,10 @@ async def _apply(client: AsyncClient, timeout: float = 600.0) -> dict:
 async def test_the_export_takes_its_provenance_from_a_real_config_map(
     e2e_client: AsyncClient, settings: Settings
 ) -> None:
-    """The Cluster id in the export is the one Kubernetes is holding, read back out of it.
+    """`snapshots_ever` is the number Kubernetes is holding, read back out of it.
 
-    Compared against `kubectl`, not against what Apchi just wrote: the point is that a
-    restore judging a backup by its Cluster id is judging it by something that outlives
-    MongoDB, and only a real ConfigMap shows that.
+    Compared against `kubectl`, not against what Apchi just wrote: in tier 1 that ConfigMap
+    is a dictionary in the fake, so only this proves the real one round-trips.
     """
     assert (await e2e_client.post("/api/v1/catalogs", json=SCRATCH)).status_code == 201
     record = await _apply(e2e_client)
@@ -56,7 +55,6 @@ async def test_the_export_takes_its_provenance_from_a_real_config_map(
         "data"
     ]
     assert backup["format"] == FORMAT
-    assert backup["cluster_id"] == mark["cluster_id"]
     assert backup["snapshots_ever"] == int(mark["highest_snapshot"]) == record["snapshot"]
     assert [s["number"] for s in backup["snapshots"]] == [record["snapshot"]]
     assert "scratch" in backup["snapshots"][0]["sections"]["catalogs"]

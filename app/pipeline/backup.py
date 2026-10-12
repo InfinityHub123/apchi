@@ -40,7 +40,7 @@ from app.api.errors import Conflict
 from app.pipeline.admin_values import AdminStore
 from app.pipeline.applies import ApplyRecord, ApplyStore
 from app.pipeline.candidate import Candidate, CandidateStore
-from app.pipeline.history import HighWater, HighWaterMark
+from app.pipeline.high_water import HighWaterMark
 from app.pipeline.maintenance import MaintenanceState, MaintenanceStore
 from app.pipeline.snapshots import Snapshot, SnapshotStore
 from app.sections.admin import AdminValues
@@ -59,17 +59,10 @@ class Backup(BaseModel):
     format: Literal["apchi.backup/v1"] = FORMAT
     taken_at: datetime
     apchi_version: str = Field(description="The Apchi that wrote this document.")
-    cluster_id: str | None = Field(
-        description=(
-            "The Apchi install this history belongs to, from the high-water mark. Null when "
-            "Kubernetes would not answer or no Snapshot has been committed yet; a restore "
-            "into a different install is the thing this identifies."
-        )
-    )
     snapshots_ever: int | None = Field(
         description=(
-            "The highest Snapshot number ever committed here. Higher than the last Snapshot "
-            "below means this export was itself taken after a loss, and is incomplete."
+            "The highest Snapshot number ever committed here, from the mark Adoption reads. "
+            "Higher than the last Snapshot below means MongoDB does not hold all of them."
         )
     )
     snapshots: list[Snapshot] = Field(description="Every Snapshot, oldest first.")
@@ -115,7 +108,6 @@ async def take(
     held = await snapshots.every()
     values = await admin.load()
     mode = await maintenance.get()
-    mark = await _mark(high_water)
 
     _refuse_if_applying(await applies.in_flight())
     newest = await snapshots.latest()
@@ -128,8 +120,7 @@ async def take(
     backup = Backup(
         taken_at=datetime.now(UTC),
         apchi_version=VERSION,
-        cluster_id=mark.cluster_id if mark else None,
-        snapshots_ever=mark.highest_snapshot if mark else None,
+        snapshots_ever=await _mark(high_water),
         snapshots=held,
         candidate=candidate,
         admin_values=values,
@@ -150,12 +141,11 @@ def _refuse_if_applying(running: ApplyRecord | None) -> None:
         )
 
 
-async def _mark(high_water: HighWaterMark) -> HighWater | None:
+async def _mark(high_water: HighWaterMark) -> int | None:
     """The high-water mark, or None if it cannot be read.
 
-    An export without provenance is worth more than no export, and the same reasoning
-    applies as at startup: Apchi tolerates a Kubernetes that will not answer, and a
-    transient 403 must not cost an Admin their backup.
+    An export without that number is worth more than no export, so a Kubernetes that will
+    not answer costs the provenance rather than the document.
     """
     try:
         return await high_water.read()

@@ -1,18 +1,18 @@
-"""Losing MongoDB and getting the configuration back from the Cluster itself.
+"""Adopting a Cluster Apchi itself configured: the round-trip of its own output.
 
-§18's disaster: MongoDB holds the only copy of every Snapshot, and if it is lost the Cluster
-keeps running a configuration nobody can reproduce. The second half of that sentence turns
-out to be nearly untrue, and this is where that is established rather than assumed.
+§15's Adoption is written for a Cluster configured by hand, and #87-#89 are tested against
+that. This is the other case, and the easy one: Apchi reading back files Apchi wrote. It is
+worth asserting precisely because it looks trivial -- the claim is that every Section comes
+back *equal*, not similar, and anything less would be a property quietly dropped on a path
+nobody looks at.
 
-Adoption reads a Cluster's configuration out of what is mounted on its coordinator (#87-#89).
-After a MongoDB loss the thing it reads is Apchi's **own** output -- the easy case, a
-round-trip of files Apchi wrote, rather than §15's hand-written ones -- so re-adopting
-recovers the current configuration of every Section.
+It is reachable in practice: point an Apchi at a database that does not hold the Snapshots
+for the Cluster in front of it, and adopting is what you would do. The Adoption gate makes
+that deliberate rather than accidental (`discard_history_through`), and these tests go
+through it.
 
-What it does not recover is **history**. Nothing in Kubernetes holds Snapshot 7. So this is
-the recovery of last resort, and the Snapshot it produces is numbered 1: §11's Section Revert
-and Full Rollback have nothing behind them afterwards, and a Candidate's staged-but-unapplied
-edits are gone because they were never on the Cluster to read.
+What a re-adoption cannot produce is the numbered history behind the Snapshot it creates, or
+a Candidate's staged-but-unapplied edits -- those were never on the Cluster to read.
 """
 
 import asyncio
@@ -58,8 +58,12 @@ async def _configured_cluster(client: AsyncClient) -> dict:
     return (await client.get(f"/api/v1/snapshots/{record['snapshot']}")).json()
 
 
-async def _lose_mongo(settings: Settings) -> None:
-    """The disaster, as nearly as a test can have one: the database is simply gone."""
+async def _empty_the_database(settings: Settings) -> None:
+    """An Apchi looking at a database that does not hold this Cluster's Snapshots.
+
+    Dropped rather than repointed because the two are indistinguishable from Apchi's side,
+    and dropping is the one a test can do.
+    """
     client: AsyncMongoClient = AsyncMongoClient(settings.mongo_uri)
     await client.drop_database(settings.mongo_database)
     await client.close()
@@ -68,18 +72,17 @@ async def _lose_mongo(settings: Settings) -> None:
 async def test_re_adoption_recovers_the_configuration_that_was_lost(
     applying_client: AsyncClient, fake_kubernetes: FakeKubernetes, settings: Settings
 ) -> None:
-    """The assertion the whole no-backup path rests on: equal, not merely similar.
+    """The assertion this whole path rests on: equal, not merely similar.
 
     Every Section, compared whole. Anything less -- "the catalog is there", "the grant
     looks right" -- would pass while silently dropping a property, and a dropped property
     in a `connection-url` is a catalog that exists and cannot be queried.
     """
     lost = await _configured_cluster(applying_client)
-    await _lose_mongo(settings)
+    await _empty_the_database(settings)
 
-    # Apchi now knows what it has lost, which is #112's job and the reason this has to go
-    # through the gate rather than around it: adopting discards the history, so it refuses
-    # until told the number.
+    # The mark says this Cluster has committed Snapshots, so Adoption refuses until told
+    # the number -- which is why this goes through the gate rather than around it.
     refused = await applying_client.post(f"{BASE}/adopt")
     assert refused.status_code == 409
     assert f"discard_history_through={lost['number']}" in refused.json()["message"]
@@ -119,7 +122,7 @@ async def test_the_recovered_cluster_is_managed_again(
     top of what the Cluster is actually running rather than on top of nothing.
     """
     lost = await _configured_cluster(applying_client)
-    await _lose_mongo(settings)
+    await _empty_the_database(settings)
     await applying_client.post(f"{BASE}/discoveries")
     await applying_client.post(f"{BASE}/seed")
     started = await applying_client.post(f"{BASE}/adopt?discard_history_through={lost['number']}")
@@ -134,10 +137,6 @@ async def test_the_recovered_cluster_is_managed_again(
     assert review["base_snapshot"] == 1, (
         "and it is derived from the recovered Snapshot, so the next edit applies on top of "
         "what the Cluster is actually running rather than on top of nothing"
-    )
-    assert (await applying_client.get("/api/v1/health")).json()["history"] == "intact", (
-        "and the history is intact again: Snapshot 1 is now the whole of it, which is true "
-        "rather than merely reassuring"
     )
 
 
@@ -166,7 +165,7 @@ async def test_what_recovery_does_not_bring_back(
         )
     ).status_code == 201
 
-    await _lose_mongo(settings)
+    await _empty_the_database(settings)
     await applying_client.post(f"{BASE}/discoveries")
     await applying_client.post(f"{BASE}/seed")
     started = await applying_client.post(f"{BASE}/adopt?discard_history_through=2")
@@ -174,9 +173,9 @@ async def test_what_recovery_does_not_bring_back(
 
     numbers = [s["number"] for s in (await applying_client.get("/api/v1/snapshots")).json()]
     assert numbers == [1], (
-        "two Snapshots were committed and the recovery produces one. §11's Section Revert "
-        "and Full Rollback have nothing behind them afterwards, which is the cost of "
-        "recovering without a backup and the reason #113's export exists"
+        "two Snapshots were committed and a re-adoption produces one. §11's Section Revert "
+        "and Full Rollback have nothing behind them afterwards, which is what makes this "
+        "deliberate rather than routine"
     )
 
     recovered = (await applying_client.get("/api/v1/snapshots/1")).json()

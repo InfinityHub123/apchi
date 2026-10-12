@@ -60,7 +60,6 @@ async def test_a_fresh_install_exports_an_honest_nothing(client: AsyncClient) ->
     assert backup["snapshots"] == []
     assert backup["candidate"] is None
     assert backup["snapshots_ever"] is None
-    assert backup["cluster_id"] is None
     assert backup["apchi_version"], "provenance is what makes a restore judgeable"
 
 
@@ -202,7 +201,6 @@ async def test_the_export_leaves_out_records_of_activity(applying_client: AsyncC
         "format",
         "taken_at",
         "apchi_version",
-        "cluster_id",
         "snapshots_ever",
         "snapshots",
         "candidate",
@@ -211,12 +209,14 @@ async def test_the_export_leaves_out_records_of_activity(applying_client: AsyncC
     }
 
 
-async def test_the_export_carries_the_history_it_belongs_to(applying_client: AsyncClient) -> None:
-    """Provenance from #112's mark: which install this is, and how much of it this is.
+async def test_the_export_says_how_much_of_the_history_it_is(
+    applying_client: AsyncClient,
+) -> None:
+    """`snapshots_ever` comes from the mark Adoption reads, outside MongoDB.
 
-    `snapshots_ever` higher than the newest Snapshot below means the export was itself taken
-    after a loss. A restore that cannot tell the difference would silently install a
-    truncated history as if it were the whole one (#114).
+    Equal to the newest Snapshot below means this document is the whole of it. Higher means
+    MongoDB is not showing every Snapshot this Cluster committed, and the export says so
+    rather than presenting a partial history as a complete one.
     """
     assert (await applying_client.post("/api/v1/catalogs", json=CATALOG)).status_code == 201
     await _apply(applying_client)
@@ -224,10 +224,7 @@ async def test_the_export_carries_the_history_it_belongs_to(applying_client: Asy
     backup = (await applying_client.get(BACKUP)).json()
 
     assert backup["snapshots_ever"] == 1
-    assert backup["cluster_id"], "minted on the first commit, and the same one from then on"
-    assert backup["snapshots_ever"] == backup["snapshots"][-1]["number"], (
-        "equal, so this export is the whole history rather than part of one"
-    )
+    assert backup["snapshots_ever"] == backup["snapshots"][-1]["number"]
 
 
 async def test_an_export_taken_after_a_loss_admits_it_is_incomplete(

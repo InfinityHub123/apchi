@@ -185,12 +185,10 @@ end to end against a real Trino on a real Kubernetes, for all six sections. Not 
 - **No web UI.** The REST API is the whole interface.
 - **No audit trail.** Snapshots record what was committed, not who staged it. Because the
   Candidate is shared, that is currently unrecorded.
-- **Taking the backup is yours to do, and so is restoring it.** MongoDB holds the only copy
-  of every Snapshot. Apchi tells you when it has lost them — `/api/v1/health` reports
-  `history: "lost"` — and a cluster's *current* configuration can be recovered by adopting
-  it again, but the Snapshot history cannot. `GET /api/v1/admin/backup` exports everything
-  that cannot be recovered that way, as one document; nothing reads it back in yet. Point
-  `mongodb.uri` at something backed up.
+- **Keeping MongoDB is yours to do.** Apchi's Snapshots live there, and operating that
+  database is your platform's job — the same division Apchi draws for the Trino deployment
+  it configures. Point `mongodb.uri` at something durable; the MongoDB the chart can deploy
+  is for trying Apchi out and loses everything when its pod restarts.
 
 Adoption is built: a cluster configured before Apchi, or by hand, can be brought under
 management without losing what it was running. See **Adoption** in `CONTEXT.md`.

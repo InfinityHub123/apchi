@@ -30,8 +30,9 @@ rules:
   # and, since §15, where an Admin put configuration Apchi would not have.
   #
   # `create` and `patch` are for exactly one ConfigMap of Apchi's own: the high-water mark,
-  # the highest Snapshot number ever committed here. It has to survive MongoDB being lost,
-  # so it cannot live in MongoDB (§18). An Admin's ConfigMaps are read and never written.
+  # the highest Snapshot number ever committed here. It cannot live in MongoDB, because the
+  # question Adoption asks it is whether MongoDB is showing the whole picture. An Admin's
+  # ConfigMaps are read and never written.
   - apiGroups: [""]
     resources: [configmaps]
     verbs: [get, create, patch]

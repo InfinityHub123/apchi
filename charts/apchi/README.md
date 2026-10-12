@@ -133,11 +133,14 @@ Install it where only platform staff can reach it.
 deployment that satisfies Apchi's preconditions; §7.1 and §16 of `apchi_implementation.md` are
 the requirements themselves.
 
-**MongoDB, properly.** `mongodb.deploy` is for trying Apchi out. MongoDB is the single copy of
-every Snapshot (§18), so a real install points `mongodb.uri` at something backed up.
+**MongoDB, properly.** `mongodb.deploy` is for trying Apchi out: one replica, no
+authentication, an emptyDir, and every Snapshot gone when the pod restarts. A real install
+points `mongodb.uri` at a MongoDB the platform operates. Keeping it is the platform's job,
+the same division §16 draws for the Trino deployment -- Apchi does not back it up, schedule
+anything, or manage retention.
 
-Apchi keeps one thing outside it: `highWaterConfigMap`, holding the highest Snapshot number
-ever committed. That is how `/api/v1/health` can report `history: "lost"` rather than looking
-like a new install, and how Adoption knows to refuse rather than quietly starting again at
-Snapshot 1. Apchi creates it itself, so it is not part of the release and `helm uninstall`
-leaves it behind -- deliberately, because it is evidence about this Cluster's history.
+Apchi keeps one number outside it: `highWaterConfigMap`, the highest Snapshot it has ever
+committed. Adoption reads it to tell a Cluster that was never managed from one whose database
+is simply empty right now, because adopting the second would renumber it from Snapshot 1.
+Apchi creates it itself, so it is not part of the release and `helm uninstall` leaves it
+behind -- deliberately, because the next install into this namespace should find it.
