@@ -17,13 +17,16 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.api.deps import (
     AdminStoreDep,
     ApplyStoreDep,
+    CandidateStoreDep,
     MaintenanceStoreDep,
     MutationsEnabled,
+    SnapshotStoreDep,
 )
 from app.api.errors import Conflict
 from app.pipeline.applies import ApplyRecord, ApplyRunner
+from app.pipeline.backup import Backup, take
 from app.pipeline.maintenance import EngagedBy, MaintenanceState
-from app.sections.admin import MAX_PRESERVED_MAPPINGS, AdminValues
+from app.sections.admin import MAX_PRESERVED_MAPPINGS
 from app.sections.certificate_mapping.model import CertificateMappingWrite
 from app.sections.certificate_mapping.section import validate_patterns
 
@@ -98,7 +101,13 @@ async def set_preserved_mappings(
     by accident.
     """
     validate_patterns(preserved.patterns)
-    saved = await admin.save(AdminValues(preserved_certificate_mappings=preserved.patterns))
+    # Loaded and copied rather than built fresh: `save` replaces the whole document, so an
+    # `AdminValues(...)` built from this request alone would silently reset every other
+    # Admin value to its default -- including turning permission enforcement back off.
+    values = await admin.load()
+    saved = await admin.save(
+        values.model_copy(update={"preserved_certificate_mappings": preserved.patterns})
+    )
     return PreservedMappings(patterns=saved.preserved_certificate_mappings)
 
 
@@ -175,3 +184,41 @@ async def start_admin_apply(request: Request, applies: ApplyStoreDep) -> ApplyRe
     runner.start(record)
     logger.info("admin apply started", extra={"apply": record.id})
     return record
+
+
+@router.get(
+    "/backup",
+    response_model=Backup,
+    summary="Export everything Apchi's own storage holds",
+)
+async def export_state(
+    request: Request,
+    applies: ApplyStoreDep,
+    snapshots: SnapshotStoreDep,
+    candidates: CandidateStoreDep,
+    admin: AdminStoreDep,
+    maintenance: MaintenanceStoreDep,
+) -> Backup:
+    """One document holding what no amount of reading the Cluster gets back.
+
+    Re-adoption recovers the configuration after a MongoDB loss (#116). It does not recover
+    the numbered Snapshots that Section Revert and Full Rollback aim at, the Admin values
+    that are never in a Snapshot, or a Candidate's staged-but-unapplied edits. That is what
+    this is for.
+
+    **The response is every credential the Cluster has ever used.** Snapshots store actual
+    secret values rather than references (§12), and because they are immutable, a key rotated
+    away years ago is still in here and cannot be taken out. It is on the Admin surface for
+    that reason, and whatever an Admin pipes it into inherits the problem.
+
+    Refused with 409 while an Apply is in flight, rather than exporting a Candidate caught
+    mid-promotion.
+    """
+    return await take(
+        applies=applies,
+        snapshots=snapshots,
+        candidates=candidates,
+        admin=admin,
+        maintenance=maintenance,
+        high_water=request.app.state.high_water,
+    )
