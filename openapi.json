@@ -1201,6 +1201,25 @@
         "title": "MaintenanceState",
         "type": "object"
       },
+      "Minted": {
+        "description": "What minting answers: the metadata, and the secret, this once.",
+        "properties": {
+          "secret": {
+            "description": "Shown here and never again. Apchi stores a digest, so this cannot be recovered -- a lost token is replaced rather than looked up.",
+            "title": "Secret",
+            "type": "string"
+          },
+          "token": {
+            "$ref": "#/components/schemas/Token"
+          }
+        },
+        "required": [
+          "token",
+          "secret"
+        ],
+        "title": "Minted",
+        "type": "object"
+      },
       "Outcome": {
         "enum": [
           "running",
@@ -2329,6 +2348,104 @@
           "rules"
         ],
         "title": "SystemRules",
+        "type": "object"
+      },
+      "Token": {
+        "description": "One token's metadata. The secret is not here, and cannot be recovered from here.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "name": {
+            "description": "What an Operator called it, so they can tell theirs apart.",
+            "title": "Name",
+            "type": "string"
+          },
+          "owner": {
+            "title": "Owner",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          }
+        },
+        "required": [
+          "id",
+          "owner",
+          "name",
+          "created_at"
+        ],
+        "title": "Token",
+        "type": "object"
+      },
+      "TokenRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_in_days": {
+            "anyOf": [
+              {
+                "maximum": 3650.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Omit for a token that does not expire, which is a real choice for a pipeline rather than an oversight -- revoking it is one request.",
+            "title": "Expires In Days"
+          },
+          "name": {
+            "description": "What this token is for, so its owner can tell theirs apart later.",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "TokenRequest",
         "type": "object"
       },
       "ValidationError": {
@@ -5732,6 +5849,138 @@
         "summary": "One Snapshot as a portable configuration",
         "tags": [
           "snapshots"
+        ]
+      }
+    },
+    "/api/v1/tokens": {
+      "get": {
+        "description": "Metadata only, and only yours.\n\nRevoked and expired ones are listed too: \"what has been running as me, and what stopped\"\nis the question this answers, and hiding the dead ones would leave an Operator unable to\ntell a token they revoked from one that never existed.",
+        "operationId": "list_tokens_api_v1_tokens_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Token"
+                  },
+                  "title": "Response List Tokens Api V1 Tokens Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          }
+        },
+        "summary": "Your tokens",
+        "tags": [
+          "tokens"
+        ]
+      },
+      "post": {
+        "description": "The response carries the secret, and nothing ever will again.\n\nApchi stores a digest of it, so a token that is lost is replaced rather than looked up.\nThe token acts as **you**: it takes your role on every request it makes, so it loses\naccess when you do.",
+        "operationId": "create_token_api_v1_tokens_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Minted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mint a token for an automation",
+        "tags": [
+          "tokens"
+        ]
+      }
+    },
+    "/api/v1/tokens/{token_id}": {
+      "delete": {
+        "description": "Immediate: the next request carrying it is refused.\n\nA token somebody else owns is reported as **not found** rather than forbidden. Saying\n\"that is not yours\" would confirm the id exists, which is the one thing an id is worth\nknowing.",
+        "operationId": "revoke_token_api_v1_tokens__token_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token_id",
+            "required": true,
+            "schema": {
+              "title": "Token Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke one of your tokens",
+        "tags": [
+          "tokens"
         ]
       }
     },

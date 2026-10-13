@@ -102,3 +102,61 @@ def test_credentials_embedded_in_a_url_are_redacted() -> None:
 
 def test_a_url_without_credentials_is_untouched() -> None:
     assert redact("https://example.com/path") == "https://example.com/path"
+
+
+#: Attributes logging sets on every LogRecord itself. Passing one of these in `extra` raises
+#: KeyError("Attempt to overwrite ...") *at the call site*, so the failure only appears when
+#: that line runs -- which for a log line in an uncommon path can be a long time after it
+#: shipped. A token mint did exactly this (#131).
+RESERVED_ON_A_LOG_RECORD = frozenset(
+    {
+        "args",
+        "asctime",
+        "created",
+        "exc_info",
+        "exc_text",
+        "filename",
+        "funcName",
+        "levelname",
+        "levelno",
+        "lineno",
+        "message",
+        "module",
+        "msecs",
+        "msg",
+        "name",
+        "pathname",
+        "process",
+        "processName",
+        "relativeCreated",
+        "stack_info",
+        "taskName",
+        "thread",
+        "threadName",
+    }
+)
+
+
+def test_no_log_call_passes_a_reserved_key_in_extra() -> None:
+    """Statically, over the whole application, because the alternative is finding out on the
+    day the unlucky code path runs.
+
+    Read with `ast` rather than by importing: the point is to cover every log call in `app/`,
+    including the ones no test exercises.
+    """
+    import ast
+    from pathlib import Path
+
+    offenders: list[str] = []
+    for path in sorted(Path(__file__).resolve().parents[2].joinpath("app").rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg != "extra" or not isinstance(keyword.value, ast.Dict):
+                    continue
+                for key in keyword.value.keys:
+                    if isinstance(key, ast.Constant) and key.value in RESERVED_ON_A_LOG_RECORD:
+                        offenders.append(f"{path.name}:{key.lineno} extra={{{key.value!r}: ...}}")
+
+    assert offenders == [], f"these log calls raise KeyError when they run: {offenders}"

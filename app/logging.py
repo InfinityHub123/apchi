@@ -44,6 +44,12 @@ _SECRET_NAMES = (
 # name (mongodb.connection-url) matches no secret pattern, so the value has to be
 # inspected rather than the key.
 _URL_CREDENTIALS = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)([^/\s:@]+):([^/\s@]+)@")
+
+# An Apchi token, by value. The names below catch a secret sitting next to a field name that
+# looks secret-bearing; a token logged on its own -- in a message, in a URL, in an exception
+# from something that was handed one -- has no such neighbour. The `apchi_` prefix exists so
+# this rule can exist, which is the same trick as the URL credentials above.
+_TOKEN_VALUE = re.compile(r"\bapchi_[A-Za-z0-9_-]{16,}")
 _INLINE = re.compile(
     r"(?i)\b(" + "|".join(re.escape(n) for n in _SECRET_NAMES) + r")\b(\s*[=:]\s*)(\S+)"
 )
@@ -63,7 +69,8 @@ def redact(value: Any) -> Any:
         return [redact(v) for v in value]
     if isinstance(value, str):
         value = _INLINE.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", value)
-        return _URL_CREDENTIALS.sub(lambda m: f"{m.group(1)}{m.group(2)}:{REDACTED}@", value)
+        value = _URL_CREDENTIALS.sub(lambda m: f"{m.group(1)}{m.group(2)}:{REDACTED}@", value)
+        return _TOKEN_VALUE.sub(REDACTED, value)
     return value
 
 
