@@ -21,7 +21,7 @@ from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import PyMongoError
 
 from app.audit.actor import SYSTEM_ACTOR, actor
-from app.audit.events import Action, AuditStore, Outcome
+from app.audit.events import Action, AuditStore, Category, Outcome
 from app.auth.identity import Identity
 from app.logging import apply_id_var
 from app.pipeline.auto_rollback import INCIDENT_MESSAGE
@@ -254,10 +254,20 @@ EngineFactory = Callable[[str], ApplyEngine]
 class ApplyRunner:
     """Drives an Apply through its stages, in the background."""
 
-    def __init__(self, store: ApplyStore, engine_factory: EngineFactory, audit: AuditStore) -> None:
+    def __init__(
+        self,
+        store: ApplyStore,
+        engine_factory: EngineFactory,
+        audit: AuditStore,
+        category: Category = "pipeline",
+    ) -> None:
         self._store = store
         self._engine_factory = engine_factory
         self._audit = audit
+        # `admin` for the runner driving an Admin Apply. §20 is explicit that an Admin change
+        # is not a Section, and §14 gives it no Snapshot -- so the category is what tells the
+        # two kinds of Apply apart in the trail, since both end in the same stages.
+        self._category = category
         self._tasks: set[asyncio.Task[None]] = set()
 
     def start(self, record: ApplyRecord) -> None:
@@ -294,7 +304,7 @@ class ApplyRunner:
             await self._audit.record(
                 who.subject,
                 who.via,
-                "pipeline",
+                self._category,
                 action,
                 snapshot=snapshot,
                 outcome=outcome,

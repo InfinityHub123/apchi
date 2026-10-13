@@ -11,6 +11,7 @@ import asyncio
 from httpx import AsyncClient
 from pymongo import AsyncMongoClient
 
+from app.audit.events import AuditStore
 from app.config import Settings
 from app.pipeline.admin_values import AdminStore
 from app.pipeline.applies import TERMINAL
@@ -250,7 +251,7 @@ async def test_replacing_the_patterns_leaves_the_other_admin_values_alone(
         await client.put("/api/v1/admin/permissions/enforcement", json={"enforced": True})
     ).status_code == 200
     mongo: AsyncMongoClient = AsyncMongoClient(settings.mongo_uri)
-    store = AdminStore(mongo[settings.mongo_database])
+    store = AdminStore(mongo[settings.mongo_database], AuditStore(mongo[settings.mongo_database]))
     rules = {"catalog": [{"user": "legacy_etl", "catalog": ".*", "allow": "all"}]}
     await store.save((await store.load()).model_copy(update={"preserved_access_control": rules}))
 
