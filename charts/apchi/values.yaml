@@ -91,6 +91,18 @@ auth:
     roleClaim: groups
     adminGroups: ""
 
+# §20's audit history: who changed what, and when. Always on -- it is the only record of
+# which operator staged which change into the shared Configuration Candidate, and the only
+# record of an admin change at all, since those never appear in a Snapshot.
+audit:
+  # How long to keep it. Empty means forever, and that is the default deliberately: an audit
+  # trail that silently deletes itself is worse than one that grows, because the first thing
+  # an incident asks is what happened before the window you kept.
+  #
+  # Setting this creates a TTL index on the collection, so history older than it is discarded
+  # by MongoDB without further warning. Choose it on purpose.
+  retentionDays: ""
+
 service:
   type: ClusterIP
   port: 8000

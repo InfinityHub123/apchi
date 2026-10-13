@@ -241,6 +241,21 @@ acts as that person, and takes their *current* role on every request — so demo
 demotes their automations, and disabling them stops them, without anybody having to go and
 find their tokens.
 
+**It records who changed what.** Snapshots answer *what complete configuration was
+committed*; the audit history answers *who changed what, and when* (`GET /audit`). They are
+not the same question, and the audit is the more load-bearing of the two in one specific way:
+the candidate is shared, so the audit is the only record of whose work an apply is shipping —
+which is what makes that concurrency trade acceptable at all (`adr/0002`). It is also the only
+record of an admin change, because admin values deliberately never enter a snapshot.
+
+An event records *which* resource changed and never what it changed to. Snapshots hold the
+contents, and hold real credentials to do it, so a second copy in the audit trail would be a
+second thing to protect. History is kept forever unless `audit.retentionDays` says otherwise;
+a trail that silently deletes itself is worse than one that grows.
+
+Operators can read it, not only admins — an operator about to apply needs to see whose changes
+they are shipping.
+
 It does not detect drift. Changes made to the cluster outside Apchi are not noticed,
 reconciled or reported (§17) — which is why catalog DDL is restricted to Apchi's own identity,
 since a `DROP CATALOG` issued elsewhere would delete a file Apchi believes it owns.

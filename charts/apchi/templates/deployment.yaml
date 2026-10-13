@@ -83,6 +83,12 @@ spec:
             - name: APCHI_OIDC_ADMIN_GROUPS
               value: {{ .Values.auth.oidc.adminGroups | quote }}
             {{- end }}
+            {{- if .Values.audit.retentionDays }}
+            # Only when set: unset means no TTL index and history kept forever, which is the
+            # default on purpose.
+            - name: APCHI_AUDIT_RETENTION_DAYS
+              value: {{ .Values.audit.retentionDays | quote }}
+            {{- end }}
             - name: APCHI_MONGO_URI
               value: {{ include "apchi.mongoUri" . | quote }}
             - name: APCHI_MONGO_DATABASE
