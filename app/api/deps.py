@@ -7,6 +7,7 @@ from fastapi import Depends, Request
 from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.api.errors import Conflict, Forbidden, MaintenanceModeEngaged, Unauthenticated
+from app.audit.actor import acting_as
 from app.audit.events import AuditStore
 from app.auth.identity import NOBODY, Identity
 from app.auth.logins import LoginStore
@@ -268,7 +269,10 @@ async def operator_mutation_allowed(
     All of it is one dependency rather than three, so a new mutating route cannot pick up
     part of the gate -- which is why the identity belongs in here rather than beside it.
     """
-    del identity  # resolving it is the check; its value is the audit's concern (§20).
+    # Resolving the identity is the check; its *value* is the audit's concern (§20), and this
+    # is where it is handed over. Set before the two refusals below, so a refused mutation is
+    # recorded against whoever attempted it rather than against nobody.
+    acting_as(identity)
     await mutations_enabled(maintenance)
 
     running = await applies.in_flight()

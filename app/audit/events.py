@@ -26,6 +26,7 @@ inherited.
 import base64
 import binascii
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final, Literal
 
@@ -47,7 +48,13 @@ Category = SectionName | Literal["admin", "pipeline"]
 
 #: What was done. Past tense, because an event records something that already happened --
 #: writing one before the change lands would name an actor for something that never did.
+#:
+#: `attempted` is the exception, and is only ever paired with `refused`: nothing was done, so
+#: there is nothing to name. The alternative is inferring an intent from the HTTP method,
+#: which would record a refused `POST /catalogs/revert` as a creation -- confidently wrong,
+#: where `attempted` is merely incomplete and says so.
 Action = Literal[
+    "attempted",
     "created",
     "updated",
     "removed",
@@ -72,6 +79,10 @@ Outcome = Literal["succeeded", "refused", "failed"]
 #: reading "the system reset this" is answerable, where one that lost its actor looks like a
 #: bug in the audit.
 SYSTEM: Final = "apchi"
+
+#: Whether this process has indexed the audit collection yet. See `AuditStore._indexed_once`
+#: for why the scope is the process and not the store.
+_ENSURED = False
 
 
 class AuditEvent(BaseModel):
@@ -119,6 +130,18 @@ class AuditEvent(BaseModel):
             "rather than being matched up by timestamp."
         ),
     )
+
+
+@dataclass(frozen=True)
+class Entry:
+    """One event's worth of detail, for recording several at once."""
+
+    category: Category
+    action: Action
+    resource: str | None = None
+    snapshot: int | None = None
+    outcome: Outcome = "succeeded"
+    detail: str | None = None
 
 
 class Page(BaseModel):
@@ -220,6 +243,64 @@ class AuditStore:
         result = await self._collection.insert_one(dict(document))
         return AuditEvent(id=str(result.inserted_id), **document)
 
+    async def record_each(
+        self,
+        actor: str,
+        via: Via,
+        entries: list[Entry],
+        *,
+        token_id: str | None = None,
+        apply_id: str | None = None,
+    ) -> list[AuditEvent]:
+        """Several events by one actor, in one write.
+
+        One request that edited five resources is one act by one person; five round trips for
+        it is five times the traffic for no extra information, and per-operation traffic is
+        what this suite's MongoDB falls over on (#69). They share one timestamp, which is
+        also more truthful -- they happened in one request.
+        """
+        if not entries:
+            return []
+        at = datetime.now(UTC)
+        documents = [
+            {
+                "at": at,
+                "actor": actor,
+                "via": via,
+                "token_id": token_id,
+                "category": entry.category,
+                "resource": entry.resource,
+                "action": entry.action,
+                "snapshot": entry.snapshot,
+                "outcome": entry.outcome,
+                "detail": entry.detail,
+                "apply_id": apply_id,
+            }
+            for entry in entries
+        ]
+        await self._indexed_once()
+        result = await self._collection.insert_many(documents)
+        # Built from the entries rather than by splatting the documents back: the dicts are
+        # typed as their widest value, and a model that forbids unknown fields deserves to be
+        # constructed field by field rather than from a mapping mypy cannot check.
+        return [
+            AuditEvent(
+                id=str(identifier),
+                at=at,
+                actor=actor,
+                via=via,
+                token_id=token_id,
+                category=entry.category,
+                resource=entry.resource,
+                action=entry.action,
+                snapshot=entry.snapshot,
+                outcome=entry.outcome,
+                detail=entry.detail,
+                apply_id=apply_id,
+            )
+            for identifier, entry in zip(result.inserted_ids, entries, strict=True)
+        ]
+
     async def page(
         self,
         *,
@@ -262,15 +343,34 @@ class AuditStore:
         )
 
     async def _indexed_once(self) -> None:
-        """Once per process, before the first write.
+        """Once per **process**, before the first write.
 
-        The flag is set only on success, so a MongoDB that was unreachable is retried rather
-        than remembered as done -- and `create_index` is idempotent, so a retry costs a round
-        trip and nothing else.
+        Per process rather than per store, and the distinction is the whole point. One Apchi
+        pod is one process with one store, so the two are the same thing in production. Tier 1
+        is not: it builds an app per test, so a per-store flag means three `create_index`
+        round trips for every test that records anything -- which is now almost all of them,
+        and which wedges the test MongoDB exactly as #131 did. Measured twice, both times by
+        accident:
+
+            per app start (#138, first attempt)   ~19 tests in five minutes, mongod unresponsive
+            per store, once audit was wired here  the same, at the same point in the suite
+            per process                           back to normal
+
+        `_ENSURED` is module state, which is a smell worth naming: it exists because the
+        number of stores a process creates is an artifact of the test harness rather than
+        anything Apchi means. #69 holds the structural fix -- one MongoDB client shared across
+        the suite -- and until that lands this is the honest statement of the intent, which
+        was always "once, at the start, for this process's database".
+
+        Set only on success, so a MongoDB that was unreachable is retried rather than
+        remembered as done. Tests that assert anything about these indexes call
+        `ensure_indexes` directly, which always acts.
         """
-        if self._indexed:
+        global _ENSURED
+        if _ENSURED or self._indexed:
             return
         await self.ensure_indexes(self._retention_days)
+        _ENSURED = True
         self._indexed = True
 
     @staticmethod

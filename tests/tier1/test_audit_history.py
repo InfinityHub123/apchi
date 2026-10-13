@@ -415,7 +415,9 @@ async def test_history_is_kept_forever_by_default(client: AsyncClient) -> None:
     is worse than one that grows: the first question an incident asks is what happened before
     the window you kept."""
     store = _store(client)
-    await store.record("jo", "password", "catalogs", "created", resource="finance_pg")
+    # Called directly rather than relying on the first write, which indexes once per process
+    # and may already have happened in another test -- so this would pass by doing nothing.
+    await store.ensure_indexes(retention_days=None)
 
     indexes = await store._collection.index_information()
 
@@ -433,7 +435,7 @@ async def test_a_retention_setting_creates_a_ttl_index(client: AsyncClient) -> N
     app = client._transport.app  # type: ignore[attr-defined]
     store = AuditStore(app.state.mongo.database, retention_days=30)
 
-    await store.record("jo", "password", "catalogs", "created", resource="finance_pg")
+    await store.ensure_indexes(store._retention_days)
 
     indexes = await store._collection.index_information()
     expiring = [spec for spec in indexes.values() if "expireAfterSeconds" in spec]
@@ -486,6 +488,9 @@ async def test_every_query_the_endpoint_makes_uses_an_index(
     """
     store = _store(client)
     await _some(store, 5)
+    # Directly, for the same reason as the retention test: indexing happens once per process,
+    # so this test's own database may not have been the one that got them.
+    await store.ensure_indexes(retention_days=None)
 
     query: dict[str, Any] = {}
     if "actor" in params:

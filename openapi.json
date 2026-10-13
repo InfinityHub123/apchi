@@ -312,6 +312,7 @@
         "properties": {
           "action": {
             "enum": [
+              "attempted",
               "created",
               "updated",
               "removed",
