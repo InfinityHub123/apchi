@@ -69,12 +69,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.apply_store = ApplyStore(app.state.mongo.database)
     app.state.validation_store = ValidationStore(app.state.mongo.database)
-    app.state.maintenance_store = MaintenanceStore(app.state.mongo.database)
-    app.state.admin_store = AdminStore(app.state.mongo.database)
+    app.state.maintenance_store = MaintenanceStore(app.state.mongo.database, app.state.audit_store)
+    app.state.admin_store = AdminStore(app.state.mongo.database, app.state.audit_store)
     app.state.discovery_store = DiscoveryStore(app.state.mongo.database)
     app.state.user_store = UserStore(app.state.mongo.database)
     app.state.session_store = SessionStore(app.state.mongo.database)
-    app.state.token_store = TokenStore(app.state.mongo.database)
+    app.state.token_store = TokenStore(app.state.mongo.database, app.state.audit_store)
     app.state.login_store = LoginStore(app.state.mongo.database)
     # One per app, so discovery and the provider's JWKS are fetched once rather than per
     # login. Tests substitute it to serve a provider in process.
@@ -110,7 +110,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.apply_runner = ApplyRunner(app.state.apply_store, build_engine, app.state.audit_store)
     app.state.admin_apply_runner = ApplyRunner(
-        app.state.apply_store, build_admin_engine, app.state.audit_store
+        app.state.apply_store, build_admin_engine, app.state.audit_store, category="admin"
     )
     app.state.validation_runner = ValidationRunner(app.state.validation_store, build_engine)
     app.state.high_water = HighWaterMark(app.state.kubernetes, settings)

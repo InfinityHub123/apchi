@@ -6,11 +6,15 @@ reason the Candidate is frozen: the pipeline's guarantees depend on nothing movi
 underneath it (invariant 4).
 """
 
+import json
 import logging
 from typing import Any
 
+from pymongo import ReturnDocument
 from pymongo.asynchronous.database import AsyncDatabase
 
+from app.audit.actor import actor
+from app.audit.events import AuditStore, Entry
 from app.sections.admin import AdminValues
 
 logger = logging.getLogger(__name__)
@@ -18,9 +22,19 @@ logger = logging.getLogger(__name__)
 _DOCUMENT_ID = "admin"
 
 
+#: The one Admin value whose *content* reaches the audit. It is a policy switch rather than
+#: configuration: it decides whether a Trino Identity may reach only what it has been granted,
+#: and whether somebody turned enforcement off is the entire reason to audit it. Everything
+#: else in `AdminValues` is content that may carry a credential, so only the key name is
+#: recorded -- §14 invariant 9 keeps Admin values out of Snapshots, and the audit must not
+#: become the back door that records them.
+_POLICY_FLAGS = ("enforce_permissions",)
+
+
 class AdminStore:
-    def __init__(self, database: AsyncDatabase[dict[str, Any]]) -> None:
+    def __init__(self, database: AsyncDatabase[dict[str, Any]], audit: AuditStore) -> None:
         self._collection = database["admin_values"]
+        self._audit = audit
 
     async def load(self) -> AdminValues:
         document = await self._collection.find_one({"_id": _DOCUMENT_ID})
@@ -30,15 +44,72 @@ class AdminStore:
         return AdminValues.model_validate(document)
 
     async def save(self, values: AdminValues) -> AdminValues:
-        """Replaces the document. Admin values are small and few, and a partial update of
-        a list is a worse contract than sending the list you want."""
-        await self._collection.replace_one(
+        """Replaces the document, and records who changed which value (§20).
+
+        Admin values are small and few, and a partial update of a list is a worse contract
+        than sending the list you want.
+
+        **This is the only record an Admin change leaves anywhere.** §14 invariant 9 keeps
+        Admin values out of Snapshots deliberately, and §12 makes the Snapshot the record of
+        what was committed -- so without this there is no trace of the one class of change
+        that can alter the Cluster without appearing in any Snapshot. Written here rather
+        than in the five routes above it, for the same reason the Candidate's audit is written
+        in one place.
+        """
+        dumped = values.model_dump(mode="json")
+        previous = await self._collection.find_one_and_replace(
             {"_id": _DOCUMENT_ID},
-            {"_id": _DOCUMENT_ID, **values.model_dump(mode="json")},
+            {"_id": _DOCUMENT_ID, **dumped},
             upsert=True,
+            return_document=ReturnDocument.BEFORE,
         )
         logger.info(
             "admin values saved",
             extra={"preserved_mappings": len(values.preserved_certificate_mappings)},
         )
+        await self._record(_as_values(previous).model_dump(mode="json"), dumped)
         return values
+
+    async def _record(self, before: dict[str, Any], after: dict[str, Any]) -> None:
+        """One event per Admin value that moved, naming the value and never its content.
+
+        No `snapshot`, on any of them: an Admin Apply creates none (§14), which is the
+        invariant this records rather than an omission.
+        """
+        who = actor()
+        entries = [
+            Entry(
+                category="admin",
+                action="updated",
+                resource=key,
+                detail=_direction(key, after[key]),
+            )
+            for key in sorted(set(before) | set(after))
+            if json.dumps(before.get(key), sort_keys=True)
+            != json.dumps(after.get(key), sort_keys=True)
+        ]
+        await self._audit.record_each(who.subject, who.via, entries, token_id=who.token_id)
+
+
+def _as_values(document: dict[str, Any] | None) -> AdminValues:
+    """A stored document as values, or the defaults when nothing was stored.
+
+    Through the model rather than compared raw, so both sides of the diff are dumped by the
+    same schema: MongoDB returns BSON, and comparing that against freshly dumped JSON would
+    report every value as changed on every save.
+    """
+    if document is None:
+        return AdminValues()
+    document.pop("_id", None)
+    return AdminValues.model_validate(document)
+
+
+def _direction(key: str, value: Any) -> str | None:
+    """What a policy flag was set to, for the flags where that is the point.
+
+    `None` for everything else, because the audit records which Admin value changed and never
+    what it changed to -- the rest of `AdminValues` is content that may carry a credential.
+    """
+    if key in _POLICY_FLAGS and isinstance(value, bool):
+        return f"{key} set to {str(value).lower()}"
+    return None

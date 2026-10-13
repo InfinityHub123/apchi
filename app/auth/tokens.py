@@ -24,6 +24,10 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 from pymongo.asynchronous.database import AsyncDatabase
+from pymongo.errors import PyMongoError
+
+from app.audit.actor import actor
+from app.audit.events import Action, AuditStore
 
 logger = logging.getLogger(__name__)
 
@@ -93,8 +97,9 @@ class Minted(BaseModel):
 
 
 class TokenStore:
-    def __init__(self, database: AsyncDatabase[dict[str, Any]]) -> None:
+    def __init__(self, database: AsyncDatabase[dict[str, Any]], audit: AuditStore) -> None:
         self._collection = database["tokens"]
+        self._audit = audit
 
     @staticmethod
     def _as_token(document: dict[str, Any]) -> Token:
@@ -126,6 +131,11 @@ class TokenStore:
             "token minted",
             extra={"owner": owner, "token": token.id, "token_name": name},
         )
+        # Minting is not a configuration change, but it creates a credential that acts as its
+        # owner with their current role -- so it is audited, under `admin`, by the token's id
+        # and never by its value. The digest is all Apchi keeps of the secret, and the audit
+        # must not become the one place the secret itself appears.
+        await self._audited("minted", token.id, f"{name!r} for {owner}")
         return Minted(token=token, secret=secret)
 
     async def find(self, secret: str) -> Token | None:
@@ -165,7 +175,28 @@ class TokenStore:
             {"_id": token_id, "revoked_at": None},
             {"$set": {"revoked_at": datetime.now(UTC)}},
         )
-        return result.modified_count == 1
+        revoked = result.modified_count == 1
+        if revoked:
+            await self._audited("revoked", token_id, None)
+        return revoked
+
+    async def _audited(self, action: Action, token_id: str, detail: str | None) -> None:
+        """One event, never fatal. A token that was minted and not recorded is better than a
+        mint that fails because of its own bookkeeping -- the caller has the secret either
+        way, and a revocation that failed to record must still have revoked."""
+        who = actor()
+        try:
+            await self._audit.record(
+                who.subject,
+                who.via,
+                "admin",
+                action,
+                resource=token_id,
+                detail=detail,
+                token_id=who.token_id,
+            )
+        except PyMongoError:
+            logger.exception("could not record a token change in the audit history")
 
     async def ensure_indexes(self) -> None:
         """The digest is looked up on every request carrying a bearer token, and the owner on

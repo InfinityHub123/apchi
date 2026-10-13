@@ -286,7 +286,9 @@ async def test_a_mutation_refused_under_maintenance_mode_is_recorded(
     )
 
     assert refused.status_code == 409, refused.text
-    [event] = await _events(as_operator)
+    # Filtered: engaging Maintenance Mode is itself an audited Admin change (#141), so the
+    # unfiltered trail holds that event too.
+    [event] = [e for e in await _events(as_operator) if e.category == "catalogs"]
     assert event.outcome == "refused"
     assert event.action == "attempted"
     assert event.category == "catalogs"
@@ -301,7 +303,7 @@ async def test_a_refusal_names_the_resource_the_path_named(as_operator: AsyncCli
 
     await as_operator.delete("/api/v1/catalogs/finance_pg")
 
-    [refusal, _] = await _events(as_operator)
+    [refusal, _] = [e for e in await _events(as_operator) if e.category == "catalogs"]
     assert refusal.outcome == "refused"
     assert refusal.resource == "finance_pg"
 
@@ -399,8 +401,8 @@ async def test_no_route_can_change_the_candidate_without_recording_it(
     -- one that works, which is why nobody would notice it. Checked for every mutating
     operation in the contract, whatever its category.
 
-    **Coverage of the Sections and the pipeline.** Every mutating operation on one of the six
-    Sections, or on the Candidate as a whole, must
+    **Coverage of every audited category.** Every mutating operation on one of the six
+    Sections, on the Candidate as a whole, or on an Admin surface must
     produce an event either way: it succeeded and was derived from the diff, or it was refused
     and recorded as an attempt. 24 routes across all six, verified by disabling recording and
     watching every one of them appear here.
@@ -467,7 +469,11 @@ def _is_audited_route(path: str) -> bool:
     for method, operation in contract["paths"][path].items():
         if method in {"post", "put", "patch", "delete"}:
             category = category_of(operation.get("tags", []))
-            return category in ("pipeline",) or (
-                category is not None and as_section(category) is not None
-            )
+            if category is None:
+                return False
+            # Every category there is, now that #140 and #141 have landed: the six Sections,
+            # the Candidate as a whole, and the Admin surfaces. Anything a router declares a
+            # category for must produce an event, which is the strongest form this assertion
+            # takes -- a tag that should not be audited belongs in NOT_AUDITED instead.
+            return category in ("pipeline", "admin") or as_section(category) is not None
     return False

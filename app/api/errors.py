@@ -139,6 +139,12 @@ def install(app: FastAPI) -> None:
             {"field": ".".join(str(p) for p in error["loc"][1:]), "problem": error["msg"]}
             for error in exc.errors()
         ]
+        # Recorded like any other refusal (§20). One rule -- a refused mutation is recorded --
+        # rather than one with an exception for which validator refused it: "jo tried to
+        # change this and was told no" is the same answer whether a gate or a schema said so,
+        # and an audit that quietly skipped malformed payloads would be a gap shaped exactly
+        # like somebody probing the API.
+        await _record_refusal(request, "The request payload is not valid.")
         return _render(
             request,
             status.HTTP_422_UNPROCESSABLE_CONTENT,

@@ -28,6 +28,7 @@ from httpx import ASGITransport, AsyncClient
 from app.adapters.kubernetes import PodState, RealKubernetes, RolloutState
 from app.adapters.mongo import Mongo
 from app.adapters.trino import Trino
+from app.audit.events import AuditStore
 from app.config import Settings
 from app.main import create_app
 from app.pipeline.admin_values import AdminStore
@@ -669,7 +670,7 @@ async def cluster_state(
     # would deny identities in unrelated tests, and the failure would look like anything but
     # its cause.
     mongo = Mongo(settings)
-    admin = AdminStore(mongo.database)
+    admin = AdminStore(mongo.database, AuditStore(mongo.database))
     admin_before = await admin.load()
 
     # The high-water mark belongs with the MongoDB it describes, and every test here gets a
