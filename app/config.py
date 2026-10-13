@@ -93,6 +93,11 @@ class Settings(BaseSettings):
     #: also leaves room for the Snapshot an Apply makes of the same content.
     candidate_max_bytes: int = 15 * 1024 * 1024
 
+    #: How long an `Idempotency-Key` is remembered. The window a retry plausibly spans: long
+    #: enough for a client to come back after a network failure, short enough that a key
+    #: reused weeks later is a new request rather than a replay of a forgotten one.
+    idempotency_hours: float = 24.0
+
     mongo_uri: str = "mongodb://localhost:27017"
     mongo_database: str = "apchi"
 
