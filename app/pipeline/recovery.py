@@ -151,7 +151,12 @@ async def section_revert(
     candidate.sections[section] = dict(restored.get(section, {}))
     # One act on one Section, not the list of resource edits it happens to amount to: what
     # somebody reading the trail wants to know is that this was a revert, and to what.
-    await candidates.save(candidate, category=section, action="reverted")
+    await candidates.save(
+        candidate,
+        category=section,
+        action="reverted",
+        detail=f"restored from Snapshot {number}",
+    )
 
     effect = await _effect(
         candidate,
@@ -181,7 +186,16 @@ async def full_rollback(
     restored = await _snapshot_sections(snapshots, number)
     candidate = await candidates.load()
     candidate.sections = {name: dict(restored.get(name, {})) for name in SECTIONS}
-    await candidates.save(candidate)
+    # One act on the whole Candidate, not the long list of resource changes it amounts to.
+    # A Full Rollback is reserved for a serious mistake and is never implicit, so the trail
+    # has to say that is what happened and to which Snapshot -- which a derived diff of every
+    # Section would bury.
+    await candidates.save(
+        candidate,
+        category="pipeline",
+        action="rolled_back",
+        detail=f"the whole Candidate restored from Snapshot {number}",
+    )
 
     effect = await _effect(
         candidate,

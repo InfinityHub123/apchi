@@ -43,15 +43,16 @@ _BY_TAG: Final[dict[str, Category]] = {
     "tokens": "admin",
     "candidate": "pipeline",
     "applies": "pipeline",
-    "validations": "pipeline",
     "snapshots": "pipeline",
 }
 
 #: Tags on routes that change nothing auditable. `auth` is a sign-in, which is a credential
 #: event the log already carries and not a configuration change; `health` and `audit` are
-#: reads. Listed rather than defaulted, so the test that walks the contract can tell "not
+#: reads; `validations` starts an ephemeral probe and reports what it found, changing nothing
+#: about the Cluster or the Candidate -- §20 asks who changed *what*, and the answer there is
+#: nothing. Listed rather than defaulted, so the test that walks the contract can tell "not
 #: auditable" from "nobody has decided yet".
-NOT_AUDITED: Final[frozenset[str]] = frozenset({"auth", "health", "audit"})
+NOT_AUDITED: Final[frozenset[str]] = frozenset({"auth", "health", "audit", "validations"})
 
 
 def as_section(name: str) -> SectionName | None:

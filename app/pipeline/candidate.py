@@ -98,6 +98,7 @@ class CandidateStore:
         *,
         category: Category | None = None,
         action: Action | None = None,
+        detail: str | None = None,
     ) -> None:
         """Store the Candidate, and record who changed what (§20).
 
@@ -118,6 +119,10 @@ class CandidateStore:
         Section Revert is one act on one Section. Deriving those would record a plausible
         list of resource changes and lose the only thing somebody reading the trail wants to
         know, which is that it was a revert.
+
+        `detail` carries the Snapshot such an act restored *from*. Not the `snapshot` field:
+        that one means the Snapshot an Apply **produced** (§20), and a staged act has produced
+        none -- putting a source number there would read as a commit that never happened.
         """
         candidate.updated_at = datetime.now(UTC)
         dumped = candidate.model_dump(mode="json")
@@ -137,7 +142,7 @@ class CandidateStore:
         )
         # After the write, never before. An event naming a change that then failed to store is
         # worse than no event: it attributes something to somebody that never happened.
-        await self._record(_sections_of(previous), dumped["sections"], category, action)
+        await self._record(_sections_of(previous), dumped["sections"], category, action, detail)
 
     async def _record(
         self,
@@ -145,10 +150,13 @@ class CandidateStore:
         after: Sections,
         category: Category | None,
         action: Action | None,
+        detail: str | None,
     ) -> None:
         who = actor()
         if category is not None and action is not None:
-            await self._audit.record(who.subject, who.via, category, action, token_id=who.token_id)
+            await self._audit.record(
+                who.subject, who.via, category, action, detail=detail, token_id=who.token_id
+            )
             return
         # One write for however many resources moved. A request that edited five of them is
         # one act by one person, and five round trips for it is five times the traffic for no
@@ -197,7 +205,12 @@ class CandidateStore:
                 base_snapshot=base_snapshot,
                 sections=await self._snapshots.sections_of(base_snapshot),
             )
-        await self.save(fresh, category="pipeline", action="reset")
+        await self.save(
+            fresh,
+            category="pipeline",
+            action="reset",
+            detail=_from_snapshot(fresh.base_snapshot),
+        )
         return fresh
 
 
@@ -213,3 +226,14 @@ def _sections_of(document: dict[str, Any] | None) -> Sections:
     document.pop("_id", None)
     dumped: Sections = Candidate.model_validate(document).model_dump(mode="json")["sections"]
     return dumped
+
+
+def _from_snapshot(number: int | None) -> str:
+    """Which Snapshot a staged act took its content from, in words.
+
+    None is the pre-first-Snapshot case, which is a real state rather than missing data: a
+    Reset on a Cluster that has never committed anything re-derives an empty baseline.
+    """
+    return (
+        "restored from an empty baseline" if number is None else f"restored from Snapshot {number}"
+    )

@@ -108,8 +108,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     def build_admin_engine(apply_id: str) -> ApplyEngine:
         return build(AdminEngine, apply_id)
 
-    app.state.apply_runner = ApplyRunner(app.state.apply_store, build_engine)
-    app.state.admin_apply_runner = ApplyRunner(app.state.apply_store, build_admin_engine)
+    app.state.apply_runner = ApplyRunner(app.state.apply_store, build_engine, app.state.audit_store)
+    app.state.admin_apply_runner = ApplyRunner(
+        app.state.apply_store, build_admin_engine, app.state.audit_store
+    )
     app.state.validation_runner = ValidationRunner(app.state.validation_store, build_engine)
     app.state.high_water = HighWaterMark(app.state.kubernetes, settings)
     logger.info("apchi starting", extra={"environment": settings.environment})
@@ -125,7 +127,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # logs and is harder to diagnose than one reporting unhealthy. Recovery is
     # retried at the next start.
     try:
-        recovered = await recover_interrupted(app.state.apply_store, build_engine)
+        recovered = await recover_interrupted(
+            app.state.apply_store, build_engine, app.state.audit_store
+        )
     except Exception:
         logger.exception(
             "startup recovery did not run; a Candidate frozen by an interrupted "

@@ -18,7 +18,11 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field, computed_field
 from pymongo.asynchronous.database import AsyncDatabase
+from pymongo.errors import PyMongoError
 
+from app.audit.actor import SYSTEM_ACTOR, actor
+from app.audit.events import Action, AuditStore, Outcome
+from app.auth.identity import Identity
 from app.logging import apply_id_var
 from app.pipeline.auto_rollback import INCIDENT_MESSAGE
 
@@ -250,18 +254,58 @@ EngineFactory = Callable[[str], ApplyEngine]
 class ApplyRunner:
     """Drives an Apply through its stages, in the background."""
 
-    def __init__(self, store: ApplyStore, engine_factory: EngineFactory) -> None:
+    def __init__(self, store: ApplyStore, engine_factory: EngineFactory, audit: AuditStore) -> None:
         self._store = store
         self._engine_factory = engine_factory
+        self._audit = audit
         self._tasks: set[asyncio.Task[None]] = set()
 
     def start(self, record: ApplyRecord) -> None:
-        task = asyncio.create_task(self._run(record.id))
+        # The actor is read **here**, not inside the task. `start` runs on the request that
+        # asked for the Apply, where the contextvar is set; the task it creates outlives that
+        # request, and a `contextvar` read after it has ended would resolve to the system
+        # actor. Of every record in §20's trail, "who promoted this configuration" is the one
+        # that least deserves to say "apchi" (#140).
+        who = actor()
+        task = asyncio.create_task(self._run(record.id, who))
         # Hold a reference: a bare create_task may be garbage collected mid-flight.
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _run(self, apply_id: str) -> None:
+    async def _audited(
+        self,
+        who: Identity,
+        apply_id: str,
+        action: Action,
+        *,
+        snapshot: int | None = None,
+        outcome: Outcome = "succeeded",
+        detail: str | None = None,
+    ) -> None:
+        """One pipeline event. Never fatal.
+
+        An Apply that reached the Cluster must not be reported as failed because its audit
+        row would not write -- the Cluster has already changed, and a failure here would
+        send the caller down the incident path for a bookkeeping error. The opposite rule
+        holds for a Candidate edit, where nothing has happened yet and `CandidateStore.save`
+        lets it propagate.
+        """
+        try:
+            await self._audit.record(
+                who.subject,
+                who.via,
+                "pipeline",
+                action,
+                snapshot=snapshot,
+                outcome=outcome,
+                detail=detail,
+                token_id=who.token_id,
+                apply_id=apply_id,
+            )
+        except PyMongoError:
+            logger.exception("could not record an apply in the audit history")
+
+    async def _run(self, apply_id: str, who: Identity) -> None:
         # Every record emitted from here carries the identifier, so one id yields
         # the whole story of a failure.
         token = apply_id_var.set(apply_id)
@@ -294,17 +338,32 @@ class ApplyRunner:
                 await self._store.record_snapshot(apply_id, snapshot)
             await self._store.advance(apply_id, Stage.SUCCEEDED)
             logger.info("apply succeeded", extra={"snapshot": snapshot})
+            # The record that ties an actor to a Snapshot, and the only one that can: a
+            # Snapshot knows which Apply produced it, and this is what says who asked.
+            await self._audited(who, apply_id, "applied", snapshot=snapshot)
         except Exception as exc:
             logger.exception("apply failed")
             reason = f"{type(exc).__name__}: {exc}"
+            # The stage is the detail worth keeping. §10 sends a partially applied Apply to an
+            # incident state rather than improvising compensating statements, and a human
+            # arriving there wants to know how far it got before anything else.
+            await self._audited(
+                who,
+                apply_id,
+                "applied",
+                outcome="failed",
+                detail=f"failed in {reached.value}: {reason}",
+            )
             if reached in ROLLED_BACK_FROM:
-                await self._roll_back(apply_id, engine, reason)
+                await self._roll_back(apply_id, engine, reason, who)
             else:
                 await self._store.fail(apply_id, reason)
         finally:
             apply_id_var.reset(token)
 
-    async def _roll_back(self, apply_id: str, engine: ApplyEngine, reason: str) -> None:
+    async def _roll_back(
+        self, apply_id: str, engine: ApplyEngine, reason: str, who: Identity
+    ) -> None:
         """One attempt, and no retry whatever it does.
 
         A failure to roll back is not a failure of this Apply to report and move on
@@ -321,10 +380,25 @@ class ApplyRunner:
             combined = f"{reason}. Auto Rollback then failed: {rollback_exc}"
             await engine.declare_incident(combined)
             await self._store.declare_incident(apply_id, combined, INCIDENT_MESSAGE)
+            # Attributed to Apchi, not to whoever started the Apply: they asked for a
+            # configuration, not for a rollback, and §14 has just engaged Maintenance Mode on
+            # a Cluster in a state nobody has described. The trail has to show that as
+            # Apchi's action and the Apply as theirs.
+            await self._audited(
+                SYSTEM_ACTOR,
+                apply_id,
+                "rolled_back",
+                outcome="failed",
+                detail=combined,
+            )
             return
         await self._store.record_rollback(apply_id, Rollback.SUCCEEDED)
         await self._store.fail(apply_id, reason)
         logger.info("cluster returned to its latest snapshot")
+        # No resulting Snapshot: an Auto Rollback returns the Cluster to the one it was
+        # already on, and recording a number here would read as a new one having been
+        # committed.
+        await self._audited(SYSTEM_ACTOR, apply_id, "rolled_back", detail=reason)
 
     async def shutdown(self) -> None:
         for task in list(self._tasks):
@@ -334,7 +408,9 @@ class ApplyRunner:
 INTERRUPTED_REASON = "Apchi restarted while this Apply was in flight; it was not completed."
 
 
-async def recover_interrupted(store: ApplyStore, engine_factory: EngineFactory) -> list[str]:
+async def recover_interrupted(
+    store: ApplyStore, engine_factory: EngineFactory, audit: AuditStore | None = None
+) -> list[str]:
     """Resolve Applies left in flight by a restart.
 
     The Candidate is frozen for the whole of an Apply, so an Apchi crash mid-flight
@@ -359,6 +435,22 @@ async def recover_interrupted(store: ApplyStore, engine_factory: EngineFactory) 
             extra={"recovered_apply": record.id, "reached": reached.value},
         )
         recovered.append(record.id)
+        # Audited with the system actor: this resolution changes the Cluster and nobody
+        # asked for it. The actor who started the Apply is not responsible for what a
+        # restart did to it, and the stage it reached is what a human needs here.
+        if audit is not None:
+            try:
+                await audit.record(
+                    SYSTEM_ACTOR.subject,
+                    SYSTEM_ACTOR.via,
+                    "pipeline",
+                    "applied",
+                    outcome="failed",
+                    detail=f"interrupted in {reached.value} by a restart; not completed",
+                    apply_id=record.id,
+                )
+            except PyMongoError:
+                logger.exception("could not record a recovered apply in the audit history")
 
         if reached in ROLLED_BACK_FROM:
             await _restore_after_interruption(store, engine_factory, record.id)
