@@ -56,7 +56,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     app.state.mongo = Mongo(settings)
     app.state.snapshot_store = SnapshotStore(app.state.mongo.database)
-    app.state.candidate_store = CandidateStore(app.state.mongo.database, app.state.snapshot_store)
+    # Indexed on its first write rather than here. An index on an empty collection has no
+    # reader, and three create_index round trips per process start is what wedged the test
+    # MongoDB in #131 -- tier 1 starts an app per test. See AuditStore.
+    app.state.audit_store = AuditStore(
+        app.state.mongo.database, retention_days=settings.audit_retention_days
+    )
+    # The Candidate store writes §20's audit at its one chokepoint, so it needs the audit
+    # store rather than each route carrying one.
+    app.state.candidate_store = CandidateStore(
+        app.state.mongo.database, app.state.snapshot_store, app.state.audit_store
+    )
     app.state.apply_store = ApplyStore(app.state.mongo.database)
     app.state.validation_store = ValidationStore(app.state.mongo.database)
     app.state.maintenance_store = MaintenanceStore(app.state.mongo.database)
@@ -66,12 +76,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.session_store = SessionStore(app.state.mongo.database)
     app.state.token_store = TokenStore(app.state.mongo.database)
     app.state.login_store = LoginStore(app.state.mongo.database)
-    # Indexed on its first write rather than here. An index on an empty collection has no
-    # reader, and three create_index round trips per process start is what wedged the test
-    # MongoDB in #131 -- tier 1 starts an app per test. See AuditStore.
-    app.state.audit_store = AuditStore(
-        app.state.mongo.database, retention_days=settings.audit_retention_days
-    )
     # One per app, so discovery and the provider's JWKS are fetched once rather than per
     # login. Tests substitute it to serve a provider in process.
     if not hasattr(app.state, "oidc"):

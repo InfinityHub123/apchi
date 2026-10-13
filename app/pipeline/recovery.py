@@ -149,7 +149,9 @@ async def section_revert(
     restored = await _snapshot_sections(snapshots, number)
     candidate = await candidates.load()
     candidate.sections[section] = dict(restored.get(section, {}))
-    await candidates.save(candidate)
+    # One act on one Section, not the list of resource edits it happens to amount to: what
+    # somebody reading the trail wants to know is that this was a revert, and to what.
+    await candidates.save(candidate, category=section, action="reverted")
 
     effect = await _effect(
         candidate,

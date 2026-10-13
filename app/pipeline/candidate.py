@@ -13,8 +13,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
+from pymongo import ReturnDocument
 from pymongo.asynchronous.database import AsyncDatabase
 
+from app.audit.actor import actor
+from app.audit.changes import Sections, changes_between
+from app.audit.events import Action, AuditStore, Category, Entry
 from app.pipeline.snapshots import SnapshotStore
 from app.sections import SectionName
 from app.sections.registry import SECTIONS
@@ -46,9 +50,15 @@ class CandidateStore:
     non-empty Snapshot would read as "remove everything".
     """
 
-    def __init__(self, database: AsyncDatabase[dict[str, Any]], snapshots: SnapshotStore) -> None:
+    def __init__(
+        self,
+        database: AsyncDatabase[dict[str, Any]],
+        snapshots: SnapshotStore,
+        audit: AuditStore,
+    ) -> None:
         self._collection = database["candidate"]
         self._snapshots = snapshots
+        self._audit = audit
 
     async def load(self) -> Candidate:
         document = await self._collection.find_one({"_id": CANDIDATE_ID})
@@ -82,12 +92,75 @@ class CandidateStore:
             sections=await self._snapshots.sections_of(number),
         )
 
-    async def save(self, candidate: Candidate) -> None:
+    async def save(
+        self,
+        candidate: Candidate,
+        *,
+        category: Category | None = None,
+        action: Action | None = None,
+    ) -> None:
+        """Store the Candidate, and record who changed what (§20).
+
+        **This is where the audit of Operator work is written**, because this is the one
+        function every Operator edit reaches: create, update, delete, Section Revert, Reset
+        and Import all end here. Recording in each of the routes instead would be about forty
+        places to remember, and the first one anybody forgot would be a change with no actor
+        that still worked -- the same argument that made `operator_mutation_allowed` one
+        dependency rather than three a route could pick from.
+
+        With no `category`, the events are **derived** from the difference between what was
+        stored and what is being stored: one per resource added, removed or edited. A route
+        therefore never describes its own change, so it cannot describe it wrongly, and a
+        Section added later is audited without anything here changing.
+
+        `category` and `action` together override that, for the operations whose shape is not
+        a set of resource edits: a Reset or an Import is one act on the whole Candidate, and a
+        Section Revert is one act on one Section. Deriving those would record a plausible
+        list of resource changes and lose the only thing somebody reading the trail wants to
+        know, which is that it was a revert.
+        """
         candidate.updated_at = datetime.now(UTC)
-        await self._collection.replace_one(
+        dumped = candidate.model_dump(mode="json")
+        # `find_one_and_replace` rather than a read followed by a `replace_one`: the diff needs
+        # the pre-image, and this returns it *from the write itself*. One round trip instead of
+        # two, and the pre-image is the document this call replaced rather than one another
+        # request may have changed in between.
+        #
+        # Round trips are not an abstract concern here: tier 1 starts an app per test and the
+        # suite wedges its MongoDB when per-operation traffic grows (#69), which is how this
+        # version came to be measured rather than assumed.
+        previous = await self._collection.find_one_and_replace(
             {"_id": CANDIDATE_ID},
-            {"_id": CANDIDATE_ID, **candidate.model_dump(mode="json")},
+            {"_id": CANDIDATE_ID, **dumped},
             upsert=True,
+            return_document=ReturnDocument.BEFORE,
+        )
+        # After the write, never before. An event naming a change that then failed to store is
+        # worse than no event: it attributes something to somebody that never happened.
+        await self._record(_sections_of(previous), dumped["sections"], category, action)
+
+    async def _record(
+        self,
+        before: Sections,
+        after: Sections,
+        category: Category | None,
+        action: Action | None,
+    ) -> None:
+        who = actor()
+        if category is not None and action is not None:
+            await self._audit.record(who.subject, who.via, category, action, token_id=who.token_id)
+            return
+        # One write for however many resources moved. A request that edited five of them is
+        # one act by one person, and five round trips for it is five times the traffic for no
+        # extra information.
+        await self._audit.record_each(
+            who.subject,
+            who.via,
+            [
+                Entry(category=change.category, action=change.action, resource=change.resource)
+                for change in changes_between(before, after)
+            ],
+            token_id=who.token_id,
         )
 
     async def replace(self, sections: dict[SectionName, dict[str, Any]]) -> Candidate:
@@ -107,7 +180,7 @@ class CandidateStore:
         fresh = Candidate(
             base_snapshot=None if latest is None else latest.number, sections=sections
         )
-        await self.save(fresh)
+        await self.save(fresh, category="pipeline", action="imported")
         return fresh
 
     async def reset(self, base_snapshot: int | None = None) -> Candidate:
@@ -124,5 +197,19 @@ class CandidateStore:
                 base_snapshot=base_snapshot,
                 sections=await self._snapshots.sections_of(base_snapshot),
             )
-        await self.save(fresh)
+        await self.save(fresh, category="pipeline", action="reset")
         return fresh
+
+
+def _sections_of(document: dict[str, Any] | None) -> Sections:
+    """A stored Candidate's Sections, dumped by the same model as the incoming one.
+
+    Normalised through `Candidate` rather than compared raw, because MongoDB returns BSON -- a
+    datetime comes back as a datetime where the incoming side has an ISO string -- and
+    comparing those two directly would report every resource as edited on every save.
+    """
+    if document is None:
+        return {}
+    document.pop("_id", None)
+    dumped: Sections = Candidate.model_validate(document).model_dump(mode="json")["sections"]
+    return dumped
