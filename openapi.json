@@ -306,6 +306,159 @@
         "title": "ApplyRecord",
         "type": "object"
       },
+      "AuditEvent": {
+        "additionalProperties": false,
+        "description": "One thing that happened, attributed to whoever caused it.",
+        "properties": {
+          "action": {
+            "enum": [
+              "created",
+              "updated",
+              "removed",
+              "reset",
+              "imported",
+              "reverted",
+              "applied",
+              "rolled_back",
+              "engaged",
+              "released",
+              "minted",
+              "revoked"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "actor": {
+            "description": "An Identity's subject, or 'apchi' when Apchi itself acted.",
+            "title": "Actor",
+            "type": "string"
+          },
+          "apply_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Apply this belongs to, so the trail joins to the logs for the same Apply rather than being matched up by timestamp.",
+            "title": "Apply Id"
+          },
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "enum": [
+                  "catalogs",
+                  "client_certificates",
+                  "certificate_mapping",
+                  "permissions",
+                  "resource_groups",
+                  "event_listeners"
+                ],
+                "type": "string"
+              },
+              {
+                "enum": [
+                  "admin",
+                  "pipeline"
+                ],
+                "type": "string"
+              }
+            ],
+            "title": "Category"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it was refused, or how it failed. Never a configuration value.",
+            "title": "Detail"
+          },
+          "id": {
+            "description": "Opaque and stable. Also the sort key within one instant.",
+            "title": "Id",
+            "type": "string"
+          },
+          "outcome": {
+            "default": "succeeded",
+            "enum": [
+              "succeeded",
+              "refused",
+              "failed"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What changed. Null for an act on a whole Section or Cluster.",
+            "title": "Resource"
+          },
+          "snapshot": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Snapshot this produced, when it produced one. Null for a staged edit, and null for every Admin change: an Admin Apply creates no Snapshot (\u00a714).",
+            "title": "Snapshot"
+          },
+          "token_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which token acted, when `via` is 'token'. Kept because a revoked token in the trail still has to resolve -- revocation is exactly when somebody reads this.",
+            "title": "Token Id"
+          },
+          "via": {
+            "description": "How the actor authenticated. On the record rather than derivable, because 'jo did this' and 'an automation jo minted did this' are different answers.",
+            "enum": [
+              "none",
+              "password",
+              "sso",
+              "token"
+            ],
+            "title": "Via",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "actor",
+          "via",
+          "category",
+          "action"
+        ],
+        "title": "AuditEvent",
+        "type": "object"
+      },
       "Body_upload_certificate_api_v1_certificates_post": {
         "properties": {
           "archive": {
@@ -1228,6 +1381,35 @@
         ],
         "title": "Outcome",
         "type": "string"
+      },
+      "Page": {
+        "description": "One page of history, newest first.",
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/AuditEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "next": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass as `before` for the following page. Null when this is the last one. A cursor rather than an offset: the collection grows at the head, and an offset pager repeats or skips rows while it is being appended to.",
+            "title": "Next"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "title": "Page",
+        "type": "object"
       },
       "PermissionEnforcement": {
         "additionalProperties": false,
@@ -3606,6 +3788,161 @@
         "summary": "Stream stage transitions",
         "tags": [
           "applies"
+        ]
+      }
+    },
+    "/api/v1/audit": {
+      "get": {
+        "description": "Answers *who changed what, and when*, which is a different question from what\n`GET /snapshots` answers.\n\nEvents never carry configuration *values* -- only which resource changed. Snapshots hold\nthe contents, and hold real credentials to do it (\u00a712), so a second copy here would be a\nsecond thing to protect.",
+        "operationId": "list_events_api_v1_audit_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "catalogs",
+                    "client_certificates",
+                    "certificate_mapping",
+                    "permissions",
+                    "resource_groups",
+                    "event_listeners"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "admin",
+                    "pipeline"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "actor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A `next` from a previous page. Omit for the newest page.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A `next` from a previous page. Omit for the newest page.",
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Who changed what, newest first",
+        "tags": [
+          "audit"
         ]
       }
     },

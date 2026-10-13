@@ -7,6 +7,7 @@ from fastapi import Depends, Request
 from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.api.errors import Conflict, Forbidden, MaintenanceModeEngaged, Unauthenticated
+from app.audit.events import AuditStore
 from app.auth.identity import NOBODY, Identity
 from app.auth.logins import LoginStore
 from app.auth.oidc import OidcProvider
@@ -340,3 +341,11 @@ def oidc(request: Request) -> OidcProvider:
 
 
 OidcDep = Annotated[OidcProvider, Depends(oidc)]
+
+
+def audit_store(request: Request) -> AuditStore:
+    store: AuditStore = request.app.state.audit_store
+    return store
+
+
+AuditStoreDep = Annotated[AuditStore, Depends(audit_store)]

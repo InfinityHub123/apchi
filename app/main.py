@@ -14,6 +14,7 @@ from app.api import errors
 from app.api.admin import router as admin_router
 from app.api.adoption import router as adoption_router
 from app.api.applies import router as applies_router
+from app.api.audit import router as audit_router
 from app.api.auth import router as auth_router
 from app.api.candidate import router as candidate_router
 from app.api.catalogs import router as catalogs_router
@@ -27,6 +28,7 @@ from app.api.resource_groups import router as resource_groups_router
 from app.api.snapshots import router as snapshots_router
 from app.api.tokens import router as tokens_router
 from app.api.validations import router as validations_router
+from app.audit.events import AuditStore
 from app.auth.logins import LoginStore
 from app.auth.oidc import OidcProvider
 from app.auth.sessions import SessionStore
@@ -64,6 +66,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.session_store = SessionStore(app.state.mongo.database)
     app.state.token_store = TokenStore(app.state.mongo.database)
     app.state.login_store = LoginStore(app.state.mongo.database)
+    # Indexed on its first write rather than here. An index on an empty collection has no
+    # reader, and three create_index round trips per process start is what wedged the test
+    # MongoDB in #131 -- tier 1 starts an app per test. See AuditStore.
+    app.state.audit_store = AuditStore(
+        app.state.mongo.database, retention_days=settings.audit_retention_days
+    )
     # One per app, so discovery and the provider's JWKS are fetched once rather than per
     # login. Tests substitute it to serve a provider in process.
     if not hasattr(app.state, "oidc"):
@@ -216,6 +224,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         applies_router,
         snapshots_router,
         validations_router,
+        audit_router,
         tokens_router,
     ):
         app.include_router(
