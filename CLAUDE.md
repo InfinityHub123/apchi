@@ -64,11 +64,14 @@ Reach for these rather than the ones most tutorials suggest:
 Two tiers. Tier 1 drives the HTTP API against real MongoDB and real Trino with Kubernetes
 faked; tier 2 runs against a real cluster and is marked `tier2`.
 
-**Run tier 1 with `scripts/tier1.sh`, not `pytest tests/tier1`.** As one process the suite
-degrades until tests hit the per-test timeout -- 5519s and 18 timeouts for the same tests
-that pass in about three minutes split three ways, with no assertion ever failing. The script
-splits it; the cause is unknown and #69 holds the evidence. CI runs it as one process and is
-green every time, so this is local only.
+`pytest tests/tier1` runs the whole suite in one process, in about two and a half minutes.
+
+It used to hang -- 5519s and 18 timeouts, with no assertion ever failing -- which is what
+`scripts/tier1.sh` existed to work around. The cause was the test MongoDB's **open-file
+limit**: Docker defaults the soft `nofile` limit to 1024 and MongoDB asks for 64000, so mongod
+stopped accepting connections and said so in its own log. The container now sets the limit and
+the workaround is gone (#69). If the suite ever hangs on a database that is up and idle, read
+`docker logs` on the MongoDB container before anything else.
 
 ## Types
 
