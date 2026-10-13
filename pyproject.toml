@@ -22,6 +22,12 @@ dependencies = [
     # which most FastAPI material still suggests: unmaintained since 2020 and built on the
     # `crypt` module Python 3.13 removed.
     "argon2-cffi>=25.1",
+    # JWS/JWK/JWT for OIDC ID tokens. The Authlib project's own JOSE library and what Authlib
+    # itself depends on, with the algorithm registry that makes "RS256 only" enforceable.
+    # Authlib's client is not used: its Starlette integration needs SessionMiddleware and a
+    # shared signing key, and its httpx integration is deprecated in favour of a separate
+    # httpx2 distribution. See app/auth/oidc.py.
+    "joserfc>=1.7.5",
 ]
 
 [project.optional-dependencies]

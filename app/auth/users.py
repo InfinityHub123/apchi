@@ -1,9 +1,13 @@
-"""The people who may call Apchi, when a password is how they prove it.
+"""The people who may call Apchi, however they prove it.
 
-Provisioned by an Admin. There is no self-registration, no email verification and no
-password-reset flow, because §3's Operators are platform staff somebody onboards rather than
-members of the public -- and those three flows are most of what a batteries-included auth
-library would bring.
+In `password` mode they are provisioned by an Admin. There is no self-registration, no email
+verification and no password-reset flow, because §3's Operators are platform staff somebody
+onboards rather than members of the public -- and those three flows are most of what a
+batteries-included auth library would bring.
+
+In `sso` mode the rows are a **mirror** of what an identity provider said at somebody's last
+login (`mirror`), not a second place to administer people. One collection either way, so a
+session, a token (#131) and §20's audit all resolve an actor the same way in every mode.
 
 A user is **disabled** rather than deleted. §20's audit records an actor, and an actor that no
 longer resolves is worse than one marked gone: the trail would name somebody nothing can
@@ -15,10 +19,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+from pymongo import ReturnDocument
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
-from app.auth.identity import Identity, Role
+from app.auth.identity import Identity, Role, Via
 from app.auth.passwords import hash_password, needs_rehash, verify
 
 logger = logging.getLogger(__name__)
@@ -28,13 +33,20 @@ class User(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     username: str
-    password_hash: str
+    #: None for somebody an identity provider vouches for (`sso` mode). `verify` already
+    #: treats a missing hash as unmatchable and still pays a full verification for it, so an
+    #: SSO user is not a password account that happens to accept anything -- there is no
+    #: password that signs them in.
+    password_hash: str | None = None
     role: Role
     disabled: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
-    def identity(self) -> Identity:
-        return Identity(subject=self.username, role=self.role, via="password")
+    def identity(self, via: Via = "password") -> Identity:
+        """How this user appears as a caller. `via` comes from the request, not the row: the
+        same person signs in with a password and calls with a token (#131), and §20's audit
+        has to be able to tell those apart."""
+        return Identity(subject=self.username, role=self.role, via=via)
 
 
 class UserStore:
@@ -79,7 +91,7 @@ class UserStore:
 
         # Raising the hashing cost later then re-hashes each user as they arrive, instead of
         # needing a migration nobody runs.
-        if needs_rehash(user.password_hash):
+        if user.password_hash is not None and needs_rehash(user.password_hash):
             await self._restore_hash(user.username, hash_password(password))
             logger.info("rehashed a password at stronger parameters", extra={"username": username})
         return user
@@ -104,6 +116,53 @@ class UserStore:
             return False
         logger.warning("created the initial admin", extra={"username": username})
         return True
+
+    async def mirror(self, username: str, role: Role) -> User | None:
+        """Record what the identity provider just said about somebody, and return them.
+
+        Called on every SSO login, which makes the provider authoritative for two things and
+        for nothing else:
+
+        * **The role**, re-read from the claim each time. A group change takes effect at the
+          person's next login -- which is as fresh as OIDC gets, since Apchi is not told when
+          a group changes and an ID token is a statement about one moment.
+        * **Existence.** There is no provisioning step: whoever the provider authenticates has
+          an Apchi user, which is the whole reason to run `sso` rather than `password`.
+
+        Not `disabled`. That is Apchi's own override, and it has to outlast a login: an Admin
+        locking somebody out of this control plane while they still hold a perfectly valid
+        account at the identity provider is exactly the case it exists for. Returns None when
+        the account is disabled, so the caller refuses rather than signing them in.
+
+        A user who already has a password keeps their hash: the same person may exist in both
+        modes across a migration, and a login through one must not delete their way in by the
+        other.
+        """
+        document = await self._collection.find_one_and_update(
+            {"_id": username},
+            {
+                "$set": {"role": role},
+                "$setOnInsert": {
+                    "username": username,
+                    "password_hash": None,
+                    "disabled": False,
+                    "created_at": datetime.now(UTC).isoformat(),
+                },
+            },
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+        if document is None:
+            # `upsert=True` with ReturnDocument.AFTER always has a document to return, so
+            # this is unreachable rather than a case: it is here because the driver types it
+            # as optional, and an assertion would fail a login rather than refuse it.
+            raise PyMongoError(f"the upsert of user {username!r} returned nothing")
+        document.pop("_id", None)
+        user = User.model_validate(document)
+        if user.disabled:
+            logger.info("sso login refused: the account is disabled", extra={"username": username})
+            return None
+        return user
 
     async def ensure_indexes(self) -> None:
         """Nothing to add: the username is the `_id`, which is indexed and unique already.

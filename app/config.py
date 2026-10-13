@@ -45,6 +45,38 @@ class Settings(BaseSettings):
     #: user takes effect at once; this is only how long an untouched one survives.
     auth_session_hours: float = 12.0
 
+    #: The identity provider, in `sso` mode. Every endpoint Apchi uses is discovered from
+    #: here rather than configured: a provider that rotates its keys or moves an endpoint
+    #: keeps working, and a mistyped endpoint is a failure at the worst possible moment.
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_client_secret: str | None = None
+    #: Where the provider sends the browser back. Deployment-specific, and a wrong one is a
+    #: login loop with no error anywhere, so the chart spells out the consequence.
+    oidc_redirect_url: str | None = None
+    #: `groups` is not a standard OIDC scope, and whether a provider needs one to emit the
+    #: role claim differs: Dex and Keycloak want it, Entra puts roles in the token with no
+    #: extra scope at all. Configurable because no single default is right everywhere.
+    oidc_scopes: str = "openid profile email groups"
+    #: Which claim names the person. `sub` is the only claim OIDC guarantees is stable, but
+    #: it is routinely an opaque blob -- Dex returns `Cg0wLTM4NS0yODA4OS0wEgRtb2Nr` -- and
+    #: §20's audit records an actor somebody has to be able to read. So: a login name, and a
+    #: login whose token lacks that claim is refused rather than recorded under a blob.
+    #:
+    #: The consequence, stated because it is not recoverable afterwards: this value is the
+    #: Apchi username, so a provider that *changes* somebody's login name produces a new
+    #: Apchi user. Their tokens (#131) stay with the old name for an Admin to revoke.
+    oidc_username_claim: str = "preferred_username"
+    #: Which claim carries group membership, and which of its values mean Admin. Comma
+    #: separated rather than a JSON list: pydantic-settings parses a list-typed setting as
+    #: JSON, and `["a","b"]` inside a Helm value is a quoting trap nobody needs.
+    oidc_role_claim: str = "groups"
+    oidc_admin_groups: str = ""
+    #: How long a browser has to come back from the provider. Short: this covers one
+    #: redirect round trip, and the pending login it keeps is what makes a replayed `state`
+    #: refusable.
+    oidc_login_seconds: float = 300.0
+
     mongo_uri: str = "mongodb://localhost:27017"
     mongo_database: str = "apchi"
 
@@ -131,6 +163,14 @@ class Settings(BaseSettings):
     # level can be raised during a production incident without a rebuild.
     log_level: str | None = None
     log_json: bool | None = None
+
+    @property
+    def admin_groups(self) -> frozenset[str]:
+        return frozenset(g.strip() for g in self.oidc_admin_groups.split(",") if g.strip())
+
+    @property
+    def oidc_scope_list(self) -> list[str]:
+        return self.oidc_scopes.split()
 
     @property
     def effective_log_level(self) -> str:

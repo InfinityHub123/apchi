@@ -27,6 +27,8 @@ from app.api.resource_groups import router as resource_groups_router
 from app.api.snapshots import router as snapshots_router
 from app.api.tokens import router as tokens_router
 from app.api.validations import router as validations_router
+from app.auth.logins import LoginStore
+from app.auth.oidc import OidcProvider
 from app.auth.sessions import SessionStore
 from app.auth.tokens import TokenStore
 from app.auth.users import UserStore, bootstrap
@@ -61,6 +63,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.user_store = UserStore(app.state.mongo.database)
     app.state.session_store = SessionStore(app.state.mongo.database)
     app.state.token_store = TokenStore(app.state.mongo.database)
+    app.state.login_store = LoginStore(app.state.mongo.database)
+    # One per app, so discovery and the provider's JWKS are fetched once rather than per
+    # login. Tests substitute it to serve a provider in process.
+    if not hasattr(app.state, "oidc"):
+        app.state.oidc = OidcProvider(settings)
 
     # Tests substitute the Kubernetes adapter before the lifespan runs; nothing else
     # is ever substituted.
@@ -132,6 +139,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await app.state.session_store.ensure_indexes()
             await app.state.token_store.ensure_indexes()
             await app.state.user_store.ensure_indexes()
+            await app.state.login_store.ensure_indexes()
             await bootstrap(
                 app.state.user_store,
                 settings.auth_initial_admin_username,
@@ -156,6 +164,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
 
     yield
+    await app.state.oidc.close()
     await app.state.apply_runner.shutdown()
     await app.state.admin_apply_runner.shutdown()
     await app.state.validation_runner.shutdown()
