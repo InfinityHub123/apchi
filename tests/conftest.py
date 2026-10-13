@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any
 
 import pytest
+from docker.types import Ulimit
 from httpx import ASGITransport, AsyncClient
 from testcontainers.community.mongodb import MongoDbContainer
 from testcontainers.core.container import DockerContainer
@@ -435,7 +436,25 @@ class FakeKubernetes:
 
 @pytest.fixture(scope="session")
 def mongo_container() -> Iterator[MongoDbContainer]:
-    with MongoDbContainer() as container:
+    """The MongoDB both tiers run against, with the open-file limit MongoDB asks for.
+
+    **The `nofile` limit is the whole of #69.** Docker's default soft limit is 1024, and
+    MongoDB's production notes ask for 64000. At 1024, mongod stops accepting connections and
+    says so in its own log --
+
+        "Error accepting new connection on local endpoint", error: "Too many open files"
+
+    -- at which point every test blocks on a database that is up, idle, and unreachable, with
+    no assertion ever failing. That is why the suite looked like it degraded: it was running
+    out of descriptors, not out of memory, time or connections.
+
+    The giveaway was visible all along in `connections.available`, which mongod derives from
+    the same budget: 401 with the default limit against 25595 with this one. Sockets were only
+    part of what spent them -- WiredTiger holds file handles per collection and per index, so
+    the database-per-test that nothing dropped was spending them too.
+    """
+    limit = Ulimit(name="nofile", soft=64000, hard=64000)
+    with MongoDbContainer().with_kwargs(ulimits=[limit]) as container:
         yield container
 
 
