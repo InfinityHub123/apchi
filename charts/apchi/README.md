@@ -63,11 +63,18 @@ secrets:
 | `image.repository` | `ghcr.io/infinityhub123/apchi` | Published on every release for `linux/amd64` and `linux/arm64` |
 | `image.tag` | `""` | Empty means the chart's `appVersion`, so an install gets the image that chart version was released with rather than whatever `latest` is today |
 | `replicaCount` | `1` | Leave it. An Apply is in-process state, so a second Apchi runs a second pipeline against one Trino |
-| `auth.mode` | `none` | `none`/`password`/`sso`. **`none` means every caller is treated as an Admin**, which is what Apchi has always done. `sso` is not built yet (#132) |
+| `auth.mode` | `none` | `none`/`password`/`sso`. **`none` means every caller is treated as an Admin**, which is what Apchi has always done |
 | `auth.initialAdmin.username` | `admin` | The one Admin a new install starts with, in `password` mode |
 | `auth.initialAdmin.passwordHash` | `""` | An Argon2id **hash**, never the password. Applied only when Apchi has no users, so it cannot resurrect a deleted account or reset a changed password |
 | `auth.initialAdmin.existingSecret` | `""` | A Secret holding that hash, preferred over the value above: the hash is offline-crackable, so it is worth keeping out of the release |
 | `auth.sessionHours` | `12` | How long an untouched session lasts. Logout and disabling a user take effect at once regardless |
+| `auth.oidc.issuer` | `""` | Required in `sso` mode. Every endpoint is discovered from here, so a provider that rotates keys or moves an endpoint keeps working |
+| `auth.oidc.clientId` | `""` | Required in `sso` mode |
+| `auth.oidc.redirectUrl` | `""` | Required in `sso` mode, and the one value nothing can guess: the URL a **browser** reaches Apchi on, registered with the provider verbatim. A wrong one is a login loop with no error anywhere |
+| `auth.oidc.existingSecret` | `""` | A Secret holding the client secret, preferred over `auth.oidc.clientSecret`, which puts it in the release and in `helm get values` |
+| `auth.oidc.scopes` | `openid profile email groups` | `groups` is not a standard OIDC scope and some providers reject one they do not know. Trim it if yours does |
+| `auth.oidc.usernameClaim` | `preferred_username` | The person's Apchi username. Not `sub`, which providers routinely make an opaque blob, and the audit records an actor somebody must be able to read. It follows that a provider which *changes* a login name produces a new Apchi user |
+| `auth.oidc.roleClaim`, `auth.oidc.adminGroups` | `groups`, `""` | Everyone who authenticates is an Operator; a member of one of `adminGroups` is an Admin. Empty means **nobody** is an Admin, which closes `/admin/*` rather than opening it |
 | `environment` | `np` | `np`/`test`/`prep`/`prod`. Decides the log level and format: DEBUG and console in np and test, INFO and JSON in prep and prod |
 | `logging.level`, `logging.json` | `null` | Override the above. An explicit level can be raised during an incident without a rebuild |
 | `trino.host`, `trino.port` | `trino`, `8080` | The coordinator's Service. Apchi issues catalog DDL and the smoke query through it |

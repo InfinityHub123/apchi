@@ -18,7 +18,7 @@ from typing import Any
 from pydantic import BaseModel
 from pymongo.asynchronous.database import AsyncDatabase
 
-from app.auth.identity import Role
+from app.auth.identity import Via
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,11 @@ def _digest(value: str) -> str:
 
 class Session(BaseModel):
     username: str
-    role: Role
+    #: How this person signed in. The one thing only the session knows: the role is read from
+    #: the user on every request precisely so that disabling or demoting somebody does not
+    #: wait for their session to expire, which leaves `via` as the session's own fact and
+    #: what §20's audit needs to tell a password login from an SSO one.
+    via: Via
     expires_at: datetime
 
 
@@ -45,14 +49,14 @@ class SessionStore:
     def __init__(self, database: AsyncDatabase[dict[str, Any]]) -> None:
         self._collection = database["sessions"]
 
-    async def create(self, username: str, role: Role, ttl: timedelta) -> str:
+    async def create(self, username: str, via: Via, ttl: timedelta) -> str:
         """A new session, returning the cookie value -- which is never stored."""
         value = secrets.token_urlsafe(_DIGEST_BYTES)
         await self._collection.insert_one(
             {
                 "_id": _digest(value),
                 "username": username,
-                "role": role,
+                "via": via,
                 "expires_at": datetime.now(UTC) + ttl,
             }
         )
@@ -69,7 +73,7 @@ class SessionStore:
         if document is None:
             return None
         session = Session.model_validate(
-            {key: document[key] for key in ("username", "role", "expires_at")}
+            {key: document[key] for key in ("username", "via", "expires_at")}
         )
         expires_at = session.expires_at
         if expires_at.tzinfo is None:

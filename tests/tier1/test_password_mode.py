@@ -248,7 +248,7 @@ async def test_an_expired_session_is_refused_before_the_ttl_index_reaps_it(
     would accept."""
     app = create_app(_settings(settings))
     async for http in _serving(app, fake_kubernetes):
-        value = await app.state.session_store.create("jo", "operator", timedelta(seconds=-1))
+        value = await app.state.session_store.create("jo", "password", timedelta(seconds=-1))
         http.cookies.set("apchi_session", value)
 
         assert (await http.get(ME)).status_code == 401

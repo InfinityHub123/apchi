@@ -225,7 +225,21 @@ Sessions are rows in MongoDB rather than signed cookies, which is what makes log
 disabling somebody, take effect on their next request instead of whenever their cookie would
 have expired.
 
-SSO is next (#132). Tokens for automations come with it (#131).
+`auth.mode: sso` hands authentication to your identity provider: OpenID Connect, authorization
+code with PKCE, every endpoint discovered from the issuer. Apchi is only ever the *client*, so
+it works against Keycloak, Authentik, Zitadel, Okta or Entra without knowing which. Everyone
+who signs in is an operator; a member of one of `auth.oidc.adminGroups` is an admin, read from
+a claim at each login. A mapping that matches nothing therefore leaves a cluster whose sections
+still work and whose `/admin/*` is closed, which is the direction worth failing in.
+
+Nothing degrades. If the provider is unreachable, logging in fails — Apchi never falls back to
+a mode that would let somebody in, because a control plane that quietly dropped its own
+authentication would look like it was working.
+
+Automations use **tokens** instead of either (`POST /tokens`). A token is minted by a person,
+acts as that person, and takes their *current* role on every request — so demoting somebody
+demotes their automations, and disabling them stops them, without anybody having to go and
+find their tokens.
 
 It does not detect drift. Changes made to the cluster outside Apchi are not noticed,
 reconciled or reported (§17) — which is why catalog DDL is restricted to Apchi's own identity,

@@ -1568,7 +1568,32 @@ mounts — a username and a password *hash* — created only when the user colle
 the setting can never resurrect a deleted account or silently reset a changed password.
 
 **`sso`** is OIDC authorization code with PKCE. Apchi is a client and never an identity
-provider, so it works against whatever the platform already runs.
+provider, so it works against whatever the platform already runs, and **every endpoint is
+discovered from the issuer** rather than configured one by one: a provider that rotates its
+keys or moves an endpoint keeps working, and a mistyped endpoint fails at install rather than
+during the one login somebody needed.
+
+Three decisions inside that mode are worth stating, because each one could reasonably have
+gone the other way:
+
+- **The role comes from a claim, and the default is Operator.** Everyone who authenticates is
+  an Operator; a subject whose role claim holds one of the configured admin groups is an
+  Admin. The failure mode of a mapping that matches nothing is then a Cluster whose six
+  Sections still work and whose `/admin/*` is closed — not one where everybody can inject
+  low-level configuration.
+- **The username comes from a claim, not from `sub`.** `sub` is the only claim OIDC guarantees
+  is stable, and it is routinely an opaque identifier. §20's audit records an *actor*, and an
+  actor nobody can look up is worse than a refused login, so a token with no usable username
+  claim is refused. The consequence: a provider that changes somebody's login name produces a
+  new Apchi user, and the tokens they minted stay with the old name for an Admin to revoke.
+- **User rows are a mirror, not a second place to administer people.** The provider is
+  authoritative for the role and for existence, re-read at each login. It is not authoritative
+  for `disabled`, which is Apchi's own override and survives a login: locking somebody out of
+  this control plane while they still hold a valid account at the identity provider is the
+  case it exists for.
+
+One collection of users either way, so a session, a token and an audit record resolve an actor
+the same way in every mode.
 
 **Tokens are not a mode.** They are a credential any authenticated user mints for automations,
 available whenever the mode is not `none`. They are opaque rather than signed, because a signed

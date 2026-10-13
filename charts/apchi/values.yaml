@@ -48,6 +48,48 @@ auth:
   # How long an untouched browser session lasts. Sessions are rows in MongoDB, so a
   # logout or a disabled account takes effect at once rather than when this elapses.
   sessionHours: 12
+  # sso mode: Apchi as an OpenID Connect client against your identity provider. Apchi is
+  # never an identity provider itself, so this works against Keycloak, Authentik, Zitadel,
+  # Okta or Entra without Apchi knowing which.
+  oidc:
+    # Every endpoint Apchi uses is discovered from here. Not six configured endpoints: a
+    # provider that rotates its keys or moves an endpoint keeps working, and a mistyped
+    # endpoint would fail during the one login somebody needed.
+    issuer: ""
+    clientId: ""
+    # Put the secret in a Secret you manage. clientSecret below exists for a quick trial and
+    # puts it in the release, in `helm get values`, and usually in a git repository.
+    clientSecret: ""
+    existingSecret: ""
+    existingSecretKey: client-secret
+    # Where the provider sends the browser back, and the one value nothing can guess for
+    # you: it must be the URL a *browser* reaches Apchi on, through whatever Ingress or
+    # port-forward is in front of it, and it must be registered with the provider verbatim.
+    #
+    # A wrong one is a login loop with no error anywhere -- the provider refuses a redirect
+    # URI it does not recognise, and the browser never gets as far as Apchi. Set it.
+    redirectUrl: ""
+    # `groups` is not a standard OIDC scope, and providers disagree about whether one is
+    # needed to emit group membership at all: Dex and Keycloak want it, Entra puts roles in
+    # the token without it. Trim this if your provider rejects a scope it does not know.
+    scopes: "openid profile email groups"
+    # Which claim is the person's Apchi username. `sub` is the only claim OIDC guarantees is
+    # stable, but it is routinely an opaque blob, and the audit trail records an actor
+    # somebody has to be able to read.
+    #
+    # The consequence, because it is not recoverable afterwards: this value *is* the Apchi
+    # username, so a provider that changes somebody's login name produces a new Apchi user.
+    # Any tokens they minted stay with the old name for an Admin to revoke.
+    usernameClaim: preferred_username
+    # Which claim carries group membership, and which of its values mean Admin. Comma
+    # separated. Everyone who authenticates is an Operator; only a member of one of these
+    # groups is an Admin.
+    #
+    # Leaving adminGroups empty means nobody is an Admin -- which closes /admin/* to
+    # everybody rather than opening it to everybody. That is the safe direction, but it does
+    # mean nobody can inject low-level configuration or release Maintenance Mode.
+    roleClaim: groups
+    adminGroups: ""
 
 service:
   type: ClusterIP

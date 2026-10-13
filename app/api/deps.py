@@ -1,6 +1,6 @@
 """Shared request dependencies."""
 
-from typing import Annotated
+from typing import Annotated, Final
 
 from fastapi import Depends, Request
 
@@ -8,6 +8,8 @@ from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.api.errors import Conflict, Forbidden, MaintenanceModeEngaged, Unauthenticated
 from app.auth.identity import NOBODY, Identity
+from app.auth.logins import LoginStore
+from app.auth.oidc import OidcProvider
 from app.auth.sessions import COOKIE, SessionStore
 from app.auth.tokens import PREFIX, TokenStore
 from app.auth.users import UserStore
@@ -103,6 +105,15 @@ def maintenance_store(request: Request) -> MaintenanceStore:
 MaintenanceStoreDep = Annotated[MaintenanceStore, Depends(maintenance_store)]
 
 
+#: How to sign in, per mode. A mapping rather than a chain of `if`s so that adding a mode to
+#: `AuthMode` without giving it a way in fails closed: `caller` refuses, instead of silently
+#: treating the new mode as session-based.
+_SIGN_IN_AT: Final[dict[AuthMode, str]] = {
+    AuthMode.PASSWORD: "Sign in at POST /api/v1/auth/login",
+    AuthMode.SSO: "Sign in at GET /api/v1/auth/sso/login",
+}
+
+
 async def caller(request: Request) -> Identity:
     """Who is making this request.
 
@@ -122,21 +133,19 @@ async def caller(request: Request) -> Identity:
     if (identity := await _from_bearer(request)) is not None:
         return identity
 
-    if settings.auth_mode is AuthMode.PASSWORD:
-        if (identity := await _from_session(request)) is not None:
-            return identity
+    # Where a person signs in differs by mode; what they carry afterwards does not. A session
+    # is a row either way, and `password` and `sso` differ only in what established it -- so
+    # resolving one is shared, and the mode only decides which refusal to send.
+    where = _SIGN_IN_AT.get(settings.auth_mode)
+    if where is None:
+        # A mode this build has no backend for raises rather than resolving to an Admin.
         raise Unauthenticated(
-            "Sign in at POST /api/v1/auth/login, or send a token as "
-            "'Authorization: Bearer apchi_...'."
+            f"Authentication mode {settings.auth_mode.value!r} is configured but this build "
+            "has no way to authenticate against it."
         )
-
-    # sso (#132) adds its branch here. A configured mode with no backend raises rather than
-    # resolving to an Admin: a control plane that drops its own authentication because a
-    # provider is unreachable is worse than one that refuses.
-    raise Unauthenticated(
-        f"Authentication mode {settings.auth_mode.value!r} is configured but this build has "
-        "no way to authenticate against it."
-    )
+    if (identity := await _from_session(request)) is not None:
+        return identity
+    raise Unauthenticated(f"{where}, or send a token as 'Authorization: Bearer apchi_...'.")
 
 
 async def _from_bearer(request: Request) -> Identity | None:
@@ -193,7 +202,7 @@ async def _from_session(request: Request) -> Identity | None:
     user = await users.get(session.username)
     if user is None or user.disabled:
         return None
-    return user.identity()
+    return user.identity(session.via)
 
 
 CallerDep = Annotated[Identity, Depends(caller)]
@@ -310,3 +319,24 @@ def kubernetes(request: Request) -> KubernetesAdapter:
 
 
 KubernetesDep = Annotated[KubernetesAdapter, Depends(kubernetes)]
+
+
+def login_store(request: Request) -> LoginStore:
+    store: LoginStore = request.app.state.login_store
+    return store
+
+
+LoginStoreDep = Annotated[LoginStore, Depends(login_store)]
+
+
+def oidc(request: Request) -> OidcProvider:
+    """The identity provider, built once per app so discovery and the JWKS are cached.
+
+    Present in every mode. Constructing it costs nothing and reaches nothing; the routes that
+    use it are the ones that refuse outside `sso` mode.
+    """
+    provider: OidcProvider = request.app.state.oidc
+    return provider
+
+
+OidcDep = Annotated[OidcProvider, Depends(oidc)]

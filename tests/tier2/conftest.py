@@ -64,7 +64,7 @@ def _cluster_available() -> bool:
     return True
 
 
-def _free_port() -> int:
+def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
@@ -93,7 +93,7 @@ class PortForward:
     def __init__(self, target: str, remote_port: int) -> None:
         self._target = target
         self._remote_port = remote_port
-        self.port = _free_port()
+        self.port = free_port()
         self._process: subprocess.Popen[bytes] | None = None
 
     def _spawn(self) -> None:

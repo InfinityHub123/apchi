@@ -29,10 +29,17 @@ from tests.conftest import FakeKubernetes
 #: in to clear would crashloop the pod they need alive to reach it -- the argument
 #: api/health.py already makes about what may go in it.
 #:
-#: /auth/login is how a caller gets an identity, so it cannot require one. It is covered by
-#: test_password_mode.py instead, which is the stricter test: not "does it refuse nobody" but
-#: "does it refuse the wrong password, the unknown user and the disabled account alike".
-OPEN = {"/api/v1/health", "/api/v1/auth/login"}
+#: /auth/login and /auth/sso/* are how a caller gets an identity, so they cannot require one.
+#: They are covered by test_password_mode.py and test_sso_mode.py instead, which are the
+#: stricter tests: not "does it refuse nobody" but "does it refuse the wrong password, the
+#: unknown user and the disabled account alike", and "does it refuse a replayed state, a
+#: mismatched one, and a token signed by the wrong key".
+OPEN = {
+    "/api/v1/health",
+    "/api/v1/auth/login",
+    "/api/v1/auth/sso/login",
+    "/api/v1/auth/sso/callback",
+}
 
 OPERATOR = Identity(subject="jo", role="operator", via="password")
 
@@ -97,10 +104,10 @@ async def _serving(app: FastAPI, fake_kubernetes: FakeKubernetes) -> AsyncIterat
 async def unauthenticatable(
     settings: Settings, fake_kubernetes: FakeKubernetes
 ) -> AsyncIterator[AsyncClient]:
-    """An app in a mode whose backend does not exist yet.
+    """`password` mode with no users, so nothing can authenticate against it.
 
-    Every mode but `none` currently resolves nobody, which makes this the cheapest way to
-    prove a gate is present on a route: if it were missing, the route would answer.
+    A mode that *can* authenticate but has nobody to authenticate as is the cheapest way to
+    prove a gate is present on a route: if the gate were missing, the route would answer.
     """
     app = create_app(settings.model_copy(update={"auth_mode": AuthMode.PASSWORD}))
     async for http in _serving(app, fake_kubernetes):
