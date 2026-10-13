@@ -77,6 +77,13 @@ class Settings(BaseSettings):
     #: refusable.
     oidc_login_seconds: float = 300.0
 
+    #: How long §20's audit history is kept. **Unset means forever, and that is the default
+    #: on purpose**: an audit trail that silently deletes itself is worse than one that grows,
+    #: because the first question an incident asks is what happened before the window you
+    #: kept. Setting this creates a TTL index, so choosing to discard history is a decision
+    #: somebody made rather than one they inherited.
+    audit_retention_days: float | None = None
+
     mongo_uri: str = "mongodb://localhost:27017"
     mongo_database: str = "apchi"
 

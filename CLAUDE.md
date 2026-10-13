@@ -32,6 +32,8 @@ app/
   sections/   catalogs, client_certificates, certificate_mapping, permissions,
               resource_groups, event_listeners
   adapters/   kubernetes, trino, mongo
+  auth/       identity, passwords, users, sessions, tokens, oidc, logins
+  audit/      §20's events: who changed what, and when
   api/        routers
 ```
 
