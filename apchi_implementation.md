@@ -1249,8 +1249,24 @@ update rather than a silent pass.
 configuring more than one requires `event-listener.config-files` in `config.properties`, which is
 Admin-owned Trino configuration Apchi does not write (§14). The Candidate therefore holds one
 listener and refuses a second, saying why. The Section is still modelled as a set of resources, so
-lifting the limit later changes the limit and not the model. Whoever owns
-`event-listener.config-files` is the decision that lifts it.
+lifting the limit later changes the limit and not the model.
+
+**The limit stays an Operator limit, even once an Admin can write `config.properties` raw**
+(§14). An Admin who sets `event-listener.config-files` gets what they asked for: Trino reads
+their listener files, Apchi keeps managing the one it mounts, and the Section still holds one.
+So a Cluster can be running listeners Apchi cannot see, and `GET /event-listeners` reports
+only Apchi's.
+
+That is accepted rather than overlooked, and it is the same shape as §17: Apchi does not detect
+drift, and this is drift an Admin created deliberately. The two alternatives are both worse.
+Refusing `config.properties` would remove the file most incident fixes need. Reading it, so the
+Section could permit as many listeners as the Admin configured, would have Apchi parsing a raw
+file it promised not to understand — the "no schema, if it works it works" contract of §14 does
+not survive Apchi making decisions from the contents.
+
+The precondition rejecting anything else mounted at `/etc/trino/event-listener.properties`
+stays, so an Admin's extra listeners live at other paths and the two never fight over the one
+file Apchi owns.
 
 **Rollout-required.** `EventListenerManager.loadEventListeners()` is guarded by a
 `compareAndSet` that permits exactly one call per process lifetime. There is no reload path.
@@ -1327,8 +1343,44 @@ Operator Apply.
 An Admin Apply **freezes the Candidate** exactly as an Operator Apply does: both mutate one
 Cluster, and the pipeline's guarantees depend on nothing else changing underneath.
 
-Still to decide: which files and properties may be targeted, and how secrets among these
-values are handled.
+### Raw files, not curated properties
+
+**An Admin writes a file path and its content, and Apchi delivers it.** No schema, no
+per-property model, no list of blessed settings: if Trino accepts it, it works; if it does not,
+Validation refuses it, and if the Cluster fails anyway, Auto Rollback puts it back.
+
+That is the whole point of an escape hatch. Curating the properties an Admin may set would
+mean predicting which ones an incident will need, and the cases this exists for are the ones
+nobody predicted. Trino's own configuration surface is large, versioned and changes between
+releases; a model of it in Apchi would be a second, worse copy that is wrong after every
+upgrade.
+
+It costs the Admin the safety net Operators get. A typo in a Section is a 422 at request time
+from a typed model; a typo in a raw file is a Validation failure minutes later. That trade is
+deliberate and it is why this surface is Admin-only.
+
+**All raw content is treated as secret.** Apchi cannot know which parts of a file an Admin
+wrote are credentials, so it assumes all of it is: delivered through a Secret rather than a
+ConfigMap, redacted wholesale from logs at every level, and — already true by invariant 9 —
+never recorded in a Snapshot. That answers the secret-handling question by refusing to guess.
+
+**Rolling back an Admin change needs the previous values.** Auto Rollback restores what the
+Cluster had, and for an Admin Apply that is not a Snapshot — Admin values never enter one. So
+the Admin document has to keep its pre-image for the duration of an Apply, which is the one
+thing this design requires that the §14 machinery does not already have.
+
+**Apchi's own generated files are not targetable.** The six Sections render files at known
+paths, and a raw file overwriting one of them would be worse than an escape hatch: overwriting
+the generated access-control rules would turn invariant 8's fail-closed authorization into a
+silently open Cluster, with the Operator's grants still displayed in the API. "Admin wins on
+conflict" governs a *property* an Admin sets inside a file Apchi generates; it does not extend
+to replacing the file. A raw file targeting an Apchi-owned path is refused by name.
+
+**Not every remaining path is reachable**, and that is a property of the deployment rather
+than a decision here. Apchi delivers a single file by mounting it (§16), and precondition 6
+already refuses a single-file mount whose parent is covered by a whole-directory mount. A
+deployment that mounts `/etc/trino` as one volume therefore cannot receive raw files there, and
+Apchi says so before applying rather than after.
 
 ## Maintenance Mode
 
@@ -1960,10 +2012,11 @@ Additional constraints:
 
 # 27. Open items
 
-- **Admin arbitrary configuration** — which files and properties may be targeted, and how
-  secrets among those values are handled (§14). Storage, precedence, validation, audit and
-  Snapshot scope are settled, and the Admin Apply that carries them is built — the preserved
-  mapping patterns of §13.3 are its first user.
+- ~~**Admin arbitrary configuration**~~ — **settled** (§14, "Raw files, not curated
+  properties"): an Admin writes a path and its content, all raw content is treated as secret,
+  Apchi-owned paths are refused by name, and rollback keeps the Admin document's pre-image for
+  the duration of an Apply. Not built; the preserved mapping patterns of §13.3 remain the only
+  user of the Admin Apply.
 - **Maintenance Mode mechanics** — behaviour when an Apply is already in flight. The endpoint
   and the persistence model are settled (§14).
 - **Certificate mapping migration** — the mechanism is built: a Cluster arriving with patterns
@@ -1975,10 +2028,18 @@ Additional constraints:
 - **Field-level models for Event Listeners** — settled for `http` and `kafka` (§13.6);
   `mysql` and `openlineage` pass through until someone needs them curated. Resource Groups
   are settled and fully typed (§13.5).
-- **Who owns `event-listener.config-files`**, which is what limits the Candidate to a single
-  Event Listener (§13.6). It is `config.properties`, so today it is Admin territory.
+- ~~**Who owns `event-listener.config-files`**~~ — **settled** (§13.6): it stays Admin
+  territory, and the Operator limit of one Event Listener stays too. An Admin who sets it gets
+  the listeners they configured; Apchi keeps managing the one file it mounts and the Section
+  keeps refusing a second. A Cluster may therefore run listeners Apchi cannot see, which is
+  accepted on §17's grounds — Apchi does not detect drift, and this is drift an Admin created
+  deliberately.
 
-- **Apchi's own disaster recovery** — Mongo is the single copy of all Snapshots and audit
-  history (§18).
+- ~~**Apchi's own disaster recovery**~~ — **out of scope.** §18 already puts operating that
+  MongoDB with the platform, and the same answer applies to losing it: Apchi is not in charge
+  of its own backups any more than it is of Trino's. What Apchi does provide is the one thing
+  a restored-or-lost database cannot tell you itself — the high-water mark lives in a
+  ConfigMap outside MongoDB, so an empty `snapshots` collection is distinguishable from a new
+  install and Adoption answers those two differently (§15).
 - **API policy** — breaking changes, deprecation, new versions.
 - **Draining** — deferred to Trino Gateway blue/green.
