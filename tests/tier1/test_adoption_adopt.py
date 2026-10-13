@@ -217,7 +217,7 @@ async def test_a_failed_adoption_leaves_no_snapshot_and_can_be_retried(
 
     assert failed["stage"] == "failed"
     assert failed["snapshot"] is None
-    assert (await applying_client.get("/api/v1/snapshots")).json() == []
+    assert (await applying_client.get("/api/v1/snapshots")).json()["items"] == []
 
     retried = await _settled(
         applying_client, (await applying_client.post(f"{BASE}/adopt")).json()["id"]

@@ -171,7 +171,9 @@ async def test_what_recovery_does_not_bring_back(
     started = await applying_client.post(f"{BASE}/adopt?discard_history_through=2")
     await _settled(applying_client, started.json()["id"])
 
-    numbers = [s["number"] for s in (await applying_client.get("/api/v1/snapshots")).json()]
+    numbers = [
+        s["number"] for s in (await applying_client.get("/api/v1/snapshots")).json()["items"]
+    ]
     assert numbers == [1], (
         "two Snapshots were committed and a re-adoption produces one. §11's Section Revert "
         "and Full Rollback have nothing behind them afterwards, which is what makes this "

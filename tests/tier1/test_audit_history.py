@@ -81,7 +81,7 @@ async def test_an_event_round_trips_with_every_field(client: AsyncClient) -> Non
     response = await client.get(AUDIT)
 
     assert response.status_code == 200, response.text
-    [event] = response.json()["events"]
+    [event] = response.json()["items"]
     assert event["actor"] == "jo"
     assert event["via"] == "token"
     assert event["token_id"] == "tok_123"
@@ -101,7 +101,7 @@ async def test_admin_is_a_category_and_carries_no_snapshot(client: AsyncClient) 
     change that alters the Cluster without appearing in any Snapshot."""
     await _store(client).record("root", "password", "admin", "updated", resource="jvm.config")
 
-    [event] = (await client.get(AUDIT)).json()["events"]
+    [event] = (await client.get(AUDIT)).json()["items"]
 
     assert event["category"] == "admin"
     assert event["snapshot"] is None
@@ -115,7 +115,7 @@ async def test_the_system_is_a_named_actor(client: AsyncClient) -> None:
 
     await _store(client).record(SYSTEM, "none", "pipeline", "rolled_back", snapshot=3)
 
-    [event] = (await client.get(AUDIT)).json()["events"]
+    [event] = (await client.get(AUDIT)).json()["items"]
 
     assert event["actor"] == "apchi"
     assert event["via"] == "none"
@@ -134,7 +134,7 @@ async def test_a_refusal_is_recorded_as_an_outcome_not_an_absence(client: AsyncC
         detail="the Candidate is frozen: Apply apply_1 is in flight",
     )
 
-    [event] = (await client.get(AUDIT)).json()["events"]
+    [event] = (await client.get(AUDIT)).json()["items"]
 
     assert event["outcome"] == "refused"
     assert "frozen" in event["detail"]
@@ -146,7 +146,7 @@ async def test_a_refusal_is_recorded_as_an_outcome_not_an_absence(client: AsyncC
 async def test_newest_first(client: AsyncClient) -> None:
     await _some(_store(client), 3)
 
-    events = (await client.get(AUDIT)).json()["events"]
+    events = (await client.get(AUDIT)).json()["items"]
 
     assert [e["resource"] for e in events] == ["catalog_2", "catalog_1", "catalog_0"]
 
@@ -161,7 +161,7 @@ async def test_a_page_boundary_neither_repeats_nor_skips(client: AsyncClient) ->
     for _ in range(10):
         params = {"limit": 3} | ({"before": cursor} if cursor else {})
         page = (await client.get(AUDIT, params=params)).json()
-        seen += [e["id"] for e in page["events"]]
+        seen += [e["id"] for e in page["items"]]
         cursor = page["next"]
         if cursor is None:
             break
@@ -185,9 +185,9 @@ async def test_a_page_boundary_holds_while_new_events_arrive(client: AsyncClient
         )
     second = (await client.get(AUDIT, params={"limit": 3, "before": first["next"]})).json()
 
-    overlap = {e["id"] for e in first["events"]} & {e["id"] for e in second["events"]}
+    overlap = {e["id"] for e in first["items"]} & {e["id"] for e in second["items"]}
     assert overlap == set(), "the second page repeated rows from the first"
-    assert [e["resource"] for e in second["events"]] == ["catalog_2", "catalog_1", "catalog_0"]
+    assert [e["resource"] for e in second["items"]] == ["catalog_2", "catalog_1", "catalog_0"]
 
 
 async def test_two_events_in_the_same_instant_still_page_exactly(client: AsyncClient) -> None:
@@ -217,7 +217,7 @@ async def test_two_events_in_the_same_instant_still_page_exactly(client: AsyncCl
     for _ in range(5):
         params = {"limit": 2} | ({"before": cursor} if cursor else {})
         page = (await client.get(AUDIT, params=params)).json()
-        seen += [e["id"] for e in page["events"]]
+        seen += [e["id"] for e in page["items"]]
         cursor = page["next"]
         if cursor is None:
             break
@@ -231,7 +231,7 @@ async def test_the_last_page_has_no_cursor(client: AsyncClient) -> None:
 
     page = (await client.get(AUDIT, params={"limit": 50})).json()
 
-    assert len(page["events"]) == 2
+    assert len(page["items"]) == 2
     assert page["next"] is None
 
 
@@ -246,7 +246,7 @@ async def test_an_empty_history_is_an_empty_page(client: AsyncClient) -> None:
     response = await client.get(AUDIT)
 
     assert response.status_code == 200, response.text
-    assert response.json() == {"events": [], "next": None}
+    assert response.json() == {"items": [], "next": None}
 
 
 # --- filters ------------------------------------------------------------------------------
@@ -270,7 +270,7 @@ async def test_filters_compose(client: AsyncClient) -> None:
         },
     )
 
-    assert [e["resource"] for e in response.json()["events"]] == ["wanted"]
+    assert [e["resource"] for e in response.json()["items"]] == ["wanted"]
 
 
 async def test_a_time_window_excludes_what_is_outside_it(client: AsyncClient) -> None:
@@ -296,7 +296,7 @@ async def test_a_time_window_excludes_what_is_outside_it(client: AsyncClient) ->
         AUDIT, params={"since": (datetime.now(UTC) - timedelta(days=1)).isoformat()}
     )
 
-    assert [e["resource"] for e in recent.json()["events"]] == ["recent"]
+    assert [e["resource"] for e in recent.json()["items"]] == ["recent"]
 
 
 async def test_an_unknown_category_is_refused_by_the_contract(client: AsyncClient) -> None:
@@ -321,7 +321,7 @@ async def test_an_operator_can_read_the_history(
     response = await as_operator.get(AUDIT)
 
     assert response.status_code == 200, response.text
-    assert [e["actor"] for e in response.json()["events"]] == ["sam"]
+    assert [e["actor"] for e in response.json()["items"]] == ["sam"]
 
 
 # --- no values, ever ----------------------------------------------------------------------

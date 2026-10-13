@@ -83,7 +83,7 @@ async def test_a_retried_apply_starts_one_apply(http: AsyncClient) -> None:
     assert second.status_code == 202, second.text
     assert second.json()["id"] == first.json()["id"], "the retry started a different Apply"
     assert second.headers.get("Idempotent-Replay") == "true"
-    assert len(await app.state.apply_store.list()) == 1, "a second Apply was started"
+    assert len((await app.state.apply_store.page()).items) == 1, "a second Apply was started"
 
 
 async def test_without_a_key_a_second_apply_is_a_second_apply(http: AsyncClient) -> None:
@@ -99,7 +99,7 @@ async def test_without_a_key_a_second_apply_is_a_second_apply(http: AsyncClient)
     while (await app.state.apply_store.in_flight()) is not None:
         pass
 
-    assert len(await app.state.apply_store.list()) == 2
+    assert len((await app.state.apply_store.page()).items) == 2
 
 
 # --- a retrying client gets a truthful answer ---------------------------------------------
@@ -220,7 +220,7 @@ async def test_a_retried_mint_does_not_mint_twice(http: AsyncClient) -> None:
 
     assert second.status_code == 409, second.text
     assert second.json()["code"] == "idempotent_secret_not_replayable"
-    assert len((await http.get(TOKENS)).json()) == 1, "the retry minted a second token"
+    assert len((await http.get(TOKENS)).json()["items"]) == 1, "the retry minted a second token"
 
 
 async def test_a_minted_secret_never_reaches_the_idempotency_collection(

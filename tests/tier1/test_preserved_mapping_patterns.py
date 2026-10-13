@@ -131,7 +131,7 @@ async def test_an_admin_apply_delivers_them_without_creating_a_snapshot(
     """Snapshots are the history of Operator configuration, and this changed none of it."""
     await applying_client.post("/api/v1/catalogs", json=CATALOG)
     await _apply(applying_client)
-    before = (await applying_client.get("/api/v1/snapshots")).json()
+    before = (await applying_client.get("/api/v1/snapshots")).json()["items"]
 
     await applying_client.put(
         "/api/v1/admin/certificate-mapping/preserved", json={"patterns": [LEGACY]}
@@ -140,7 +140,7 @@ async def test_an_admin_apply_delivers_them_without_creating_a_snapshot(
 
     assert record["stage"] == "succeeded", record
     assert record["snapshot"] is None
-    assert (await applying_client.get("/api/v1/snapshots")).json() == before
+    assert (await applying_client.get("/api/v1/snapshots")).json()["items"] == before
     assert LEGACY["pattern"] in [rule["pattern"] for rule in _rules(fake_kubernetes)]
 
 

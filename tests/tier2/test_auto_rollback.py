@@ -78,8 +78,8 @@ async def test_a_real_mid_apply_failure_returns_the_cluster_to_its_latest_snapsh
     assert "Access Denied" in record["failure_reason"]
     # The durable copy is back to the Snapshot: the failed Apply had already written it.
     assert set(await real_kubernetes.read_secret(CATALOG_SEED_SECRET)) == {"kept.properties"}
-    assert (await e2e_client.get("/api/v1/snapshots")).json()[0]["number"] == 1
-    assert len((await e2e_client.get("/api/v1/snapshots")).json()) == 1
+    assert (await e2e_client.get("/api/v1/snapshots")).json()["items"][0]["number"] == 1
+    assert len((await e2e_client.get("/api/v1/snapshots")).json()["items"]) == 1
 
 
 async def test_what_the_rollback_restored_survives_a_coordinator_restart(

@@ -241,7 +241,7 @@ async def test_recovery_creates_no_snapshot(
         await _kill_mid_apply(first, fake_kubernetes, "added.properties")
 
     async with _apchi(settings, fake_kubernetes, trino_cluster, trino_validation) as restarted:
-        snapshots = (await restarted.get("/api/v1/snapshots")).json()
+        snapshots = (await restarted.get("/api/v1/snapshots")).json()["items"]
 
     assert [snapshot["number"] for snapshot in snapshots] == [1]
 

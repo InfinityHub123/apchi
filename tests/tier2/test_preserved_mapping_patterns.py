@@ -75,7 +75,7 @@ async def test_an_admin_apply_delivers_them_and_commits_no_snapshot(
 ) -> None:
     """An Admin onboarding a Cluster cannot be made to wait for an Operator, and what they
     did is recorded as an Apply rather than as a Snapshot (section 14)."""
-    before = (await e2e_client.get("/api/v1/snapshots")).json()
+    before = (await e2e_client.get("/api/v1/snapshots")).json()["items"]
     await e2e_client.put(
         "/api/v1/admin/certificate-mapping/preserved", json={"patterns": [LEGACY_CN]}
     )
@@ -84,7 +84,7 @@ async def test_an_admin_apply_delivers_them_and_commits_no_snapshot(
 
     assert record["stage"] == "succeeded", record
     assert record["snapshot"] is None
-    assert (await e2e_client.get("/api/v1/snapshots")).json() == before
+    assert (await e2e_client.get("/api/v1/snapshots")).json()["items"] == before
     forward.restart()
     bob = Trino(host="127.0.0.1", port=forward.port, user="CN=bob,OU=data,O=acme")
     with pytest.raises(TrinoUserError, match="User bob cannot impersonate"):

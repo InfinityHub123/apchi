@@ -12,7 +12,8 @@ from fastapi import APIRouter, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import Authenticated, CallerDep, SettingsDep, TokenStoreDep
-from app.api.errors import NotFound, UnprocessablePayload
+from app.api.errors import NotFound, UnprocessablePayload, bad_cursor
+from app.api.pages import DEFAULT_LIMIT, BadCursor, BeforeParam, LimitParam, Page
 from app.auth.identity import ANONYMOUS
 from app.auth.tokens import Minted, Token
 from app.config import AuthMode
@@ -68,15 +69,23 @@ async def create_token(
     return await tokens.create(identity.subject, request.name, request.expires_in_days)
 
 
-@router.get("", response_model=list[Token], summary="Your tokens")
-async def list_tokens(identity: CallerDep, tokens: TokenStoreDep) -> list[Token]:
-    """Metadata only, and only yours.
+@router.get("", response_model=Page[Token], summary="Your tokens")
+async def list_tokens(
+    identity: CallerDep,
+    tokens: TokenStoreDep,
+    limit: LimitParam = DEFAULT_LIMIT,
+    before: BeforeParam = None,
+) -> Page[Token]:
+    """Metadata only, and only yours. Newest first.
 
     Revoked and expired ones are listed too: "what has been running as me, and what stopped"
     is the question this answers, and hiding the dead ones would leave an Operator unable to
     tell a token they revoked from one that never existed.
     """
-    return await tokens.owned_by(identity.subject)
+    try:
+        return await tokens.owned_by(identity.subject, limit=limit, before=before)
+    except BadCursor as bad:
+        raise bad_cursor() from bad
 
 
 @router.delete(

@@ -111,7 +111,7 @@ async def test_the_secret_is_never_recoverable(password_mode: AsyncClient) -> No
 
     assert minted["secret"] not in str(stored)
     assert stored["token_digest"] == digest(minted["secret"])
-    assert (await password_mode.get(TOKENS)).json()[0].get("secret") is None
+    assert (await password_mode.get(TOKENS)).json()["items"][0].get("secret") is None
 
 
 async def test_using_a_token_records_when(password_mode: AsyncClient) -> None:
@@ -124,7 +124,7 @@ async def test_using_a_token_records_when(password_mode: AsyncClient) -> None:
     await password_mode.get(ME, headers=_bearing(password_mode, minted["secret"]))
 
     listed = await password_mode.get(TOKENS, headers=_bearing(password_mode, minted["secret"]))
-    assert listed.json()[0]["last_used_at"] is not None
+    assert listed.json()["items"][0]["last_used_at"] is not None
 
 
 # --- the role is live -----------------------------------------------------------------------
@@ -192,7 +192,7 @@ async def test_revoking_is_recorded_rather_than_deleted(password_mode: AsyncClie
 
     await password_mode.delete(f"{TOKENS}/{minted['token']['id']}")
 
-    listed = (await password_mode.get(TOKENS)).json()
+    listed = (await password_mode.get(TOKENS)).json()["items"]
     assert len(listed) == 1
     assert listed[0]["revoked_at"] is not None
 
@@ -245,7 +245,7 @@ async def test_you_only_see_your_own_tokens(password_mode: AsyncClient) -> None:
     app = password_mode._transport.app  # type: ignore[attr-defined]
     await app.state.token_store.create("sam", "sams token")
 
-    listed = (await password_mode.get(TOKENS)).json()
+    listed = (await password_mode.get(TOKENS)).json()["items"]
 
     assert [t["name"] for t in listed] == ["jos token"]
 

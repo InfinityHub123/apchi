@@ -23,8 +23,6 @@ point -- deleting an audit trail should be a decision somebody made, not a defau
 inherited.
 """
 
-import base64
-import binascii
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -36,6 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pymongo import ASCENDING, DESCENDING
 from pymongo.asynchronous.database import AsyncDatabase
 
+from app.api.pages import BadCursor, Page, after, bounded, decode_cursor, encode_cursor
 from app.auth.identity import Via
 from app.sections import SectionName
 
@@ -144,44 +143,13 @@ class Entry:
     detail: str | None = None
 
 
-class Page(BaseModel):
-    """One page of history, newest first."""
-
-    events: list[AuditEvent]
-    next: str | None = Field(
-        default=None,
-        description=(
-            "Pass as `before` for the following page. Null when this is the last one. A "
-            "cursor rather than an offset: the collection grows at the head, and an offset "
-            "pager repeats or skips rows while it is being appended to."
-        ),
-    )
-
-
-def _cursor(at: datetime, identifier: str) -> str:
-    """Both halves of the sort key, so a page boundary is exact.
-
-    Sorting by time alone would be ambiguous between two events in the same instant -- two
-    resources changed in one request is the ordinary case, not a rare one -- and a boundary
-    that cannot distinguish them repeats or skips.
-    """
-    raw = f"{at.isoformat()}|{identifier}".encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
-
-
-def _decode(cursor: str) -> tuple[datetime, ObjectId] | None:
-    """None for anything unreadable, so a mangled cursor is a 422 the caller can act on
-    rather than a 500."""
+def _decode(cursor: str) -> tuple[datetime, ObjectId]:
+    """The cursor's two halves. Raises `BadCursor` for anything unreadable."""
+    at, identifier = decode_cursor(cursor, expected=2)
     try:
-        padded = cursor + "=" * (-len(cursor) % 4)
-        at, _, identifier = base64.urlsafe_b64decode(padded).decode().partition("|")
         return datetime.fromisoformat(at), ObjectId(identifier)
-    except (binascii.Error, InvalidId, UnicodeDecodeError, ValueError):
-        return None
-
-
-class BadCursor(ValueError):
-    """A `before` value that did not come from a previous page."""
+    except (InvalidId, ValueError) as bad:
+        raise BadCursor(cursor) from bad
 
 
 class AuditStore:
@@ -310,7 +278,7 @@ class AuditStore:
         until: datetime | None = None,
         limit: int = 50,
         before: str | None = None,
-    ) -> Page:
+    ) -> Page[AuditEvent]:
         """History newest first, filtered and paged.
 
         The keyset predicate is what makes the boundary exact: everything strictly older than
@@ -325,21 +293,21 @@ class AuditStore:
         if window:
             query["at"] = window
         if before is not None:
-            decoded = _decode(before)
-            if decoded is None:
-                raise BadCursor(before)
-            at, identifier = decoded
-            query["$or"] = [{"at": {"$lt": at}}, {"at": at, "_id": {"$lt": identifier}}]
+            at, identifier = _decode(before)
+            query.update(after("at", at, identifier))
 
         # One more than asked for, so "is there another page" is answered by what came back
         # rather than by a second count query that can disagree with it.
+        limit = bounded(limit)
         cursor = self._collection.find(query).sort([("at", DESCENDING), ("_id", DESCENDING)])
         documents = [document async for document in cursor.limit(limit + 1)]
         events = [self._as_event(document) for document in documents[:limit]]
         more = len(documents) > limit
         return Page(
-            events=events,
-            next=_cursor(events[-1].at, events[-1].id) if more and events else None,
+            items=events,
+            next=(
+                encode_cursor(events[-1].at.isoformat(), events[-1].id) if more and events else None
+            ),
         )
 
     async def _indexed_once(self) -> None:

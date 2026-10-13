@@ -129,7 +129,7 @@ async def test_auto_rollback_creates_no_snapshot(
     rolled_back: dict, snapshot_one: AsyncClient
 ) -> None:
     """The latest-Snapshot pointer never moves. Auto Rollback is not a Full Rollback."""
-    snapshots = (await snapshot_one.get("/api/v1/snapshots")).json()
+    snapshots = (await snapshot_one.get("/api/v1/snapshots")).json()["items"]
 
     assert [snapshot["number"] for snapshot in snapshots] == [1]
 

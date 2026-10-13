@@ -41,7 +41,7 @@ async def _events(client: AsyncClient, category: str | None = None) -> list[Audi
     if category is not None:
         params["category"] = category
     page = (await client.get(AUDIT, params=params)).json()
-    return [AuditEvent.model_validate(event) for event in page["events"]]
+    return [AuditEvent.model_validate(event) for event in page["items"]]
 
 
 def _store(client: AsyncClient) -> AuditStore:
@@ -165,7 +165,7 @@ async def test_a_successful_apply_records_the_snapshot_it_committed(
     assert event.outcome == "succeeded"
     assert event.snapshot == 1
     assert event.apply_id == apply_id
-    snapshots = (await applying_client.get("/api/v1/snapshots")).json()
+    snapshots = (await applying_client.get("/api/v1/snapshots")).json()["items"]
     assert event.snapshot == snapshots[0]["number"], (
         "the audit named a Snapshot that is not the one"
     )

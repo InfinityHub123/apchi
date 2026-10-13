@@ -116,8 +116,8 @@ async def test_the_seed_writes_no_snapshot_and_promotes_no_candidate(
 
     await applying_client.post(f"{BASE}/seed")
 
-    assert (await applying_client.get("/api/v1/snapshots")).json() == []
-    assert (await applying_client.get("/api/v1/applies")).json() == []
+    assert (await applying_client.get("/api/v1/snapshots")).json()["items"] == []
+    assert (await applying_client.get("/api/v1/applies")).json()["items"] == []
     assert (await applying_client.get("/api/v1/review")).json()["has_changes"] is False
 
 

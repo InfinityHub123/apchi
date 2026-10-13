@@ -15,14 +15,15 @@ from fastapi import APIRouter, Query
 
 from app.api.deps import AuditStoreDep
 from app.api.errors import UnprocessablePayload
-from app.audit.events import BadCursor, Category, Page
+from app.api.pages import BadCursor, Page
+from app.audit.events import AuditEvent, Category
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
 
-@router.get("", response_model=Page, summary="Who changed what, newest first")
+@router.get("", response_model=Page[AuditEvent], summary="Who changed what, newest first")
 async def list_events(
     audit: AuditStoreDep,
     category: Category | None = None,
@@ -33,7 +34,7 @@ async def list_events(
     before: str | None = Query(
         default=None, description="A `next` from a previous page. Omit for the newest page."
     ),
-) -> Page:
+) -> Page[AuditEvent]:
     """Answers *who changed what, and when*, which is a different question from what
     `GET /snapshots` answers.
 

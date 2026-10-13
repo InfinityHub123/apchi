@@ -375,7 +375,7 @@ async def _snapshots(
     validation: DockerContainer,
 ) -> list[dict]:
     async with _running(settings, kubernetes, cluster, validation) as client:
-        return list((await client.get("/api/v1/snapshots")).json())
+        return list((await client.get("/api/v1/snapshots")).json()["items"])
 
 
 @pytest.mark.parametrize("stage", ["rolling_out"])
