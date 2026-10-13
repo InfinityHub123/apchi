@@ -399,7 +399,8 @@ async def test_no_route_can_change_the_candidate_without_recording_it(
     -- one that works, which is why nobody would notice it. Checked for every mutating
     operation in the contract, whatever its category.
 
-    **Coverage of the Sections.** Every mutating operation on one of the six Sections must
+    **Coverage of the Sections and the pipeline.** Every mutating operation on one of the six
+    Sections, or on the Candidate as a whole, must
     produce an event either way: it succeeded and was derived from the diff, or it was refused
     and recorded as an attempt. 24 routes across all six, verified by disabling recording and
     watching every one of them appear here.
@@ -439,27 +440,34 @@ async def test_no_route_can_change_the_candidate_without_recording_it(
         recorded = len(await _events(as_operator)) > before_events
         if changed and not recorded:
             silent.append(f"{method.upper()} {path}")
-        if _is_section_route(path) and not recorded:
+        if _is_audited_route(path) and not recorded:
             unaudited_sections.append(f"{method.upper()} {path} -> {response.status_code}")
 
     assert silent == [], f"these changed the Candidate and recorded nothing: {silent}"
     assert unaudited_sections == [], (
-        f"these Section routes produced no audit event at all: {unaudited_sections}. Every "
+        f"these routes produced no audit event at all: {unaudited_sections}. Every "
         "Operator edit is recorded at CandidateStore.save, and every refusal at the error "
         "handler, so neither outcome should be silent."
     )
 
 
-def _is_section_route(path: str) -> bool:
-    """Whether a path belongs to one of the six Sections, read from the contract's own tags
-    so this agrees with what the audit code uses."""
+#: Audited, but not synchronously. See the walk's docstring.
+ASYNCHRONOUS = {"/api/v1/applies"}
+
+
+def _is_audited_route(path: str) -> bool:
+    """Whether a path's changes are audited at the moment the request returns.
+
+    Read from the contract's own tags, so this agrees with what the audit code uses rather
+    than with a second list that can drift from it.
+    """
+    if path in ASYNCHRONOUS:
+        return False
     contract: dict[str, Any] = json.loads(CONTRACT.read_text())
     for method, operation in contract["paths"][path].items():
         if method in {"post", "put", "patch", "delete"}:
-            return as_section_category(operation.get("tags", []))
+            category = category_of(operation.get("tags", []))
+            return category in ("pipeline",) or (
+                category is not None and as_section(category) is not None
+            )
     return False
-
-
-def as_section_category(tags: list[str]) -> bool:
-    category = category_of(tags)
-    return category is not None and as_section(category) is not None

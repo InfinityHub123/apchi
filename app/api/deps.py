@@ -211,7 +211,22 @@ CallerDep = Annotated[Identity, Depends(caller)]
 
 
 async def authenticated(identity: CallerDep) -> Identity:
-    """An identity, or 401. Every /api/v1 route carries this except /health."""
+    """An identity, or 401. Every /api/v1 route carries this except /health.
+
+    Also where the actor is handed to §20's audit, for the duration of the request.
+
+    Here rather than in `caller`, and here rather than in `operator_mutation_allowed`, for
+    two different reasons. Not the resolver, because a caller can be substituted -- tests do
+    it, and an actor set only inside the resolver would be lost by anything that provides an
+    identity another way. Not the mutation gate, because the gates do not all take an
+    identity: `POST /applies` carries `MutationsEnabled` and does its own freeze check so the
+    refusal can name the Apply in flight, so an `acting_as` there would have left every Apply
+    in the trail attributed to Apchi -- which is exactly what it did until a test caught it.
+
+    What is true of every auditable route is that something admitted the caller. That is this
+    and `admin_only`, and nothing reaches a Section or the pipeline without one of them.
+    """
+    acting_as(identity)
     return identity
 
 
@@ -224,7 +239,12 @@ async def admin_only(identity: CallerDep) -> Identity:
     Built on `caller` rather than beside `Authenticated`, so it *implies* authentication
     rather than offering an alternative to it: two independent dependencies where one implies
     the other is how a route ends up carrying only the weaker one.
+
+    Records the actor before the role check, so a refused Admin operation is attributed to
+    whoever attempted it. "Who tried to open this Cluster's permissions" is the question that
+    surface exists for (§141).
     """
+    acting_as(identity)
     if not identity.is_admin:
         raise Forbidden(
             f"This is an Admin operation and {identity.subject!r} is an Operator. Admins "
@@ -269,10 +289,7 @@ async def operator_mutation_allowed(
     All of it is one dependency rather than three, so a new mutating route cannot pick up
     part of the gate -- which is why the identity belongs in here rather than beside it.
     """
-    # Resolving the identity is the check; its *value* is the audit's concern (§20), and this
-    # is where it is handed over. Set before the two refusals below, so a refused mutation is
-    # recorded against whoever attempted it rather than against nobody.
-    acting_as(identity)
+    del identity  # resolving it is the check; `caller` has already handed it to the audit.
     await mutations_enabled(maintenance)
 
     running = await applies.in_flight()
