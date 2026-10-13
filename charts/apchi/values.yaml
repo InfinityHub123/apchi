@@ -103,6 +103,16 @@ audit:
   # by MongoDB without further warning. Choose it on purpose.
   retentionDays: ""
 
+# The most the configuration candidate may occupy. It is one MongoDB document by design,
+# and MongoDB caps a document at 16MB -- so this is a ceiling on everything staged across all
+# six sections together, not a quota per section.
+#
+# Below 16MB deliberately: BSON overhead means the serialised size is not the document size,
+# and there has to be room for the snapshot an apply makes of the same content. Raise it only
+# if you know what the overhead is for your data; an edit that crosses it is refused with
+# `candidate_too_large` naming the section that grew.
+candidateMaxBytes: 15728640
+
 service:
   type: ClusterIP
   port: 8000

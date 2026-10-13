@@ -12,10 +12,12 @@ the only record of whose work an Apply is shipping.
 from datetime import UTC, datetime
 from typing import Any
 
+from bson import encode as bson_encode
 from pydantic import BaseModel, Field
 from pymongo import ReturnDocument
 from pymongo.asynchronous.database import AsyncDatabase
 
+from app.api.errors import CandidateTooLarge
 from app.audit.actor import actor
 from app.audit.changes import Sections, changes_between
 from app.audit.events import Action, AuditStore, Category, Entry
@@ -55,10 +57,12 @@ class CandidateStore:
         database: AsyncDatabase[dict[str, Any]],
         snapshots: SnapshotStore,
         audit: AuditStore,
+        max_bytes: int = 15 * 1024 * 1024,
     ) -> None:
         self._collection = database["candidate"]
         self._snapshots = snapshots
         self._audit = audit
+        self._max_bytes = max_bytes
 
     async def load(self) -> Candidate:
         document = await self._collection.find_one({"_id": CANDIDATE_ID})
@@ -126,6 +130,10 @@ class CandidateStore:
         """
         candidate.updated_at = datetime.now(UTC)
         dumped = candidate.model_dump(mode="json")
+        # Before the write, so a Candidate that would not fit is refused with the stored one
+        # untouched. A 422 naming what grew, rather than the BSON failure an unguarded
+        # replace_one would raise on whichever edit happened to cross the line (#149).
+        _refuse_if_too_large(dumped, self._max_bytes)
         # `find_one_and_replace` rather than a read followed by a `replace_one`: the diff needs
         # the pre-image, and this returns it *from the write itself*. One round trip instead of
         # two, and the pre-image is the document this call replaced rather than one another
@@ -236,4 +244,43 @@ def _from_snapshot(number: int | None) -> str:
     """
     return (
         "restored from an empty baseline" if number is None else f"restored from Snapshot {number}"
+    )
+
+
+#: MongoDB's hard limit on one document. Here for the error message rather than for the check:
+#: what Apchi refuses at is `candidate_max_bytes`, which sits below this deliberately.
+BSON_DOCUMENT_LIMIT = 16 * 1024 * 1024
+
+
+def _refuse_if_too_large(dumped: dict[str, Any], max_bytes: int) -> None:
+    """Refuse a Candidate that would not fit in one document.
+
+    The Candidate is one MongoDB document (ADR-0002, §4) and MongoDB caps a document at 16MB,
+    so this ceiling is a consequence of that design rather than a policy. Nothing capped the
+    *number* of catalogs, rules or certificates -- only the length of individual fields -- so
+    before this a Cluster that accumulated enough configuration met `replace_one` failing
+    inside a routine edit and reported a 500.
+
+    Measured as BSON, not as JSON text: the limit is on the encoded document, and the two
+    differ by enough to matter at this size.
+
+    The message names the largest Section, because "your configuration is too big" is not
+    actionable and "permissions is 12.4 MB of it" is.
+    """
+    encoded = len(bson_encode({"_id": CANDIDATE_ID, **dumped}))
+    if encoded <= max_bytes:
+        return
+    sections: dict[str, Any] = dumped.get("sections") or {}
+    largest = max(
+        sections,
+        key=lambda name: len(bson_encode({"s": sections[name]})),
+        default="the Candidate",
+    )
+    raise CandidateTooLarge(
+        f"This change would make the Configuration Candidate {encoded / 1048576:.1f} MB, over "
+        f"the {max_bytes / 1048576:.0f} MB limit. The Candidate is one MongoDB document "
+        f"(§4) and MongoDB caps a document at {BSON_DOCUMENT_LIMIT // 1048576} MB, so this is "
+        f"a ceiling on everything staged together rather than on any one Section. "
+        f"{largest!r} is the largest. Remove something before adding more.",
+        details=[{"section": largest, "problem": "the Candidate is at its size limit"}],
     )

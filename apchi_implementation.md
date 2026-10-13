@@ -99,6 +99,19 @@ storing the resource and complaining later (§6).
 an Apply — every engine, not only the one that restarts Trino — so what is committed is what
 was verified.
 
+**One Candidate means one document, and one document has a ceiling.** MongoDB caps a document
+at 16MB, so that is the limit on everything staged across all six Sections *together* — not a
+quota per Section and not a policy anybody chose. Apchi refuses an edit that would cross it,
+below 16MB to leave room for BSON overhead and for the Snapshot an Apply makes of the same
+content, with a `candidate_too_large` naming the Section that grew. Without that guard the
+failure arrives as a rejected write on whichever edit happens to cross the line, which tells
+the Operator nothing; an import is refused whole for the same reason it is refused on
+validation.
+
+This is also the real answer to how large a Section can get. §19 names permissions and catalogs
+as likely-large collections, and their limit is this ceiling rather than response size —
+paginating them would make a Candidate that cannot be saved merely easier to read.
+
 ## Candidate lifecycle
 
 - **Apply succeeds** — the Candidate is re-derived from the new Snapshot; its diff is empty.
