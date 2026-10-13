@@ -89,6 +89,10 @@ spec:
             - name: APCHI_AUDIT_RETENTION_DAYS
               value: {{ .Values.audit.retentionDays | quote }}
             {{- end }}
+            # `int` before quoting: YAML parses a large plain number as a float, and
+            # `quote` alone renders it as 1.572864e+07, which the settings parser rejects.
+            - name: APCHI_CANDIDATE_MAX_BYTES
+              value: {{ .Values.candidateMaxBytes | int | quote }}
             - name: APCHI_MONGO_URI
               value: {{ include "apchi.mongoUri" . | quote }}
             - name: APCHI_MONGO_DATABASE

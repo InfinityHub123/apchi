@@ -84,6 +84,15 @@ class Settings(BaseSettings):
     #: somebody made rather than one they inherited.
     audit_retention_days: float | None = None
 
+    #: The most the Configuration Candidate may occupy. It is **one** MongoDB document by
+    #: design (ADR-0002, §4), and MongoDB caps a document at 16MB -- so this is a property of
+    #: that decision rather than an arbitrary number.
+    #:
+    #: Below 16MB on purpose. BSON overhead means the serialised size is not the document
+    #: size, and a guard that only just fits is a guard that sometimes does not. The headroom
+    #: also leaves room for the Snapshot an Apply makes of the same content.
+    candidate_max_bytes: int = 15 * 1024 * 1024
+
     mongo_uri: str = "mongodb://localhost:27017"
     mongo_database: str = "apchi"
 

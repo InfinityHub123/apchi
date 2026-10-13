@@ -93,6 +93,18 @@ class UnknownConnector(UnprocessablePayload):
     code = "unknown_connector"
 
 
+class CandidateTooLarge(UnprocessablePayload):
+    """The Candidate would not fit in one MongoDB document.
+
+    Its own code because it is the one refusal an Operator cannot fix by correcting the
+    request: the payload is fine and the Cluster is fine, and what is wrong is the total.
+    A client that can branch on this can tell the Operator to remove something rather than
+    retry.
+    """
+
+    code = "candidate_too_large"
+
+
 def request_id(request: Request) -> str:
     existing = getattr(request.state, "request_id", None)
     if existing:

@@ -65,7 +65,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # The Candidate store writes §20's audit at its one chokepoint, so it needs the audit
     # store rather than each route carrying one.
     app.state.candidate_store = CandidateStore(
-        app.state.mongo.database, app.state.snapshot_store, app.state.audit_store
+        app.state.mongo.database,
+        app.state.snapshot_store,
+        app.state.audit_store,
+        max_bytes=settings.candidate_max_bytes,
     )
     app.state.apply_store = ApplyStore(app.state.mongo.database)
     app.state.validation_store = ValidationStore(app.state.mongo.database)
