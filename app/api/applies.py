@@ -13,7 +13,8 @@ from fastapi import APIRouter, Header, Request, status
 from fastapi.sse import EventSourceResponse, format_sse_event
 
 from app.api.deps import ApplyStoreDep, CandidateStoreDep, MutationsEnabled
-from app.api.errors import Conflict, NotFound
+from app.api.errors import Conflict, NotFound, bad_cursor
+from app.api.pages import DEFAULT_LIMIT, BadCursor, BeforeParam, LimitParam, Page
 from app.pipeline.applies import ApplyRecord, ApplyRunner
 
 router = APIRouter(prefix="/applies", tags=["applies"])
@@ -47,9 +48,17 @@ async def start_apply(
     return record
 
 
-@router.get("", response_model=list[ApplyRecord], summary="Past and current Applies")
-async def list_applies(applies: ApplyStoreDep) -> list[ApplyRecord]:
-    return await applies.list()
+@router.get("", response_model=Page[ApplyRecord], summary="Past and current Applies")
+async def list_applies(
+    store: ApplyStoreDep,
+    limit: LimitParam = DEFAULT_LIMIT,
+    before: BeforeParam = None,
+) -> Page[ApplyRecord]:
+    """Newest first, by when it started."""
+    try:
+        return await store.page(limit=limit, before=before)
+    except BadCursor as bad:
+        raise bad_cursor() from bad
 
 
 @router.get("/{apply_id}", response_model=ApplyRecord, summary="One Apply's progress")

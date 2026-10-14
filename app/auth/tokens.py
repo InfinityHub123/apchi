@@ -26,6 +26,15 @@ from pydantic import BaseModel, Field
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import PyMongoError
 
+from app.api.pages import (
+    DEFAULT_LIMIT,
+    BadCursor,
+    Page,
+    after,
+    bounded,
+    decode_cursor,
+    encode_cursor,
+)
 from app.audit.actor import actor
 from app.audit.events import Action, AuditStore
 
@@ -156,9 +165,38 @@ class TokenStore:
             {"_id": token_id}, {"$set": {"last_used_at": datetime.now(UTC)}}
         )
 
-    async def owned_by(self, owner: str) -> list[Token]:
-        cursor = self._collection.find({"owner": owner}).sort("created_at", 1)
-        return [self._as_token(document) async for document in cursor]
+    async def owned_by(
+        self, owner: str, limit: int = DEFAULT_LIMIT, before: str | None = None
+    ) -> Page[Token]:
+        """One owner's tokens, newest first.
+
+        Reversed from the ascending order this used to answer in, so it matches every other
+        paginated collection: a cursor over an ascending sort would page *backwards* through
+        history, which is not what `before` means anywhere else here.
+
+        Pagination buys nothing operationally -- a person has a handful of tokens -- and it is
+        here because answering a bare array from one collection and an envelope from the rest
+        is exactly the inconsistency §19 asks us to avoid.
+        """
+        limit = bounded(limit)
+        query: dict[str, Any] = {"owner": owner}
+        if before is not None:
+            at, identifier = _created_in(before)
+            query.update(after("created_at", at, identifier))
+        cursor = (
+            self._collection.find(query).sort([("created_at", -1), ("_id", -1)]).limit(limit + 1)
+        )
+        documents = [document async for document in cursor]
+        items = [self._as_token(document) for document in documents[:limit]]
+        more = len(documents) > limit
+        return Page(
+            items=items,
+            next=(
+                encode_cursor(items[-1].created_at.isoformat(), items[-1].id)
+                if more and items
+                else None
+            ),
+        )
 
     async def get(self, token_id: str) -> Token | None:
         document = await self._collection.find_one({"_id": token_id})
@@ -203,3 +241,11 @@ class TokenStore:
         every listing."""
         await self._collection.create_index("token_digest", unique=True)
         await self._collection.create_index("owner")
+
+
+def _created_in(cursor: str) -> tuple[datetime, str]:
+    at, identifier = decode_cursor(cursor, expected=2)
+    try:
+        return datetime.fromisoformat(at), identifier
+    except ValueError as bad:
+        raise BadCursor(cursor) from bad

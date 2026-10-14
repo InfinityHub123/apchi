@@ -1383,14 +1383,13 @@
         "title": "Outcome",
         "type": "string"
       },
-      "Page": {
-        "description": "One page of history, newest first.",
+      "Page_ApplyRecord_": {
         "properties": {
-          "events": {
+          "items": {
             "items": {
-              "$ref": "#/components/schemas/AuditEvent"
+              "$ref": "#/components/schemas/ApplyRecord"
             },
-            "title": "Events",
+            "title": "Items",
             "type": "array"
           },
           "next": {
@@ -1402,14 +1401,126 @@
                 "type": "null"
               }
             ],
-            "description": "Pass as `before` for the following page. Null when this is the last one. A cursor rather than an offset: the collection grows at the head, and an offset pager repeats or skips rows while it is being appended to.",
+            "description": "Pass as `before` for the following page. Null when this is the last one. A cursor rather than an offset: these collections grow at the head, and an offset pager repeats or skips rows while they are being appended to.",
             "title": "Next"
           }
         },
         "required": [
-          "events"
+          "items"
         ],
-        "title": "Page",
+        "title": "Page[ApplyRecord]",
+        "type": "object"
+      },
+      "Page_AuditEvent_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AuditEvent"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass as `before` for the following page. Null when this is the last one. A cursor rather than an offset: these collections grow at the head, and an offset pager repeats or skips rows while they are being appended to.",
+            "title": "Next"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "Page[AuditEvent]",
+        "type": "object"
+      },
+      "Page_Snapshot_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Snapshot"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass as `before` for the following page. Null when this is the last one. A cursor rather than an offset: these collections grow at the head, and an offset pager repeats or skips rows while they are being appended to.",
+            "title": "Next"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "Page[Snapshot]",
+        "type": "object"
+      },
+      "Page_Token_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Token"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass as `before` for the following page. Null when this is the last one. A cursor rather than an offset: these collections grow at the head, and an offset pager repeats or skips rows while they are being appended to.",
+            "title": "Next"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "Page[Token]",
+        "type": "object"
+      },
+      "Page_ValidationRecord_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationRecord"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass as `before` for the following page. Null when this is the last one. A cursor rather than an offset: these collections grow at the head, and an offset pager repeats or skips rows while they are being appended to.",
+            "title": "Next"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "Page[ValidationRecord]",
         "type": "object"
       },
       "PermissionEnforcement": {
@@ -4015,8 +4126,41 @@
     },
     "/api/v1/applies": {
       "get": {
+        "description": "Newest first, by when it started.",
         "operationId": "list_applies_api_v1_applies_get",
         "parameters": [
+          {
+            "description": "How many to return, at most 500.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "How many to return, at most 500.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A `next` from a previous page. Omit for the newest page. Opaque: it names a position in this collection's order and should be passed back unmodified.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A `next` from a previous page. Omit for the newest page. Opaque: it names a position in this collection's order and should be passed back unmodified.",
+              "title": "Before"
+            }
+          },
           {
             "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
             "in": "header",
@@ -4041,11 +4185,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/ApplyRecord"
-                  },
-                  "title": "Response List Applies Api V1 Applies Get",
-                  "type": "array"
+                  "$ref": "#/components/schemas/Page_ApplyRecord_"
                 }
               }
             },
@@ -4432,7 +4572,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Page"
+                  "$ref": "#/components/schemas/Page_AuditEvent_"
                 }
               }
             },
@@ -7637,8 +7777,41 @@
     },
     "/api/v1/snapshots": {
       "get": {
+        "description": "Newest first, by Snapshot number.",
         "operationId": "list_snapshots_api_v1_snapshots_get",
         "parameters": [
+          {
+            "description": "How many to return, at most 500.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "How many to return, at most 500.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A `next` from a previous page. Omit for the newest page. Opaque: it names a position in this collection's order and should be passed back unmodified.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A `next` from a previous page. Omit for the newest page. Opaque: it names a position in this collection's order and should be passed back unmodified.",
+              "title": "Before"
+            }
+          },
           {
             "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
             "in": "header",
@@ -7663,11 +7836,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/Snapshot"
-                  },
-                  "title": "Response List Snapshots Api V1 Snapshots Get",
-                  "type": "array"
+                  "$ref": "#/components/schemas/Page_Snapshot_"
                 }
               }
             },
@@ -7843,9 +8012,41 @@
     },
     "/api/v1/tokens": {
       "get": {
-        "description": "Metadata only, and only yours.\n\nRevoked and expired ones are listed too: \"what has been running as me, and what stopped\"\nis the question this answers, and hiding the dead ones would leave an Operator unable to\ntell a token they revoked from one that never existed.",
+        "description": "Metadata only, and only yours. Newest first.\n\nRevoked and expired ones are listed too: \"what has been running as me, and what stopped\"\nis the question this answers, and hiding the dead ones would leave an Operator unable to\ntell a token they revoked from one that never existed.",
         "operationId": "list_tokens_api_v1_tokens_get",
         "parameters": [
+          {
+            "description": "How many to return, at most 500.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "How many to return, at most 500.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A `next` from a previous page. Omit for the newest page. Opaque: it names a position in this collection's order and should be passed back unmodified.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A `next` from a previous page. Omit for the newest page. Opaque: it names a position in this collection's order and should be passed back unmodified.",
+              "title": "Before"
+            }
+          },
           {
             "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
             "in": "header",
@@ -7870,11 +8071,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/Token"
-                  },
-                  "title": "Response List Tokens Api V1 Tokens Get",
-                  "type": "array"
+                  "$ref": "#/components/schemas/Page_Token_"
                 }
               }
             },
@@ -8043,8 +8240,41 @@
     },
     "/api/v1/validations": {
       "get": {
+        "description": "Newest first, by when it started.",
         "operationId": "list_validations_api_v1_validations_get",
         "parameters": [
+          {
+            "description": "How many to return, at most 500.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "How many to return, at most 500.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A `next` from a previous page. Omit for the newest page. Opaque: it names a position in this collection's order and should be passed back unmodified.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A `next` from a previous page. Omit for the newest page. Opaque: it names a position in this collection's order and should be passed back unmodified.",
+              "title": "Before"
+            }
+          },
           {
             "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
             "in": "header",
@@ -8069,11 +8299,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/ValidationRecord"
-                  },
-                  "title": "Response List Validations Api V1 Validations Get",
-                  "type": "array"
+                  "$ref": "#/components/schemas/Page_ValidationRecord_"
                 }
               }
             },

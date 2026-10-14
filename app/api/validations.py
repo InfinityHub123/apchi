@@ -10,7 +10,8 @@ Unlike an Apply it does not freeze the Candidate, because it changes nothing.
 from fastapi import APIRouter, Request, status
 
 from app.api.deps import CandidateStoreDep, ValidationStoreDep
-from app.api.errors import NotFound
+from app.api.errors import NotFound, bad_cursor
+from app.api.pages import DEFAULT_LIMIT, BadCursor, BeforeParam, LimitParam, Page
 from app.pipeline.validations import ValidationRecord, ValidationRunner
 
 router = APIRouter(prefix="/validations", tags=["validations"])
@@ -32,9 +33,17 @@ async def start_validation(
     return record
 
 
-@router.get("", response_model=list[ValidationRecord], summary="Past and current Validations")
-async def list_validations(validations: ValidationStoreDep) -> list[ValidationRecord]:
-    return await validations.list()
+@router.get("", response_model=Page[ValidationRecord], summary="Past and current Validations")
+async def list_validations(
+    store: ValidationStoreDep,
+    limit: LimitParam = DEFAULT_LIMIT,
+    before: BeforeParam = None,
+) -> Page[ValidationRecord]:
+    """Newest first, by when it started."""
+    try:
+        return await store.page(limit=limit, before=before)
+    except BadCursor as bad:
+        raise bad_cursor() from bad
 
 
 @router.get("/{validation_id}", response_model=ValidationRecord, summary="One Validation's verdict")

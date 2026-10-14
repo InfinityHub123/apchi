@@ -105,6 +105,21 @@ class CandidateTooLarge(UnprocessablePayload):
     code = "candidate_too_large"
 
 
+def bad_cursor() -> UnprocessablePayload:
+    """One refusal for a `before` that did not come from a previous page, so every paginated
+    collection says the same thing about the same mistake (§19).
+
+    Here rather than in `api/pages` because that module must not import this one: `errors`
+    reaches `audit.events` through the audit category table, and `audit.events` pages its own
+    history -- so the import would close a cycle.
+    """
+    return UnprocessablePayload(
+        "That `before` value did not come from a previous page's `next`. Omit it to start "
+        "from the newest entries.",
+        details=[{"property": "before", "problem": "not a cursor this endpoint issued"}],
+    )
+
+
 def request_id(request: Request) -> str:
     existing = getattr(request.state, "request_id", None)
     if existing:

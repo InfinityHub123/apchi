@@ -87,7 +87,7 @@ def _store(client: AsyncClient) -> AuditStore:
 
 async def _events(client: AsyncClient) -> list[AuditEvent]:
     page = (await client.get(AUDIT, params={"limit": 200})).json()
-    return [AuditEvent.model_validate(event) for event in page["events"]]
+    return [AuditEvent.model_validate(event) for event in page["items"]]
 
 
 PROPERTIES = {"connection-url": "jdbc:postgresql://db.internal:5432/finance"}

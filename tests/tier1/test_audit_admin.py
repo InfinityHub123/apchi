@@ -39,7 +39,7 @@ OPERATOR = Identity(subject="jo", role="operator", via="password")
 
 async def _events(client: AsyncClient, category: str = "admin") -> list[AuditEvent]:
     page = (await client.get(AUDIT, params={"limit": 200, "category": category})).json()
-    return [AuditEvent.model_validate(event) for event in page["events"]]
+    return [AuditEvent.model_validate(event) for event in page["items"]]
 
 
 async def _serving(

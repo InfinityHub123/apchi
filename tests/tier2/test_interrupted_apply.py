@@ -91,7 +91,7 @@ async def test_a_restart_mid_apply_leaves_nothing_behind_for_the_next_pod(
         record = (await restarted.get(f"/api/v1/applies/{apply_id}")).json()
         assert record["interrupted"] is True
         assert record["rollback"] == "succeeded", record.get("failure_reason")
-        assert (await restarted.get("/api/v1/snapshots")).json()[0]["number"] == 1
+        assert (await restarted.get("/api/v1/snapshots")).json()["items"][0]["number"] == 1
 
     assert set(await real_kubernetes.read_secret(CATALOG_SEED_SECRET)) == {"kept.properties"}
 

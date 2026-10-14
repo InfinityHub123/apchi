@@ -59,7 +59,9 @@ async def test_snapshots_are_numbered_sequentially(applying_client: AsyncClient)
     await applying_client.post("/api/v1/catalogs", json={**MEMORY, "name": "second"})
     await _apply(applying_client)
 
-    numbers = [s["number"] for s in (await applying_client.get("/api/v1/snapshots")).json()]
+    numbers = [
+        s["number"] for s in (await applying_client.get("/api/v1/snapshots")).json()["items"]
+    ]
 
     assert numbers == [2, 1]
 

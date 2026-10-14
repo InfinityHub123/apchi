@@ -3,16 +3,25 @@
 from fastapi import APIRouter
 
 from app.api.deps import SnapshotStoreDep
-from app.api.errors import NotFound
+from app.api.errors import NotFound, bad_cursor
+from app.api.pages import DEFAULT_LIMIT, BadCursor, BeforeParam, LimitParam, Page
 from app.pipeline.configuration import Configuration, of_snapshot
 from app.pipeline.snapshots import Snapshot
 
 router = APIRouter(prefix="/snapshots", tags=["snapshots"])
 
 
-@router.get("", response_model=list[Snapshot], summary="Committed Snapshots, newest first")
-async def list_snapshots(snapshots: SnapshotStoreDep) -> list[Snapshot]:
-    return await snapshots.list()
+@router.get("", response_model=Page[Snapshot], summary="Committed Snapshots, newest first")
+async def list_snapshots(
+    snapshots: SnapshotStoreDep,
+    limit: LimitParam = DEFAULT_LIMIT,
+    before: BeforeParam = None,
+) -> Page[Snapshot]:
+    """Newest first, by Snapshot number."""
+    try:
+        return await snapshots.page(limit=limit, before=before)
+    except BadCursor as bad:
+        raise bad_cursor() from bad
 
 
 @router.get("/{number}", response_model=Snapshot, summary="One Snapshot's configuration")

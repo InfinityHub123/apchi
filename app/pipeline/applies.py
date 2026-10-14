@@ -20,6 +20,15 @@ from pydantic import BaseModel, Field, computed_field
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import PyMongoError
 
+from app.api.pages import (
+    DEFAULT_LIMIT,
+    BadCursor,
+    Page,
+    after,
+    bounded,
+    decode_cursor,
+    encode_cursor,
+)
 from app.audit.actor import SYSTEM_ACTOR, actor
 from app.audit.events import Action, AuditStore, Category, Outcome
 from app.auth.identity import Identity
@@ -159,9 +168,33 @@ class ApplyStore:
         document = await self._collection.find_one({"_id": apply_id})
         return None if document is None else self._as_record(document)
 
-    async def list(self, limit: int = 50) -> list[ApplyRecord]:
-        cursor = self._collection.find().sort("started_at", -1).limit(limit)
-        return [self._as_record(document) async for document in cursor]
+    async def page(
+        self, limit: int = DEFAULT_LIMIT, before: str | None = None
+    ) -> Page[ApplyRecord]:
+        """Newest first, by when it started.
+
+        `started_at` is not unique -- two can begin in the same instant -- so the cursor
+        carries the id beside it and the boundary stays exact.
+        """
+        limit = bounded(limit)
+        query: dict[str, Any] = {}
+        if before is not None:
+            at, identifier = _started_in(before)
+            query.update(after("started_at", at, identifier))
+        cursor = (
+            self._collection.find(query).sort([("started_at", -1), ("_id", -1)]).limit(limit + 1)
+        )
+        documents = [document async for document in cursor]
+        items = [self._as_record(document) for document in documents[:limit]]
+        more = len(documents) > limit
+        return Page(
+            items=items,
+            next=(
+                encode_cursor(items[-1].started_at.isoformat(), items[-1].id)
+                if more and items
+                else None
+            ),
+        )
 
     async def in_flight(self) -> ApplyRecord | None:
         """The Apply currently freezing the Candidate, if any."""
@@ -488,3 +521,12 @@ async def _restore_after_interruption(
         logger.info("cluster returned to its latest snapshot after a restart")
     finally:
         apply_id_var.reset(token)
+
+
+def _started_in(cursor: str) -> tuple[datetime, str]:
+    """The instant and the id a cursor names."""
+    at, identifier = decode_cursor(cursor, expected=2)
+    try:
+        return datetime.fromisoformat(at), identifier
+    except ValueError as bad:
+        raise BadCursor(cursor) from bad

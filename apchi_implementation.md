@@ -1738,15 +1738,35 @@ no client branches on, so the default stands.
 
 ## Collections
 
-One consistent pagination, filtering and sorting model.
+One envelope, one set of parameter names, one cursor semantics:
 
 ```
-GET /api/v1/certificates?status=expiring
 GET /api/v1/snapshots?limit=20
-GET /api/v1/catalogs?connector=iceberg
+GET /api/v1/applies?limit=20&before=<cursor>
+GET /api/v1/audit?category=catalogs&actor=jo&limit=20
+
+{ "items": [...], "next": "<cursor>" }
 ```
 
-Likely large collections: snapshots, audit events, permissions, certificates, catalogs.
+**Keyset cursors, not offsets.** These collections grow at the *head*, so an offset pager
+silently repeats rows it has already shown while new ones arrive above them. A cursor names
+the last row seen and cannot drift. It carries the sort key **and** the id, because two
+Applies can begin in the same instant and a boundary that cannot tell them apart repeats or
+skips one.
+
+The sort key itself is per collection and documented per collection — snapshots by number,
+applies and validations by when they started — because no single key is meaningful across all
+of them. Cursors are opaque: a client that parses one breaks when a collection changes how it
+sorts.
+
+**Paginated:** `snapshots`, `applies`, `validations`, `audit`, `tokens`. Append-only, and
+nothing removes them.
+
+**Not paginated, by decision:** the six Sections. Five of them live inside the single
+Candidate document (§4), which is loaded whole on every read — so slicing it afterwards saves
+nothing — and §21 needs every Section at once to show the full diff before an Apply. A
+paginated Section is a diff assembled from several round trips that can disagree with each
+other. Their real limit is the 16MB document ceiling of §4, not response size.
 
 # 20. Audit history
 

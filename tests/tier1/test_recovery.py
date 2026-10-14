@@ -142,7 +142,9 @@ async def test_reverting_never_modifies_the_snapshot_it_restores_from(
 
     after = (await applying_client.get("/api/v1/snapshots/1")).json()
     assert after == before
-    assert [s["number"] for s in (await applying_client.get("/api/v1/snapshots")).json()] == [
+    assert [
+        s["number"] for s in (await applying_client.get("/api/v1/snapshots")).json()["items"]
+    ] == [
         3,
         2,
         1,

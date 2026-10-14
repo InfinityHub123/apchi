@@ -145,7 +145,7 @@ async def test_the_rollback_creates_no_snapshot(
 
     await _apply(snapshot_one)
 
-    snapshots = (await snapshot_one.get("/api/v1/snapshots")).json()
+    snapshots = (await snapshot_one.get("/api/v1/snapshots")).json()["items"]
     assert [snapshot["number"] for snapshot in snapshots] == [1]
 
 
