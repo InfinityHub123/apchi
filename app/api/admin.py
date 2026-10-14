@@ -19,10 +19,11 @@ from app.api.deps import (
     AdminStoreDep,
     ApplyStoreDep,
     CandidateStoreDep,
+    ClusterDep,
     MaintenanceStoreDep,
     MutationsEnabled,
 )
-from app.api.errors import Conflict
+from app.api.errors import Conflict, NotFound
 from app.pipeline.applies import ApplyRecord, ApplyRunner
 from app.pipeline.configuration import (
     AdminImport,
@@ -31,10 +32,12 @@ from app.pipeline.configuration import (
     of_cluster,
 )
 from app.pipeline.maintenance import EngagedBy, MaintenanceState
+from app.pipeline.raw_files import refuse_unusable
 from app.sections import SectionName
 from app.sections.admin import MAX_PRESERVED_MAPPINGS, AdminValues
 from app.sections.certificate_mapping.model import CertificateMappingWrite
 from app.sections.certificate_mapping.section import validate_patterns
+from app.sections.raw_files import RawFile, RawFileWrite, normalised
 
 logger = logging.getLogger(__name__)
 
@@ -278,3 +281,100 @@ async def import_configuration(
     return AdminConfiguration(
         base_snapshot=candidate.base_snapshot, sections=candidate.sections, admin=values
     )
+
+
+# --- raw files: a path and its content, with no schema over it (§14) -------------------------
+
+
+@router.get(
+    "/files",
+    response_model=list[RawFile],
+    summary="Raw files an Admin has written",
+)
+async def list_raw_files(admin: AdminStoreDep) -> list[RawFile]:
+    """Which paths exist and how big they are. **Not their content.**
+
+    Deliberately not a round trip. Apchi cannot tell which part of an arbitrary file an Admin
+    wrote is a credential, so it treats all of it as one -- and a listing that handed it back
+    would make every reader of this endpoint a reader of those secrets. What "what have we
+    injected here" actually asks is which paths exist, and that is answerable.
+    """
+    values = await admin.load()
+    return [
+        RawFile(path=path, bytes=len(content.encode()))
+        for path, content in sorted(values.raw_files.items())
+    ]
+
+
+@router.put(
+    "/files/{path:path}",
+    response_model=RawFile,
+    summary="Write a raw Trino configuration file",
+    dependencies=[MutationsEnabled],
+)
+async def write_raw_file(
+    path: str,
+    write: RawFileWrite,
+    admin: AdminStoreDep,
+    cluster: ClusterDep,
+) -> RawFile:
+    """Delivered as written. Apchi does not parse, validate or merge the contents.
+
+    If Trino accepts it, it works; if not, Validation refuses it at the next Admin Apply; if
+    the Cluster fails anyway, Auto Rollback puts it back (§14). What *is* checked here is the
+    path, because three things about a path are Apchi's business and all three are cheaper to
+    refuse now than to discover during an Apply -- see `pipeline/raw_files.py`.
+
+    Nothing reaches the Cluster until an Admin Apply, exactly as with every other Admin value.
+    """
+    values = cluster.admin
+    normalised_path = await refuse_unusable(
+        _leading_slash(path),
+        cluster.kubernetes,
+        cluster.settings,
+        existing=len([p for p in values.raw_files if p != _leading_slash(path)]),
+    )
+    updated = values.model_copy(
+        update={"raw_files": {**values.raw_files, normalised_path: write.content}}
+    )
+    await admin.save(updated)
+    # The path and the size, never the content -- the same rule the listing follows, and the
+    # reason this content is kept out of the log by origin rather than by field name.
+    logger.warning(
+        "admin wrote a raw file",
+        extra={"raw_file": normalised_path, "raw_file_bytes": len(write.content.encode())},
+    )
+    return RawFile(path=normalised_path, bytes=len(write.content.encode()))
+
+
+@router.delete(
+    "/files/{path:path}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove a raw file",
+    dependencies=[MutationsEnabled],
+)
+async def delete_raw_file(path: str, admin: AdminStoreDep) -> None:
+    """Removes it from the Admin document. The next Admin Apply removes the file.
+
+    Removing the mount matters as much as removing the content: Trino refuses to start when a
+    file it was told to read is missing, and a subPath mount of an absent Secret key becomes a
+    directory it dies on (§13.6). That is the next slice's job; this one stops Apchi
+    delivering it.
+    """
+    values = await admin.load()
+    wanted = normalised(_leading_slash(path))
+    if wanted not in values.raw_files:
+        raise NotFound(f"No raw file at {wanted!r}.")
+    remaining = {p: c for p, c in values.raw_files.items() if p != wanted}
+    await admin.save(values.model_copy(update={"raw_files": remaining}))
+    logger.warning("admin removed a raw file", extra={"raw_file": wanted})
+
+
+def _leading_slash(path: str) -> str:
+    """FastAPI hands a `:path` parameter over without its leading slash.
+
+    So `/api/v1/admin/files//etc/trino/x` arrives as `etc/trino/x`, and a path that is not
+    absolute fails the config-directory check for the wrong reason -- it would be refused as
+    "not under /etc/trino" when what is wrong is the URL.
+    """
+    return path if path.startswith("/") else f"/{path}"

@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 _DOCUMENT_ID = "admin"
 
+#: The document `save` replaced, kept so a rollback has something to restore (§14).
+_PREVIOUS_ID = "admin_previous"
+
 
 #: The one Admin value whose *content* reaches the audit. It is a policy switch rather than
 #: configuration: it decides whether a Trino Identity may reach only what it has been granted,
@@ -57,6 +60,11 @@ class AdminStore:
         in one place.
         """
         dumped = values.model_dump(mode="json")
+        # The pre-image is kept, not just read for the audit diff. Auto Rollback restores
+        # what the Cluster had, and for an Admin Apply that is not a Snapshot -- Admin values
+        # never enter one (invariant 9). So the only thing a rollback can restore from is the
+        # previous document, and a replace that did not keep it leaves nothing to go back to
+        # (§14, #158).
         previous = await self._collection.find_one_and_replace(
             {"_id": _DOCUMENT_ID},
             {"_id": _DOCUMENT_ID, **dumped},
@@ -67,8 +75,32 @@ class AdminStore:
             "admin values saved",
             extra={"preserved_mappings": len(values.preserved_certificate_mappings)},
         )
-        await self._record(_as_values(previous).model_dump(mode="json"), dumped)
+        before = _as_values(previous)
+        await self._keep(before)
+        await self._record(before.model_dump(mode="json"), dumped)
         return values
+
+    async def _keep(self, previous: AdminValues) -> None:
+        """Remember the document this write replaced, for exactly one step back.
+
+        One step, not a history: a rollback undoes the Apply that just failed, and §11 is
+        explicit that reaching further back is a Full Rollback through the pipeline rather
+        than an undo stack. A second copy is all a rollback can use, so a second copy is all
+        there is.
+        """
+        await self._collection.replace_one(
+            {"_id": _PREVIOUS_ID},
+            {"_id": _PREVIOUS_ID, **previous.model_dump(mode="json")},
+            upsert=True,
+        )
+
+    async def previous(self) -> AdminValues:
+        """What the Admin document held before the last write.
+
+        The defaults when nothing has been replaced yet, which is the honest answer: a Cluster
+        whose Admin values have never been written has none to go back to.
+        """
+        return _as_values(await self._collection.find_one({"_id": _PREVIOUS_ID}))
 
     async def _record(self, before: dict[str, Any], after: dict[str, Any]) -> None:
         """One event per Admin value that moved, naming the value and never its content.
