@@ -31,12 +31,25 @@ class EventListenerWrite(BaseModel):
 
 
 class EventListenerUpdate(BaseModel):
-    """A partial update. The name is immutable; renaming is a remove and an add."""
+    """A partial update, by named fields (§19).
+
+    Omitted means unchanged; present means replaces. Neither field can be cleared, so null is
+    refused rather than read as "leave it alone". The name is immutable -- renaming is a
+    remove and an add.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    type: ListenerType | None = None
-    properties: dict[str, Any] | None = None
+    type: ListenerType | None = Field(
+        default=None, description="Omit to keep the current type. It cannot be cleared."
+    )
+    properties: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "**Replaces** the property map rather than merging into it. Omit to keep the "
+            "current ones; they cannot be cleared."
+        ),
+    )
 
 
 class EventListener(BaseModel):

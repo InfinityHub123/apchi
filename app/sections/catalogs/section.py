@@ -130,9 +130,26 @@ def update_catalog(stored: Resources, name: str, update: CatalogUpdate) -> Catal
     if name not in stored:
         raise NotFound(f"No Catalog named {name!r} in the Configuration Candidate.")
     current = stored[name]
-    connector = update.connector or current["connector"]
-    raw = current["properties"] if update.properties is None else update.properties
-    certificate = update.certificate or current.get("certificate")
+    # `model_fields_set` rather than a None check, because None is two different answers:
+    # "leave it alone" when the field was omitted, and "clear it" when it was sent as null.
+    # Treating them alike made `certificate` set-once -- the only way to remove one was to
+    # drop the Catalog and create it again, which in Trino is a DROP CATALOG (#155).
+    sent = update.model_fields_set
+    connector = update.connector if "connector" in sent else current["connector"]
+    raw = update.properties if "properties" in sent else current["properties"]
+    certificate = update.certificate if "certificate" in sent else current.get("certificate")
+    if connector is None:
+        raise UnprocessablePayload(
+            "A Catalog cannot have its connector removed -- a Catalog without one is not a "
+            "Catalog. Send a connector, or omit the field to keep the current one.",
+            details=[{"property": "connector", "problem": "cannot be cleared"}],
+        )
+    if raw is None:
+        raise UnprocessablePayload(
+            "A Catalog cannot have its properties removed. Send the properties you want, "
+            "or omit the field to keep the current ones.",
+            details=[{"property": "properties", "problem": "cannot be cleared"}],
+        )
     properties = _validated(connector, raw)
     if certificate:
         _certificate_usable(connector, properties, certificate)

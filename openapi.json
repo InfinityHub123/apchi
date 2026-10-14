@@ -534,7 +534,7 @@
       },
       "CatalogUpdate": {
         "additionalProperties": false,
-        "description": "A partial update. The name is immutable; renaming is a drop and a create,\nwhich is a different and more destructive operation.",
+        "description": "A partial update, by named fields (\u00a719).\n\nOmitted means unchanged; present means replaces; `null` clears the fields that can be\ncleared. The name is immutable -- renaming is a drop and a create, which is a different\nand more destructive operation.",
         "properties": {
           "certificate": {
             "anyOf": [
@@ -548,6 +548,7 @@
                 "type": "null"
               }
             ],
+            "description": "Omit to keep the current Client Certificate. Send null to stop using one -- the certificate itself is unaffected and stays available to other Catalogs.",
             "title": "Certificate"
           },
           "connector": {
@@ -560,6 +561,7 @@
                 "type": "null"
               }
             ],
+            "description": "Omit to keep the current connector. It cannot be cleared.",
             "title": "Connector"
           },
           "properties": {
@@ -572,6 +574,7 @@
                 "type": "null"
               }
             ],
+            "description": "**Replaces** the property map rather than merging into it: a PATCH naming one property discards the others. Omit to keep the current ones; they cannot be cleared.",
             "title": "Properties"
           }
         },
@@ -978,7 +981,7 @@
       },
       "EventListenerUpdate": {
         "additionalProperties": false,
-        "description": "A partial update. The name is immutable; renaming is a remove and an add.",
+        "description": "A partial update, by named fields (\u00a719).\n\nOmitted means unchanged; present means replaces. Neither field can be cleared, so null is\nrefused rather than read as \"leave it alone\". The name is immutable -- renaming is a\nremove and an add.",
         "properties": {
           "properties": {
             "anyOf": [
@@ -990,6 +993,7 @@
                 "type": "null"
               }
             ],
+            "description": "**Replaces** the property map rather than merging into it. Omit to keep the current ones; they cannot be cleared.",
             "title": "Properties"
           },
           "type": {
@@ -1002,6 +1006,7 @@
                 "type": "null"
               }
             ],
+            "description": "Omit to keep the current type. It cannot be cleared.",
             "title": "Type"
           }
         },

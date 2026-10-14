@@ -105,8 +105,25 @@ def update_event_listener(
     if name not in stored:
         raise NotFound(f"No Event Listener named {name!r} in the Configuration Candidate.")
     current = stored[name]
-    listener_type = update.type or current["type"]
-    raw = current["properties"] if update.properties is None else update.properties
+    # Omitted and null are different answers, read from `model_fields_set` -- the same rule
+    # the Catalogs Section follows, because §19 asks for PATCH semantics that are consistent
+    # across every endpoint and not merely correct on each (#155). Neither field here is
+    # clearable, so null is refused rather than silently treated as "leave it alone".
+    sent = update.model_fields_set
+    listener_type = update.type if "type" in sent else current["type"]
+    raw = update.properties if "properties" in sent else current["properties"]
+    if listener_type is None:
+        raise UnprocessablePayload(
+            "An Event Listener cannot have its type removed. Send a type, or omit the field "
+            "to keep the current one.",
+            details=[{"property": "type", "problem": "cannot be cleared"}],
+        )
+    if raw is None:
+        raise UnprocessablePayload(
+            "An Event Listener cannot have its properties removed. Send the properties you "
+            "want, or omit the field to keep the current ones.",
+            details=[{"property": "properties", "problem": "cannot be cleared"}],
+        )
     stored[name] = {"type": listener_type, "properties": _validated(listener_type, raw)}
     return _as_listener(name, stored[name])
 
