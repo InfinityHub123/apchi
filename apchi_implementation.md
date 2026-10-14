@@ -1687,8 +1687,34 @@ semantics.
 
 ## Idempotency
 
-Clients retry after network failures. `POST /applies`, catalog creation, certificate upload
-and rollback all need an idempotency mechanism so a retry does not duplicate work.
+Clients retry after network failures. An **opt-in `Idempotency-Key` header** makes a retry
+safe: the first call with a key does the work, and a repeat returns that call's recorded
+response with `Idempotent-Replay: true` rather than doing it again. Honoured on every mutating
+method; reusing a key for a different request is refused rather than answered.
+
+Opt-in because the header is the only thing that can tell a deliberate retry from a second,
+genuinely intended request. Two Applies in a row is a reasonable thing to want.
+
+Keys are scoped by **actor and key together** — two Operators picking the same key must not
+collide, and certainly must not be shown each other's responses — and expire, because a key is
+only interesting for as long as a retry might arrive.
+
+The four endpoints this was asked for are not equally at risk, and the difference is worth
+recording. `POST /applies` already refuses while an Apply is in flight, so its open window is
+a retry arriving after the first *finished*: that starts a second Apply, which means a second
+rollout, a second Snapshot and running queries terminated (§7.4). The creates already refuse a
+duplicate name with a `409`, which is safe but gives a retrying client an error for work it
+succeeded at. Rollback stages deterministically from a Snapshot and was already idempotent.
+
+**A failed request releases its key**, so a retry after a failure runs. Replaying a failure
+would make a key a way to get permanently stuck.
+
+**`POST /tokens` claims its key but stores no response.** It answers with a secret Apchi
+deliberately never keeps (§19's authentication, invariant: a digest and nothing else), so
+caching it to replay would make that store the one place a live token exists. The claim is the
+part that matters — a retry does not mint a second credential — and the retry is told the
+credential cannot be shown again and that nothing ran twice, which is true and more useful
+than a second token nobody expected.
 
 ## Errors
 

@@ -256,6 +256,13 @@ a trail that silently deletes itself is worse than one that grows.
 Operators can read it, not only admins — an operator about to apply needs to see whose changes
 they are shipping.
 
+**A retry is safe if you ask for it.** Send an `Idempotency-Key` on any change and the first
+call does the work; a repeat returns that call's response with `Idempotent-Replay: true`
+instead of doing it again. It matters most on apply: without a key, a retry that arrives after
+the first apply finished starts a second one, which means a second rollout and running queries
+terminated. Minting a token is the one case where the response cannot be replayed — the secret
+is shown once and never stored — so a retry is told so rather than handed a second credential.
+
 It does not detect drift. Changes made to the cluster outside Apchi are not noticed,
 reconciled or reported (§17) — which is why catalog DDL is restricted to Apchi's own identity,
 since a `DROP CATALOG` issued elsewhere would delete a file Apchi believes it owns.
