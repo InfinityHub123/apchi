@@ -39,14 +39,34 @@ class CatalogWrite(BaseModel):
 
 
 class CatalogUpdate(BaseModel):
-    """A partial update. The name is immutable; renaming is a drop and a create,
-    which is a different and more destructive operation."""
+    """A partial update, by named fields (§19).
+
+    Omitted means unchanged; present means replaces; `null` clears the fields that can be
+    cleared. The name is immutable -- renaming is a drop and a create, which is a different
+    and more destructive operation.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    connector: ConnectorName | None = None
-    properties: dict[str, Any] | None = None
-    certificate: CertificateName | None = None
+    connector: ConnectorName | None = Field(
+        default=None,
+        description="Omit to keep the current connector. It cannot be cleared.",
+    )
+    properties: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "**Replaces** the property map rather than merging into it: a PATCH naming one "
+            "property discards the others. Omit to keep the current ones; they cannot be "
+            "cleared."
+        ),
+    )
+    certificate: CertificateName | None = Field(
+        default=None,
+        description=(
+            "Omit to keep the current Client Certificate. Send null to stop using one -- "
+            "the certificate itself is unaffected and stays available to other Catalogs."
+        ),
+    )
 
 
 class Catalog(BaseModel):

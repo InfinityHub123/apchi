@@ -1681,9 +1681,25 @@ every other path requires an identity.
 
 ## PATCH semantics
 
-Must be explicitly defined and consistent across every endpoint — whether a partial body
-updates only the named fields, uses JSON Merge Patch, uses JSON Patch, or uses custom
-semantics.
+**Named fields.** Not JSON Merge Patch and not JSON Patch: a body names the fields it changes.
+
+- **Omitted means unchanged.**
+- **Present means replaces.** Including `properties`, which is replaced **wholesale** rather
+  than merged — a PATCH naming one property discards the others. That is the sharp edge, and
+  it is the defensible of the two readings: the usual outcome is a `422` naming the property a
+  Catalog now lacks, rather than a silently truncated Catalog that cannot start. A client has
+  to be told, so the contract says so on the body itself.
+- **`null` means clear**, for the fields that can be cleared. A field that cannot — a Catalog's
+  connector, anything's `properties` — refuses by name rather than treating null as "leave it
+  alone".
+- **The name is immutable.** Renaming is a drop and a create, which is a different and more
+  destructive operation; the models forbid the field rather than ignoring it.
+
+That third rule is the one with history. Omitted and null both arrive as `None`, so code that
+checks for `None` cannot tell them apart — which made a Catalog's client certificate
+**set-once**: the only way to remove one was to drop the Catalog and create it again, and in
+Trino that is a `DROP CATALOG`. The distinction comes from which fields a request actually
+set, not from the values it sent.
 
 ## Idempotency
 
