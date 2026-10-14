@@ -118,6 +118,14 @@
             "maxItems": 20,
             "title": "Preserved Certificate Mappings",
             "type": "array"
+          },
+          "raw_files": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Raw Trino configuration files, by path. Delivered as written; Apchi does not parse or validate the contents. Never returned with their content.",
+            "title": "Raw Files",
+            "type": "object"
           }
         },
         "title": "AdminValues",
@@ -1686,6 +1694,44 @@
           "source"
         ],
         "title": "Provenance",
+        "type": "object"
+      },
+      "RawFile": {
+        "additionalProperties": false,
+        "description": "A raw file as it is listed back. **Without its content.**\n\nDeliberately not a round trip. Apchi cannot tell which part of an arbitrary file is a\ncredential, so it treats all of it as one and does not hand it back -- an Admin who needs\nto know what is in a file reads it from the Cluster, where it is a file. What a listing\nanswers is which paths exist and how big they are, which is what the question \"what have\nwe injected here\" actually means.",
+        "properties": {
+          "bytes": {
+            "description": "The content's size. Its value is deliberately not here.",
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "bytes"
+        ],
+        "title": "RawFile",
+        "type": "object"
+      },
+      "RawFileWrite": {
+        "additionalProperties": false,
+        "description": "What an Admin sends. The path is in the URL; this is the content.",
+        "properties": {
+          "content": {
+            "description": "The file's exact contents. Apchi does not parse, validate or merge it -- it is delivered as written and Trino decides. Treated as a secret in its entirety, so it is never logged and never returned by a listing.",
+            "maxLength": 262144,
+            "title": "Content",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "RawFileWrite",
         "type": "object"
       },
       "ResourceChange": {
@@ -3822,6 +3868,245 @@
           }
         },
         "summary": "The full configuration: the Sections and the Admin values",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/files": {
+      "get": {
+        "description": "Which paths exist and how big they are. **Not their content.**\n\nDeliberately not a round trip. Apchi cannot tell which part of an arbitrary file an Admin\nwrote is a credential, so it treats all of it as one -- and a listing that handed it back\nwould make every reader of this endpoint a reader of those secrets. What \"what have we\ninjected here\" actually asks is which paths exist, and that is answerable.",
+        "operationId": "list_raw_files_api_v1_admin_files_get",
+        "parameters": [
+          {
+            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RawFile"
+                  },
+                  "title": "Response List Raw Files Api V1 Admin Files Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated, but not an Admin."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Raw files an Admin has written",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/files/{path}": {
+      "delete": {
+        "description": "Removes it from the Admin document. The next Admin Apply removes the file.\n\nRemoving the mount matters as much as removing the content: Trino refuses to start when a\nfile it was told to read is missing, and a subPath mount of an absent Secret key becomes a\ndirectory it dies on (\u00a713.6). That is the next slice's job; this one stops Apchi\ndelivering it.",
+        "operationId": "delete_raw_file_api_v1_admin_files__path__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated, but not an Admin."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove a raw file",
+        "tags": [
+          "admin"
+        ]
+      },
+      "put": {
+        "description": "Delivered as written. Apchi does not parse, validate or merge the contents.\n\nIf Trino accepts it, it works; if not, Validation refuses it at the next Admin Apply; if\nthe Cluster fails anyway, Auto Rollback puts it back (\u00a714). What *is* checked here is the\npath, because three things about a path are Apchi's business and all three are cheaper to\nrefuse now than to discover during an Apply -- see `pipeline/raw_files.py`.\n\nNothing reaches the Cluster until an Admin Apply, exactly as with every other Admin value.",
+        "operationId": "write_raw_file_api_v1_admin_files__path__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RawFileWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RawFile"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated, but not an Admin."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Write a raw Trino configuration file",
         "tags": [
           "admin"
         ]

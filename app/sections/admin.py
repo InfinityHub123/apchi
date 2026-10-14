@@ -13,9 +13,11 @@ with an irreversible-feeling morning after it, so it is an Admin's to make and a
 time -- an Operator should not be able to close a Cluster by editing configuration, and
 Apchi should not do it to them on an upgrade.
 
-The document is typed rather than free-form. Section 14's wider escape hatch -- arbitrary
-properties written into arbitrary files -- is still open; what is settled is modelled here and
-nothing else.
+The document carries both shapes now. The typed values below are what Apchi understands and
+generates against; `raw_files` is §14's escape hatch, where an Admin writes a path and content
+and Apchi forms no opinion about it. The two are deliberately not the same mechanism: a typed
+value is validated, merged into a generator and reasoned about, where a raw file is delivered
+as written and Trino decides.
 
 The preserved values are the shape Adoption needs (§15). A Cluster being onboarded has
 configuration Apchi's models cannot express -- access-control rules of kinds it does not
@@ -57,6 +59,19 @@ class AdminValues(BaseModel):
             "working beneath the Operator's grants while the grants catch up. Keyed by the "
             "block they belong to -- the blocks Apchi generates, and the ones it does not "
             "model at all. An Admin removes them when the migration is done."
+        ),
+    )
+    #: §14's escape hatch, keyed by the path each file is delivered at. Every value is
+    #: treated as a secret in its entirety -- Apchi cannot know which part of an arbitrary
+    #: file is a credential, so none of it is logged and none of it is returned by a listing.
+    #:
+    #: Keyed by path rather than a list so that writing the same path twice replaces rather
+    #: than accumulates, which is what a file means.
+    raw_files: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Raw Trino configuration files, by path. Delivered as written; Apchi does not "
+            "parse or validate the contents. Never returned with their content."
         ),
     )
     preserved_certificate_mappings: list[CertificateMappingWrite] = Field(
