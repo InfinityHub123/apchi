@@ -48,17 +48,26 @@ def test_the_suite_starts_from_what_the_manifests_ship(settings: Settings) -> No
     assert divergence_at_session_start() == []
 
 
-async def test_a_clean_cluster_is_left_alone(
+async def test_checking_the_baseline_changes_nothing(
     settings: Settings, real_kubernetes: RealKubernetes
 ) -> None:
-    """The restore ends in a coordinator restart. Paying that on every run would make the
-    whole suite slower to avoid a problem it does not have."""
+    """`_divergence` compares and never corrects, which is what lets a clean cluster be left
+    completely alone -- the restore ends in a coordinator restart, and paying that on every
+    run would make the suite slower to avoid a problem it does not have.
+
+    The property is about the *check*, so it holds whether or not the cluster happens to be
+    clean right now. The earlier version asserted the cluster **was** clean, which is not a
+    fact this test can establish: the per-test reset restores each Secret to how it found it
+    at setup rather than to the manifest, so anything earlier in the shard that moved the
+    catalog seed left it moved. That assertion passed on the luck of the sharding and failed
+    the day a new file changed it.
+    """
     before = await real_kubernetes.rollout_state("trino-coordinator")
 
-    assert _divergence(settings) == [], "already at baseline, so nothing to do"
+    _divergence(settings)
 
     after = await real_kubernetes.rollout_state("trino-coordinator")
-    assert after.generation == before.generation, "the pod template was never touched"
+    assert after.generation == before.generation, "checking the baseline touched the template"
 
 
 def test_a_cluster_a_dead_run_dirtied_is_detected_and_restored(settings: Settings) -> None:

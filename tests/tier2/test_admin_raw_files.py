@@ -20,6 +20,7 @@ from app.config import Settings
 from tests.tier2.conftest import (
     ForwardedKubernetes,
     PortForward,
+    _restore_baseline,
     kubectl,
     mounted_paths,
     running_apchi,
@@ -150,3 +151,11 @@ async def test_trino_reads_a_raw_config_properties(
         "Trino started cleanly with a config.properties it should have rejected, which means "
         f"it never read the file Apchi delivered: {record}"
     )
+
+    # Put the Cluster back, because this test deliberately broke it. Auto Rollback restores
+    # Sections from the latest Snapshot, which is not the same as the manifests the suite
+    # starts from -- so the catalog seed can be left differing from `deploy/trino-dev`, and
+    # every later test in this shard would inherit that. A test that breaks a Cluster on
+    # purpose is the one that should pay for putting it back, rather than leaving the rest of
+    # the shard to tolerate it.
+    _restore_baseline(settings)
