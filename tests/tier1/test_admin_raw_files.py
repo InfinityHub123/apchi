@@ -302,3 +302,56 @@ async def test_an_operator_cannot_reach_these_routes(as_operator: AsyncClient) -
     removed = await as_operator.delete(f"{FILES}/etc/trino/extra.properties")
 
     assert [listed.status_code, written.status_code, removed.status_code] == [403, 403, 403]
+
+
+# --- a deployment that cannot take a raw file at all --------------------------------------
+
+
+async def test_a_whole_directory_deployment_refuses_every_path_and_names_the_alternative(
+    as_admin: AsyncClient, fake_kubernetes: FakeKubernetes
+) -> None:
+    """The shape the official `trino/trino` chart uses, and the one limit §14 cannot design
+    away (#161).
+
+    A raw file's path is the Admin's to choose, which makes it a single-file mount by nature;
+    a deployment mounting the whole of `/etc/trino` as one volume cannot take one inside it,
+    and runc fails the container with "not a directory" before Trino runs. There is no
+    directory to move it into without removing the thing being asked for, so the only honest
+    answer is to refuse and say what to use instead.
+
+    The message is asserted, not just the status. An Admin mid-incident who is told "no" and
+    nothing else has been handed a dead end; the chart's own `additionalConfigProperties` is
+    the same capability by the route that deployment provides.
+    """
+    fake_kubernetes.pod_spec["containers"][0]["volumeMounts"].append(
+        {"name": "etc-trino", "mountPath": "/etc/trino"}
+    )
+    fake_kubernetes.pod_spec["volumes"].append(
+        {"name": "etc-trino", "configMap": {"name": "trino-coordinator"}}
+    )
+
+    refused = await _write(as_admin, "/etc/trino/extra.properties")
+
+    assert refused.status_code == 422, refused.text
+    message = refused.json()["message"]
+    assert "not a directory" in message
+    assert "additionalConfigProperties" in message, "the refusal names no alternative"
+    assert "official-trino-chart" in message, "the refusal points at no documentation"
+
+
+async def test_config_properties_is_refused_there_too(
+    as_admin: AsyncClient, fake_kubernetes: FakeKubernetes
+) -> None:
+    """The case that matters most, and the one that can never work on this shape: on such a
+    deployment `config.properties` *is* the chart's own ConfigMap, so there is nothing for
+    Apchi to replace."""
+    fake_kubernetes.pod_spec["containers"][0]["volumeMounts"].append(
+        {"name": "etc-trino", "mountPath": "/etc/trino"}
+    )
+    fake_kubernetes.pod_spec["volumes"].append(
+        {"name": "etc-trino", "configMap": {"name": "trino-coordinator"}}
+    )
+
+    refused = await _write(as_admin, "/etc/trino/config.properties")
+
+    assert refused.status_code == 422, refused.text

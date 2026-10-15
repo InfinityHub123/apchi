@@ -362,6 +362,18 @@ class ResourceGroupsSection:
         # no harmless rendering -- an empty rules file makes Trino reject every query that
         # matches no selector, and inventing a catch-all group would mean inventing a
         # concurrency limit on the Operator's behalf (#125).
+        #
+        # The **state**, not the transition, and that distinction was got wrong once. Scoping
+        # it to the transition looks kinder -- an Apply touching only catalogs would stop
+        # being blocked by a Section nobody asked about -- but it is unsafe: `by_secret`
+        # writes each Secret whole, so an Apply with this Section empty writes an empty
+        # Secret, the mounted directory loses the file `resource-groups.config-file` names,
+        # and the next restart leaves a coordinator that cannot come back. Apchi would have
+        # deleted the Admin's own seeded file on its way past.
+        #
+        # Nor does it block a legitimate state: Trino will not start unless that file exists
+        # (§16), so a running Cluster in this mode always has rules, and a Candidate that
+        # does not is one waiting to be adopted (§15).
         if cluster.settings.resource_groups_properties_from_deployment and is_empty(desired):
             failures.append(ValidationFailure(section=SECTION, reason=CANNOT_EMPTY))
 
