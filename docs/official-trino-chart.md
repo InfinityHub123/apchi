@@ -50,16 +50,22 @@ additionalConfigProperties:
   - event-listener.config-files=/etc/trino/event-listener/event-listener.properties
   - http-server.authentication.insecure.user-mapping.file=/etc/trino/user-mapping/user-mapping.json
 
-coordinator:
-  # Apchi's five Secrets, each as a whole directory. No subPath anywhere: a subPath mount
-  # never receives updates, so Apchi would write a file and Trino would never see the change.
-  secretMounts:
-    - {name: apchi-access-control,      secretName: trino-access-control,      path: /etc/trino/access-control}
-    - {name: apchi-client-certificates, secretName: trino-client-certificates, path: /etc/trino/certs}
-    - {name: apchi-user-mapping,        secretName: trino-user-mapping,        path: /etc/trino/user-mapping}
-    - {name: apchi-resource-groups,     secretName: trino-resource-groups,     path: /etc/trino/resource-groups}
-    - {name: apchi-event-listener,      secretName: trino-event-listener,      path: /etc/trino/event-listener}
+# Apchi's five Secrets, each as a whole directory. No subPath anywhere: a subPath mount never
+# receives updates, so Apchi would write a file and Trino would never see the change.
+#
+# Top level, not under `coordinator`. `additionalConfigProperties` above reaches the worker
+# ConfigMap as well as the coordinator's, and Trino validates every path property on every
+# node -- so a coordinator-only mount gives workers the properties without the files and they
+# refuse to start with "file does not exist". Client certificates have to be on workers anyway
+# (ADR-0005).
+secretMounts:
+  - {name: apchi-access-control,      secretName: trino-access-control,      path: /etc/trino/access-control}
+  - {name: apchi-client-certificates, secretName: trino-client-certificates, path: /etc/trino/certs}
+  - {name: apchi-user-mapping,        secretName: trino-user-mapping,        path: /etc/trino/user-mapping}
+  - {name: apchi-resource-groups,     secretName: trino-resource-groups,     path: /etc/trino/resource-groups}
+  - {name: apchi-event-listener,      secretName: trino-event-listener,      path: /etc/trino/event-listener}
 
+coordinator:
   # Apchi keeps the durable catalogs in a Secret, because Trino's FileCatalogStore enumerates
   # its directory only in its constructor -- anything not on disk at pod start is absent until
   # the next one. The initContainer copies them into a writable directory before Trino reads it.
@@ -86,6 +92,44 @@ initContainers:
         - {name: catalog-seed, mountPath: /data/trino/catalog-seed, readOnly: true}
         - {name: catalog-store, mountPath: /data/trino/catalogs}
 ```
+
+## Before you install: four Secrets must already have content
+
+Trino validates every path property at startup and refuses to boot when a file one names is
+missing. Three of these properties point into Apchi's directories, so those Secrets cannot be
+empty when the coordinator first starts — and Apchi creates them on its first Apply, which is
+after. Create them yourself first, or the install crashloops:
+
+```
+Invalid configuration property with prefix '': file does not exist:
+  /etc/trino/event-listener/event-listener.properties
+```
+
+| Secret | Needs | Because |
+|---|---|---|
+| `trino-access-control` | `rules.json` | `security.config-file` names it |
+| `trino-user-mapping` | `user-mapping.json` | `...user-mapping.file` names it |
+| `trino-resource-groups` | `resource-groups.json` | `resource-groups.config-file` names it |
+| `trino-event-listener` | `event-listener.properties` | `event-listener.config-files` names it |
+
+`trino-client-certificates` and `trino-catalog-seed` may be absent or empty — nothing names a
+file inside them.
+
+The two Apchi normally leaves empty are the resource groups and event listener ones, because
+in Apchi's default mode their *absence* is how "none configured" is expressed. On this chart
+that is not available, which is the same limit as the one below arriving at install time
+rather than later. `deploy/trino-dev/` is a working source of all four.
+
+**The resource groups document needs a selector.** A document with groups and no selectors
+starts cleanly and then rejects every query:
+
+```
+Query ... failed: No matching resource group found with the configured selection rules
+```
+
+That is also the reason Apchi will not render an empty document for you — see below.
+
+## Why `type: properties`
 
 Note `accessControl.type: properties` and `resourceGroups.type: properties` rather than
 `configmap`. With `configmap` the chart mounts its *own* volume at `/etc/trino/access-control`
@@ -128,6 +172,33 @@ Their path is the Admin's to choose, which makes them single-file mounts by natu
 path under `/etc/trino` is refused — `config.properties` included, since that file belongs to
 the chart's own ConfigMap. Use the chart's `additionalConfigProperties` instead; it is the same
 capability by a different route.
+
+## What was actually verified
+
+Everything above was run, not reasoned about. On minikube, chart `1.44.0`, Trino `483`:
+
+```
+trino-coordinator-699cdb745d-474sh   1/1   Running
+trino-worker-58b5f866f-npfnn         1/1   Running
+
+trino> SELECT node_id, state FROM system.runtime.nodes
+"trino-coordinator-699cdb745d-474sh","active"
+"trino-worker-58b5f866f-npfnn","active"
+```
+
+with all five directories present and all three pointers resolving:
+
+```
+/etc/trino/access-control    rules.json
+/etc/trino/certs             (empty, which is correct)
+/etc/trino/user-mapping      user-mapping.json
+/etc/trino/resource-groups   resource-groups.json
+/etc/trino/event-listener    event-listener.properties
+```
+
+Both costs were reproduced as well: an empty `trino-event-listener` Secret stopped the
+coordinator booting, and a resource groups document without selectors rejected every query.
+Neither is a guess.
 
 ## Checking it before you install
 

@@ -1566,10 +1566,24 @@ is shared and an empty Section caught only by Validation blocks everyone's Apply
 paths that do not go through a delete: a Section Revert, and a whole-document import.
 
 Nothing harmless is rendered in place of empty, and the reason differs per Section. An empty
-resource groups document makes Trino reject every query matching no selector, so a no-op would
-mean a catch-all root group — and `hardConcurrencyLimit` and `maxQueued` are required integers
-with no "unlimited", so Apchi would be inventing a concurrency policy on the Operator's behalf.
-Event Listeners have no no-op at all: `http`, `mysql` and `kafka` each need a real sink.
+resource groups document makes Trino reject every query matching no selector — verified against
+a running coordinator: *"No matching resource group found with the configured selection
+rules"*. A no-op would therefore mean a catch-all root group, and `hardConcurrencyLimit` and
+`maxQueued` are required integers with no "unlimited", so Apchi would be inventing a
+concurrency policy on the Operator's behalf. Event Listeners have no no-op at all: `http`,
+`mysql` and `kafka` each need a real sink.
+
+**The same constraint applies at install, not only later.** Trino validates every path property
+at startup, so on such a deployment the Secrets those pointers name must already hold a file
+before the coordinator first starts — and Apchi writes them on its first Apply, which is after.
+Verified: an empty event listener Secret stops the coordinator booting with *"file does not
+exist: /etc/trino/event-listener/event-listener.properties"*. The Admin seeds them, the way
+`deploy/trino-dev` already ships a generated default of the access-control and user-mapping
+files for the same reason. `docs/official-trino-chart.md` lists which.
+
+One further consequence of that chart's shape: `additionalConfigProperties` reaches the worker
+ConfigMap as well as the coordinator's, and Trino validates path properties on every node — so
+the Secrets have to be mounted on both roles, not only on the coordinator.
 
 The one capability this does not reach is **Admin raw files** (§14). Their path is the Admin's
 to choose, which makes them single-file mounts by nature, so on a whole-directory deployment
