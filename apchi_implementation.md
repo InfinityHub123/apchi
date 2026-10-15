@@ -1389,6 +1389,21 @@ silently open Cluster, with the Operator's grants still displayed in the API. "A
 conflict" governs a *property* an Admin sets inside a file Apchi generates; it does not extend
 to replacing the file. A raw file targeting an Apchi-owned path is refused by name.
 
+**Auto Rollback is the only thing that recovers a bad raw file.** `kubectl rollout undo` does
+not: the content lives in a Secret and the mount lives on the pod template, so every revision
+carrying that mount crashes the same way. Recovery means taking the mount and the Secret back,
+which is what restoring the pre-image does and what nothing else will do by accident. That is
+why the pre-image exists and why a raw-file Apply must never skip the rollback path.
+
+**A raw `config.properties` is proved on the Cluster, not on the probe.** Every other raw
+file is validated on the ephemeral coordinator like anything else — they are the class most
+able to stop Trino booting, so that is where it should be found out. But the probe assembles
+its *own* `config.properties` from the properties without which it would not read the files
+under test at all, and a raw file at that path would replace them: a probe configured by the
+thing it is probing starts cleanly having validated nothing. So that one file reaches the
+Cluster unvalidated, and if it is broken the Cluster fails and Auto Rollback puts it back —
+the same contract, one stage later. Apchi logs a warning saying so when an Admin writes it.
+
 **Not every remaining path is reachable**, and that is a property of the deployment rather
 than a decision here. Apchi delivers a single file by mounting it (§16), and precondition 6
 already refuses a single-file mount whose parent is covered by a whole-directory mount. A

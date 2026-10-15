@@ -93,6 +93,14 @@ class Settings(BaseSettings):
     #: also leaves room for the Snapshot an Apply makes of the same content.
     candidate_max_bytes: int = 15 * 1024 * 1024
 
+    #: Holds every raw file an Admin wrote (§14). One Secret for all of them, mounted one
+    #: file at a time: the paths are arbitrary under /etc/trino, so a directory mount would
+    #: cover files Apchi and the Admin own between them.
+    raw_files_secret_name: str = "trino-admin-raw-files"
+    #: The one volume those mounts name. Apchi adds it with the first raw file and removes it
+    #: with the last, the same way it owns the Event Listener volume (§13.6).
+    raw_files_volume_name: str = "apchi-admin-raw-files"
+
     #: How long an `Idempotency-Key` is remembered. The window a retry plausibly spans: long
     #: enough for a client to come back after a network failure, short enough that a key
     #: reused weeks later is a new request rather than a replay of a forgotten one.

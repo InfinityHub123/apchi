@@ -339,6 +339,32 @@ async def validate_candidate(
         for spec in section.coordinator_files(cluster.settings):
             if isinstance(spec, CoordinatorFile):
                 properties.update(spec.probe_config)
+    # The Admin's raw files (§14) are validated like everything else: they are the class of
+    # configuration most able to stop Trino booting, so the probe is where that should be
+    # found out rather than the Cluster.
+    #
+    # With one exclusion, and it is a real limit rather than an oversight. The probe's own
+    # `config.properties` is assembled here from each Section's `probe_config` -- the
+    # properties without which the probe would not read the files under test at all. A raw
+    # file at that path would replace them, and a probe configured by the thing it is
+    # probing is not a probe: it would start cleanly having validated nothing.
+    #
+    # So a raw `config.properties` reaches the Cluster but not the probe. If it is broken,
+    # the Cluster fails and Auto Rollback puts it back -- which is the contract §14 offers,
+    # arriving one stage later than for every other file.
+    raw = {
+        path: content for path, content in cluster.admin.raw_files.items() if path != _CONFIG_PATH
+    }
+    if raw:
+        logger.info("probing admin raw files", extra={"raw_files": sorted(raw)})
+    files.update(raw)
+    if _CONFIG_PATH in cluster.admin.raw_files:
+        logger.warning(
+            "an admin raw config.properties is not validated on the probe; the probe needs "
+            "that file itself, so the Cluster is where it is proved",
+            extra={"raw_file": _CONFIG_PATH},
+        )
+
     if files:
         files[_CONFIG_PATH] = "".join(f"{key}={value}\n" for key, value in properties.items())
 
