@@ -86,9 +86,19 @@ fails with `mkdir: Permission denied` before Trino starts. `/data/trino` is trin
 
 A fifth, found while writing `charts/trino`: **each configuration file is mounted
 separately, deliberately.** One mount of the whole `/etc/trino` directory would be more
-idiomatic and would break the cluster — Apchi mounts a single file inside that directory,
-and a `subPath` mount at a path inside a ConfigMap directory mount fails the container
-outright, with no Trino log at all. See #93.
+idiomatic, and these manifests would then need different settings — Kubernetes will not place
+a single file inside a read-only directory volume, and the container fails with
+`not a directory` and no Trino log at all.
+
+Apchi still mounts single files here — `resource-groups.properties`, the
+`resource-groups.json` beside it, and `event-listener.properties`. The two `.properties` are
+the reason: Trino pins both to its configuration directory and no property relocates either,
+so Apchi has to mount them where Trino looks. Everything else it writes goes into a directory
+the Admin mounts, which works on either shape. On a
+whole-directory deployment the Admin provides those two pointers instead and Apchi fills the
+directories they name — see [`docs/official-trino-chart.md`](../../docs/official-trino-chart.md).
+This file-by-file shape is the one that lets Apchi own them, which is why the tests run
+against it.
 
 ## What it proves
 

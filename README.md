@@ -29,6 +29,10 @@ What survives is a numbered, immutable **Snapshot** you can roll back to.
 Review tells you which of those a pending change is before you run it, and — if it restarts
 the coordinator — how many queries that will destroy.
 
+Those six are the Operator's. An **Admin** can do everything an Operator can, and also write
+raw Trino configuration files that Apchi delivers without forming an opinion about, and engage
+Maintenance Mode, which keeps read access and refuses every configuration change (§14).
+
 ## How it fits together
 
 Apchi is one container with no state of its own. It sits between you and three things:
@@ -49,13 +53,20 @@ lives as Secrets; and Trino itself, which it talks to as an ordinary SQL client.
 ```
 
 Nothing about Trino's deployment belongs to Apchi. The Admin owns the Deployment, the heap
-sizes and the image; Apchi owns six files inside it, delivered through Secrets the
-coordinator mounts. That is the whole coupling, and it is why installing Apchi is just
+sizes and the image; Apchi owns the configuration files inside it, delivered through Secrets
+the coordinator mounts. That is the whole coupling, and it is why installing Apchi is just
 installing Apchi — there is no sidecar, no operator and no webhook.
 
-Which means the one thing that has to agree is **names**: the Secrets Apchi writes must be
-the Secrets the coordinator mounts. The chart's `secrets.*` values are those names, and
-`deploy/trino-dev/` is a Trino that mounts exactly them.
+So two things have to agree. **Names**: the Secrets Apchi writes must be the Secrets the
+coordinator mounts — the chart's `secrets.*` values are those names, and `deploy/trino-dev/`
+is a Trino that mounts exactly them. And **mount shape**: most of what Apchi writes goes into
+a directory the Admin mounts, which works on any deployment, but Resource Groups and Event
+Listeners are single-file mounts Apchi makes itself, because Trino pins their pointer files to
+that directory and no property relocates them. A deployment that mounts
+the whole of `/etc/trino` as one volume cannot accept those, and the official `trino/trino`
+chart is one — so there the deployment provides those two pointers instead (§16,
+[`docs/official-trino-chart.md`](docs/official-trino-chart.md)). Apchi checks all of this
+before an Apply and names what is wrong rather than half-applying.
 
 ### What using it looks like
 
@@ -89,7 +100,16 @@ promotes the lot.
 
 ## Install
 
-The chart and the image are published to GHCR on every release:
+Apchi is **not released yet** — nothing is published to GHCR, so install from a clone:
+
+```sh
+helm install apchi charts/apchi \
+  --namespace trino \
+  --set mongodb.uri=mongodb://your-mongo:27017
+```
+
+Once there is a release, the chart and the image publish to GHCR on every tag and this
+becomes:
 
 ```sh
 helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.1.0 \
@@ -163,16 +183,25 @@ repository is the committed contract.
 ```
 app/
   pipeline/   review, validate, apply, verify, commit, auto rollback
-  sections/   the six sections above
+  sections/   the six sections above, plus the Admin's raw files
   adapters/   kubernetes, trino, mongo
+  auth/       identities, passwords, sessions, tokens, OIDC
+  audit/      who changed what, and when
   api/        the REST surface
 charts/
   apchi/      Apchi, and the Secrets it writes configuration into
   trino/      a Trino that Apchi can configure, and that creates no Secrets of its own
 deploy/
   trino-dev/  the same Trino as raw manifests, rendered from the chart, for the tests
+  trino-adopted/  a Trino configured by hand, for exercising Adoption
 docs/
-  adr/        the decisions, and what was tried before them
+  concepts.md             the loop, the vocabulary, and who owns what
+  getting-started.md      one catalog through the whole loop, from a real run
+  official-trino-chart.md the values for a deployment that mounts /etc/trino whole
+  adr/                    the decisions, and what was tried before them
+tests/
+  tier1/      the HTTP API against real MongoDB and real Trino, Kubernetes faked
+  tier2/      the same API against a real cluster
 scripts/
   quickstart.sh  the whole thing on a local cluster, one command
 ```
@@ -182,21 +211,46 @@ scripts/
 
 ## Current state
 
-Apchi is under active development. The configuration loop above is complete and tested
-end to end against a real Trino on a real Kubernetes, for all six sections. Not yet built:
+Apchi is under active development, and **unreleased** — there is no tag and nothing published
+to GHCR yet, so the install command above will not resolve a version until there is one.
+Install from a clone in the meantime.
 
-- **No authentication.** Every endpoint is open, including the Admin ones. Deploy Apchi
-  where only platform staff can reach it.
-- **No web UI.** The REST API is the whole interface.
-- **No audit trail.** Snapshots record what was committed, not who staged it. Because the
-  Candidate is shared, that is currently unrecorded.
+The backend is complete. The configuration loop is tested end to end against a real Trino on a
+real Kubernetes for all six Sections, on both of the deployment shapes Trino clusters come in
+(§16).
+
+Built, and covered end to end:
+
+- **Authentication and roles**, but **off by default**. `auth.mode` defaults to `none`, which
+  treats every caller as an Admin — so on a default install anything that can reach the pod
+  can disable permission enforcement across the cluster. Turn it on: `password` (Argon2id,
+  sessions in MongoDB so logout takes effect immediately) or `sso` (OIDC authorization code
+  with PKCE, every endpoint discovered from the issuer), plus opaque revocable API tokens.
+  Every route carries a gate, and a test walks the published contract so a route added later
+  cannot ship ungated. Operators own all six Sections; Admins additionally write Raw Files and
+  engage Maintenance Mode.
+- **An audit trail.** Who changed what, and when, recorded at the one chokepoint an edit
+  cannot skip — so a shared Candidate is still attributable. Refusals are recorded too.
+- **Adoption.** A cluster configured before Apchi, or by hand, can be brought under
+  management without losing what it was running. See **Adoption** in `CONTEXT.md`.
+- **Admin raw files.** An Admin writes a path and its content and Apchi delivers it, with no
+  schema over it. One limit, and it is structural: a raw file's path is the Admin's to choose,
+  which makes it a single-file mount — so on a deployment that mounts the whole of
+  `/etc/trino` as one volume, every raw path is refused. See
+  [`docs/official-trino-chart.md`](docs/official-trino-chart.md).
+
+Not built:
+
+- **No web UI.** The REST API is the whole interface. `/docs` serves an interactive reference.
+- **No API change policy.** Breaking changes, deprecated endpoints and fields, and new API
+  versions are undecided (§19, §27).
 - **Keeping MongoDB is yours to do.** Apchi's Snapshots live there, and operating that
   database is your platform's job — the same division Apchi draws for the Trino deployment
   it configures. Point `mongodb.uri` at something durable; the MongoDB the chart can deploy
   is for trying Apchi out and loses everything when its pod restarts.
-
-Adoption is built: a cluster configured before Apchi, or by hand, can be brought under
-management without losing what it was running. See **Adoption** in `CONTEXT.md`.
+- **The interactive reference is open.** `/docs`, `/redoc` and `/openapi.json` answer without
+  credentials, by decision: what they expose is the shape of the API, which this repository
+  publishes anyway, and "Try it out" sends real requests that meet the gate like any other.
 
 ## Licence
 

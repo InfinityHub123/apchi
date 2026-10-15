@@ -1528,8 +1528,8 @@ Apchi asserts preconditions on the Trino deployment rather than owning its manif
 Owning them would put Apchi in the business of heap sizes, node selectors and image tags,
 which belongs to Admins.
 
-**The precondition that must be checked: no Apchi-managed configuration file is mounted with
-`subPath`.** Kubernetes documents that "a container using a ConfigMap as a `subPath` volume
+**The first precondition: no Apchi-managed configuration file is mounted with `subPath`.**
+Kubernetes documents that "a container using a ConfigMap as a `subPath` volume
 mount will not receive ConfigMap updates" — the file is frozen at pod creation, permanently.
 Apchi would write the ConfigMap, see the write succeed, report success, and Trino would never
 see the change.
@@ -1537,30 +1537,31 @@ see the change.
 Checked at Adoption **and before every Apply**, because a later chart change can reintroduce
 it silently.
 
-**The second precondition: the catalog seed initContainer is present**, and nothing
-**read-only** is mounted over `catalog.config-dir` or any directory above it (§7.1). Without the
-initContainer the Cluster comes up with no catalogs.
+**The second precondition: the catalog seed initContainer is present.** It copies the durable
+catalogs into the writable store before Trino reads it; without it the Cluster comes up with no
+catalogs at all.
 
-An `emptyDir` there is correct and is exactly what the seed design asks for — it is writable, and
-it is what the initContainer copies into. What breaks the Cluster is a **Secret or ConfigMap**
-volume over that path, because those are always mounted read-only, which is the finding the whole
-seed design rests on. Apchi therefore checks the volume's *kind*, not whether a volume is present
-at all.
+**The third precondition: nothing read-only is mounted over `catalog.config-dir`** or any
+directory above it (§7.1). An `emptyDir` there is correct and is exactly what the seed design
+asks for — it is writable, and it is what the initContainer copies into. What breaks the Cluster
+is a **Secret or ConfigMap** volume over that path, because those are always mounted read-only,
+which is the finding the whole seed design rests on. Apchi therefore checks the volume's *kind*,
+not whether a volume is present at all.
 
-**The third precondition: nothing but Apchi is mounted at the paths Apchi's Sections
+**The fourth precondition: nothing but Apchi is mounted at the paths Apchi's Sections
 declare.** An Admin mounting their own file at one of them would be fighting Apchi over one
 file, and whichever of the two wrote last would win, silently. The list comes from the Section
 registry rather than from a list kept here, so a new file-owning Section is guarded without
 anyone remembering to add it.
 
-**The fourth precondition: `security.refresh-period` is set.** Without it Trino reads the
+**The fifth precondition: `security.refresh-period` is set.** Without it Trino reads the
 access control rules once at startup and never again, so Apchi would write a permission
 change, report success, and the Cluster would never see it (§13.4). This is the one
 precondition that reads the Admin's Trino configuration rather than their pod template: Apchi
 follows whatever is mounted at `access-control.properties` back to its ConfigMap or Secret and
 reads the property out of it.
 
-**The fifth precondition: no read-only directory volume covers a path Apchi mounts a single
+**The sixth precondition: no read-only directory volume covers a path Apchi mounts a single
 file at.** A `subPath` mount of one key at a path inside a ConfigMap or Secret directory mount
 has no file to bind onto, and runc fails the container with "not a directory" before Trino
 runs at all. Reproduced on a real cluster; a nested *directory* mount in the same position
@@ -1571,7 +1572,9 @@ manifest should see the whole list.
 
 ## Deployment shapes
 
-Two shapes exist in the wild and Apchi has to be honest about which it supports.
+Two shapes exist in the wild and Apchi has to be honest about which it supports. The decision
+below, and the options rejected on the way to it, are
+[ADR-0007](./docs/adr/0007-the-deployment-owns-the-pinned-pointers.md).
 
 **File-by-file**, which `deploy/trino-dev` uses: each file in `/etc/trino` is its own mount,
 so Apchi can add and remove single-file mounts inside it. Everything works here.
@@ -1599,7 +1602,7 @@ That is a deployment concern and **not** a change of Section ownership: Operator
 six Sections (§3). A pointer names where a file lives and never varies with the Candidate; what
 is in the file stays the Operator's.
 
-**The sixth precondition: a pointer the deployment claims to provide is really there, and
+**The seventh precondition: a pointer the deployment claims to provide is really there, and
 really names the directory Apchi fills.** An Admin who turns the mode on and forgets the
 property gets a Section that writes files nobody reads — the Apply succeeds, the Secret is
 correct, and the Cluster behaves as if the Section were empty.

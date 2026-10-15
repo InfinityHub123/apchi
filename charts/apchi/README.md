@@ -2,12 +2,18 @@
 
 Installs Apchi into the namespace its Trino runs in.
 
+Apchi is **not released yet** — nothing is published to GHCR, so install from a clone:
+
+```sh
+helm install apchi charts/apchi -n trino --set mongodb.uri=mongodb://your-mongo:27017
+```
+
+Once there is a release this becomes:
+
 ```sh
 helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.1.0 \
   -n trino --set mongodb.uri=mongodb://your-mongo:27017
 ```
-
-From a clone, `helm install apchi charts/apchi` with the same values.
 
 Apchi is one container with no state of its own, so the chart is a Deployment, a Service, a
 ServiceAccount, a namespaced Role — and the six Secrets Apchi writes configuration into.
@@ -20,6 +26,13 @@ nothing else, so it starts fine against a Trino that does not exist yet.
 
 To try it with nothing set up, `./scripts/quickstart.sh` from the repository root brings up a
 Trino, this chart and a MongoDB on minikube or kind in one command.
+
+**If your coordinator mounts the whole of `/etc/trino` as one volume** — which the official
+`trinodb/charts` chart does, and most hand-written manifests too — set
+`deployment.providesResourceGroupsProperties` and `deployment.setsEventListenerConfigFiles`,
+and have the deployment provide those two pointers.
+[`docs/official-trino-chart.md`](../../docs/official-trino-chart.md) is the full recipe. Apchi
+refuses an Apply rather than half-applying if the two disagree.
 
 ## What you have to set
 
@@ -90,7 +103,9 @@ secrets:
 | `mongodb.database` | `apchi` | |
 | `mongodb.deploy` | `false` | A MongoDB beside Apchi, for trying it out. Loses Snapshots on restart |
 | `secrets.*` | see above | Must be what Trino mounts |
-| `volumes.*` | `apchi-*` | The volumes Apchi adds to the coordinator's pod template. Everything else there is the Admin's |
+| `volumes.*` | `apchi-*` | The volumes Apchi adds to the coordinator's pod template. Everything else there is the Admin's. The user-mapping Secret is not here: the Admin mounts it as a directory and Apchi only fills it |
+| `deployment.providesResourceGroupsProperties` | `false` | Set on a coordinator that mounts the whole of `/etc/trino`, where Apchi cannot mount `resource-groups.properties` itself. The deployment then provides it, pointing `resource-groups.config-file` at `/etc/trino/resource-groups/` |
+| `deployment.setsEventListenerConfigFiles` | `false` | The same, for `event-listener.config-files` naming a file in `/etc/trino/event-listener/`. Costs the ability to empty that Section, because Trino refuses to start without the file the property names |
 | `timeouts.rolloutSeconds` | `600` | A coordinator that never comes back fails the Apply rather than hanging it |
 | `timeouts.validationSeconds` | `300` | The hard limit on Validation. Also sets the liveness budget, so a Validation is never killed mid-Apply |
 | `certificates.expiringWithinDays` | `30` | When Apchi starts calling a Client Certificate expiring. Renewal is manual |

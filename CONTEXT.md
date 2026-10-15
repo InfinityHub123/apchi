@@ -13,13 +13,29 @@ A member of the platform staff at the organisation Apchi is operated for. The pr
 user; owns every Section of the configuration.
 
 **Admin**:
-A member of the team that provides and operates the underlying platform. Owns
-infrastructure, the arbitrary low-level Trino configuration escape hatch, and the
-Maintenance Mode.
+A member of the team that provides and operates the underlying platform. Can do everything an
+Operator can. Owns infrastructure, Raw Files, Maintenance Mode, and the freeze on Operator
+mutation.
 
 **End User**:
 A person or application issuing queries to Trino. Never an Apchi user; only ever the
 subject of permissions and resource groups.
+
+### Access
+
+**Caller Identity**:
+Who an Apchi request is from: a subject, a Role, and how they authenticated. `Identity` in the
+code. Deliberately not the same thing as a **Trino Identity** below — this one is an Apchi
+user, that one is whoever is running a query. Confusing the two is the mistake this glossary
+exists to prevent.
+
+**Role**:
+`operator` or `admin`. Decided per request and never per Section: an Operator may do anything
+to any Section, and an Admin may do that and more.
+
+**API Token**:
+An opaque bearer credential a Caller Identity mints for itself and can revoke. Not a session,
+and not derived from one — a token outlives the login that created it.
 
 ### Configuration
 
@@ -40,6 +56,11 @@ Operator change lands here; nothing reaches the Cluster until Apply.
 One managed area of a Configuration Candidate — catalogs, client certificates, certificate
 mapping, permissions, resource groups, event listeners. The unit of Section Revert.
 
+**Raw File**:
+A path under Trino's configuration directory and the content to put there, written by an Admin
+and delivered without Apchi forming any opinion about it. Not a Section: raw values never
+enter a Snapshot, so they survive a rollback and leave only when an Admin removes them.
+
 **Review**:
 The diff between the Configuration Candidate and the latest Snapshot. What an Operator sees
 before Apply.
@@ -54,6 +75,18 @@ never of when an Operator's edit takes effect — everything waits for Apply.
 
 **Rollout-Required**:
 Of a Section: one Trino adopts only by restarting, and so applied by the third engine.
+
+**Deployment Shape**:
+How the Trino coordinator mounts its configuration directory, which decides what Apchi can
+deliver there. *File-by-file*: each file is its own mount, and Apchi can add single-file mounts
+inside it. *Whole-directory*: `/etc/trino` is one volume, and Kubernetes will not place a
+single file inside it — so the deployment provides the two files Trino pins to that directory,
+and Raw Files do not work at all. Asserted before every Apply, never guessed at.
+
+**Audit Event**:
+One record of who changed what, and when: a Caller Identity, a Section or the Admin surface, an
+action, and the resources it touched. Written for refusals as well as changes, at the point an
+edit cannot avoid, so a shared Candidate stays attributable.
 
 ### Lifecycle
 
