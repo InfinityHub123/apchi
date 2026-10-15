@@ -62,17 +62,27 @@ runs it. These are the things it proves:
 6. **No read-only directory volume covers a path Apchi mounts a single file at.** The
    `not a directory` failure above, refused before an Apply rather than discovered during
    one. This is the check the official chart fails without its own configuration.
-7. **A pointer the deployment claims to provide is really there**, and really names the
-   directory Apchi fills. Only relevant on a deployment configured that way; forgetting the
-   property would give a Section that writes files nobody reads.
+
+The checker runs a seventh — **a pointer the deployment claims to provide is really there**,
+and really names the directory Apchi fills — but it has nothing to say here. That check only
+engages on a deployment where the Admin owns those pointers, and this chart is not one: it
+runs against default settings, where Apchi mounts both files itself. The check matters for the
+official chart, not for this one.
 
 ## This chart creates no Secrets
 
-It mounts six and creates none. They hold configuration Apchi writes and rewrites on every
+It creates none, and mounts four: the access-control rules, the user-mapping file, the catalog
+seed and the client certificates. They hold configuration Apchi writes and rewrites on every
 apply, so they are Apchi's data and Apchi's chart creates them — which is why Apchi is
-installed first. Trino reads two of them while loading and refuses to boot when either is
-missing, so it cannot start and wait; Apchi has no such problem, because its readiness
-depends on MongoDB and nothing else.
+installed first. Trino reads the first two while loading and refuses to boot when either is
+missing, so it cannot start and wait; Apchi has no such problem, because its readiness depends
+on MongoDB and nothing else.
+
+Apchi's chart creates **six**. The other two — resource groups and the event listener — are
+not mounted here on purpose: for both of them the *absence* of the mount is how "none
+configured" is expressed, since Trino refuses to start when a file it was told to read is
+missing. So Apchi adds and removes those two mounts itself, and they are the only part of this
+pod template it writes.
 
 Keeping them out of here is what lets this chart be read, reviewed and released without
 Apchi in the picture. The cost is that the two charts must now **agree on names**, and
@@ -90,7 +100,7 @@ can.
 | `trino.environment` | `production` | `node.environment`; lowercase alphanumeric and underscores only |
 | `trino.jvm.maxHeapSize` | `2G` | Per node |
 | `trino.securityRefreshPeriod` | `30s` | How soon a permission change takes effect. Lower is a faster Apply and more file reads |
-| `authentication.type` | `insecure` | `certificate` for production. Both feed the same file to the same parser; Trino rejects the certificate variant unless certificate authentication is configured (§7.6) |
+| `authentication.type` | `insecure` | `certificate` for production. Both feed the same file to the same parser; Trino rejects the certificate variant unless certificate authentication is configured (§13.3) |
 | `fullnameOverride` | `""` | Pins the Deployment names Apchi is configured with, independently of the release name |
 | `trino.additionalCoordinatorProperties` | `[]` | Verbatim into `config.properties`. Properties Apchi owns are not yours to set here, and the preconditions will say so |
 

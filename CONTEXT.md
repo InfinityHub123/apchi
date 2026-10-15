@@ -35,7 +35,11 @@ to any Section, and an Admin may do that and more.
 
 **API Token**:
 An opaque bearer credential a Caller Identity mints for itself and can revoke. Not a session,
-and not derived from one — a token outlives the login that created it.
+and not derived from one — a token outlives the login that created it. It is not a second kind
+of principal either: it belongs to a user, acts as that user, and resolves to whatever Role
+that user has *now*, so demoting somebody demotes their automations and disabling somebody
+stops them. An Audit Event carries both the owner and which token, so "the nightly pipeline
+did this" and "a person did this" stay distinguishable.
 
 ### Configuration
 

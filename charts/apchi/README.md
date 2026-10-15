@@ -131,7 +131,7 @@ cluster-scoped rule.
 | Resource | Verbs | Why |
 | --- | --- | --- |
 | `secrets` | get, list, create, patch, delete | The generated configuration. Create/delete is a Validation's ephemeral Secret; list is how a crashed Apchi finds ones it leaked |
-| `configmaps` | get | One read-only check: whether the access-control properties carry a refresh period |
+| `configmaps` | get, create, patch | Two things. Read-only: whether the access-control properties carry a refresh period. Written: the high-water mark, which lives in a ConfigMap *outside* MongoDB so that an empty `snapshots` collection can be told apart from a new install (§15, §18) |
 | `pods`, `pods/log` | get, list, create, delete / get | The ephemeral validation coordinator. Its log is the only place a refusing Trino explains itself |
 | `deployments` | get, patch | A Rollout. Apchi never creates or deletes one: it does not own the Trino deployment |
 
