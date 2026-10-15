@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from starlette.routing import Route
 
 from app.adapters.trino import Trino
 from app.api.deps import caller
@@ -39,6 +40,28 @@ OPEN = {
     "/api/v1/auth/login",
     "/api/v1/auth/sso/login",
     "/api/v1/auth/sso/callback",
+}
+
+#: Served, deliberately not published, and deliberately not gated.
+#:
+#: A different question from `OPEN`, which is about the *published* operations: these four do
+#: not appear in `openapi.json` at all, because FastAPI does not document its own
+#: documentation. That is how they went unnoticed -- the coverage assertion below walks the
+#: contract, so a route the contract does not mention was never asked about.
+#:
+#: Left open by decision. The exposure is enumeration only: Swagger's "Try it out" sends real
+#: requests, which meet the gate like anything else, and the contract is committed to this
+#: repository anyway, so the schema is not a secret. Against that, an interactive reference an
+#: Operator has to authenticate to read is a worse first five minutes.
+#:
+#: The decision is asserted in both directions below -- that these answer without an identity,
+#: and that nothing *else* is served outside the contract -- so the next route to escape
+#: `openapi.json` fails a test rather than quietly joining this list.
+UNDOCUMENTED_AND_OPEN = {
+    "/docs",
+    "/docs/oauth2-redirect",
+    "/redoc",
+    "/openapi.json",
 }
 
 OPERATOR = Identity(subject="jo", role="operator", via="password")
@@ -159,6 +182,51 @@ async def test_every_route_but_health_requires_an_identity(
     ]
 
     assert ungated == [], f"these answer without an identity: {ungated}"
+
+
+async def test_the_api_reference_answers_without_an_identity(
+    unauthenticatable: AsyncClient,
+) -> None:
+    """The interactive reference and the live schema are open, by decision (#165 discussion).
+
+    Pinned rather than assumed. These four are invisible to the coverage assertion above --
+    they are not in `openapi.json`, so it never asks about them -- which is how nobody
+    noticed they were ungated. Asserting it makes the decision explicit: gating them later
+    fails here, and whoever does it has to say why rather than discovering the consequence.
+
+    What is being accepted is enumeration. Swagger's "Try it out" sends real requests, which
+    meet the gate like anything else, so this exposes the shape of the API and not its data --
+    and the contract is committed to this repository, so the shape is already public.
+    """
+    for path in sorted(UNDOCUMENTED_AND_OPEN):
+        response = await unauthenticatable.get(path)
+        assert response.status_code == 200, f"{path} answered {response.status_code}"
+
+
+def test_nothing_else_is_served_outside_the_contract(settings: Settings) -> None:
+    """The hole that let the four above go unexamined, closed.
+
+    Every assertion in this file walks `openapi.json`, on the stated grounds that the gates
+    are a promise about the published surface. The premise that the contract *is* the served
+    surface was never checked, and it is false -- so a route that escaped the contract escaped
+    the gate coverage with it.
+
+    This is the missing half: the served surface and the contract differ only by paths named
+    above. A new undocumented route fails here and has to be classified, rather than being
+    open by nobody's decision.
+
+    Only the plain `Route` objects are read. The API routers are private `_IncludedRouter`
+    instances, which is the reason the rest of this file reads the contract instead -- but the
+    routes that escape the contract are exactly the plain ones, so this needs nothing private.
+    """
+    app = create_app(settings)
+    contract = set(json.loads(CONTRACT.read_text())["paths"])
+    served = {route.path for route in app.routes if isinstance(route, Route)}
+
+    assert served - contract == UNDOCUMENTED_AND_OPEN, (
+        "the set of routes served but not published has changed; classify each one as gated "
+        "(put it in the contract) or deliberately open (name it in UNDOCUMENTED_AND_OPEN)"
+    )
 
 
 async def test_health_needs_no_identity(unauthenticatable: AsyncClient) -> None:
