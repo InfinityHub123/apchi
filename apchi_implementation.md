@@ -1299,8 +1299,11 @@ file Apchi owns.
 `compareAndSet` that permits exactly one call per process lifetime. There is no reload path.
 Confirmed against the 483 source, not taken from this document.
 
-**Apchi owns one volume on the coordinator's pod template**, and this is the one place it does.
-Event Listeners must be optional, and neither delivery mechanism can express that on its own:
+**Apchi owns a volume on the coordinator's pod template for this Section**, which it adds and
+removes itself. It is not the only one — Resource Groups has the same arrangement for the same
+reason, and §14's raw files have a third — but this is the Section the argument is clearest
+for, because Event Listeners must be optional and neither delivery mechanism can express that
+on its own:
 
 - `event-listener.config-files` makes Trino **refuse to start** when the file it names is missing
   — verified: *"Invalid configuration property with prefix '': file does not exist"*.
@@ -2198,11 +2201,18 @@ Additional constraints:
 
 # 27. Open items
 
-- ~~**Admin arbitrary configuration**~~ — **settled** (§14, "Raw files, not curated
+- ~~**Admin arbitrary configuration**~~ — **settled and built** (§14, "Raw files, not curated
   properties"): an Admin writes a path and its content, all raw content is treated as secret,
   Apchi-owned paths are refused by name, and rollback keeps the Admin document's pre-image for
-  the duration of an Apply. Not built; the preserved mapping patterns of §13.3 remain the only
-  user of the Admin Apply.
+  the duration of an Apply. Delivery, Validation on the probe and Auto Rollback all work; the
+  one file the probe cannot validate is `config.properties`, because the probe assembles its
+  own, so a broken one is caught by the Cluster and taken back rather than refused earlier.
+
+  One limit, and it is structural rather than unfinished: a raw file's path is the Admin's to
+  choose, which makes it a single-file mount by nature. On a deployment that mounts the whole
+  of `/etc/trino` as one volume every raw path is therefore refused, `config.properties`
+  included — that file belongs to the chart's own ConfigMap. §14's promise holds on a
+  file-by-file deployment and not on a whole-directory one (§16).
 - **Maintenance Mode mechanics** — behaviour when an Apply is already in flight. The endpoint
   and the persistence model are settled (§14).
 - **Certificate mapping migration** — the mechanism is built: a Cluster arriving with patterns
@@ -2215,11 +2225,19 @@ Additional constraints:
   `mysql` and `openlineage` pass through until someone needs them curated. Resource Groups
   are settled and fully typed (§13.5).
 - ~~**Who owns `event-listener.config-files`**~~ — **settled** (§13.6): it stays Admin
-  territory, and the Operator limit of one Event Listener stays too. An Admin who sets it gets
-  the listeners they configured; Apchi keeps managing the one file it mounts and the Section
-  keeps refusing a second. A Cluster may therefore run listeners Apchi cannot see, which is
-  accepted on §17's grounds — Apchi does not detect drift, and this is drift an Admin created
-  deliberately.
+  territory, and the Operator limit of one Event Listener stays too.
+
+  The original answer was that Apchi ignores the property — it keeps mounting the one file at
+  Trino's own path, and an Admin who sets the property gets whatever they configured, with the
+  Cluster possibly running listeners Apchi cannot see. That is accepted on §17's grounds: Apchi
+  does not detect drift, and this is drift an Admin created deliberately.
+
+  It is no longer the whole answer. On a deployment that mounts the whole of `/etc/trino`,
+  Apchi cannot mount that file at all, so the property becomes the *only* route and the Admin
+  sets it deliberately for Apchi's benefit — naming a file in the directory Apchi fills. Apchi
+  is told so by a setting, follows the property during discovery rather than ignoring it, and a
+  precondition checks it really names that directory. Ownership is unchanged; what changed is
+  that Apchi now reads it on the deployments where it has to (§16).
 
 - ~~**Apchi's own disaster recovery**~~ — **out of scope.** §18 already puts operating that
   MongoDB with the platform, and the same answer applies to losing it: Apchi is not in charge
