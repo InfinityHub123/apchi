@@ -142,8 +142,9 @@ class Settings(BaseSettings):
     #: Holds the generated user-mapping file. Always present once Apchi has applied: the
     #: authenticator reading it refuses to start when it is missing, so "no pattern" is a
     #: file that changes nothing rather than no file.
+    #: The Admin mounts this one at a directory, so there is no volume name here: Apchi
+    #: never adds or removes the mount (#93).
     certificate_mapping_secret_name: str = "trino-user-mapping"
-    certificate_mapping_volume_name: str = "apchi-user-mapping"
 
     #: Holds every Client Certificate, two files each. Mounted once at a fixed directory on
     #: the coordinator and on the workers, so adding one adds a file to a mount that already

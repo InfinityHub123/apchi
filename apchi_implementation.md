@@ -244,7 +244,7 @@ failure is not the same as reading one to decide whether something worked.
 
 The failure names the resource as well as the reason. With more than one file-based Section
 "the first one" is not an answer, so the attribution comes from the log too: Trino names the
-file it choked on — `Invalid JSON file '/etc/trino/user-mapping.json' for ...` — and the file
+file it choked on — `Invalid JSON file '/etc/trino/user-mapping/user-mapping.json' for ...` — and the file
 belongs to exactly one Section. Where the log names none of them the failure carries the reason
 without a resource, which is honest rather than a guess.
 
@@ -305,7 +305,7 @@ mount is read-only, so that one directory alone is delivered differently:
 | Directory | Written by | Delivery |
 |---|---|---|
 | Catalog `.properties` | **Trino** | Secret at a seed path → initContainer copy → writable container filesystem |
-| `rules.json`, certificates, resource groups, event listeners, user mapping | Apchi | Secret or ConfigMap mounted directly; the kubelet keeps it current |
+| `rules.json`, certificates, user mapping, resource groups, event listeners | Apchi | Secret or ConfigMap mounted directly; the kubelet keeps it current |
 
 ```
                     Apchi patches
@@ -1024,8 +1024,15 @@ touched.
 
 **Rollout-required.** `UserMapping` parses an immutable rule list at authenticator
 construction, so every change to the pattern costs a coordinator restart. Nothing re-reads the
-file, which is why a Rollout is the only way a pattern takes effect and why the development
-cluster's manifest mounts the Secret rather than relying on a refresh timer.
+file, which is why a Rollout is the only way a pattern takes effect and why no manifest here
+relies on a refresh timer.
+
+**Delivered as a directory**, at `/etc/trino/user-mapping/`, mounted by the Admin. Apchi used
+to mount this one file itself with `subPath`, which was sound on its own terms — nothing
+re-reads the file, so there is nothing for the kubelet to keep current — but it is not
+portable: a deployment that mounts the whole of `/etc/trino` as one volume cannot take a
+single-file mount inside it (§16). A directory works on both shapes and costs nothing here,
+since the Rollout is what makes a change take either way.
 
 Changing the pattern is a breaking operational change regardless: clients must obtain new
 certificates, deploy them, and migrate. Allowing Operators to choose the destination pattern
@@ -1492,8 +1499,42 @@ precondition that reads the Admin's Trino configuration rather than their pod te
 follows whatever is mounted at `access-control.properties` back to its ConfigMap or Secret and
 reads the property out of it.
 
+**The fifth precondition: no read-only directory volume covers a path Apchi mounts a single
+file at.** A `subPath` mount of one key at a path inside a ConfigMap or Secret directory mount
+has no file to bind onto, and runc fails the container with "not a directory" before Trino
+runs at all. Reproduced on a real cluster; a nested *directory* mount in the same position
+works, which is what makes the shape below the answer rather than a workaround.
+
 Every check reports every problem it finds rather than the first, because an Admin fixing a
 manifest should see the whole list.
+
+## Deployment shapes
+
+Two shapes exist in the wild and Apchi has to be honest about which it supports.
+
+**File-by-file**, which `deploy/trino-dev` uses: each file in `/etc/trino` is its own mount,
+so Apchi can add and remove single-file mounts inside it. Everything works here.
+
+**Whole directory**, which the official `trino/trino` chart uses: one ConfigMap mounted at
+`/etc/trino`. No single file can be placed inside it, so anything Apchi delivers there has to
+be a nested directory — which the kubelet layers happily.
+
+The target is that every Section delivers a **directory**, mounted by the Admin: Apchi fills
+the Secret and never touches the pod template. Permissions, Client Certificates and
+Certificate Mapping are there. Resource Groups and Event Listeners are not, because Trino pins
+`resource-groups.properties` and `event-listener.properties` to its configuration directory and
+no property relocates either — so on a whole-directory deployment the Admin provides them as
+pointers, exactly as they already provide `access-control.properties` (§13.4).
+
+That is a deployment concern and **not** a change of Section ownership: Operators still own all
+six Sections (§3). A pointer names where a file lives and never varies with the Candidate; what
+is in the file stays the Operator's.
+
+The one capability this does not reach is **Admin raw files** (§14). Their path is the Admin's
+to choose, which makes them single-file mounts by nature, so on a whole-directory deployment
+they are refused — including `config.properties`, which belongs to the chart's own ConfigMap.
+An Admin on such a chart uses its `additionalConfigProperties` instead.
+
 
 ## Rollout mechanics
 

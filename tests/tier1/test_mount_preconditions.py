@@ -12,20 +12,22 @@ So Apchi refuses it instead, while leaving the nested *directory* mounts that do
 correctly alone -- the official chart's own `/etc/trino/catalog` is one of those.
 """
 
+from pathlib import PurePosixPath
 from typing import Any
 
 import pytest
 
 from app.config import Settings
 from app.pipeline.preconditions import PreconditionFailed, check, pod_spec
-from app.sections.certificate_mapping.generator import MOUNT_PATH as MAPPING_PATH
 from app.sections.event_listeners.generator import MOUNT_PATH as LISTENER_PATH
 from app.sections.resource_groups.generator import MANAGER_PATH, RULES_PATH
 from tests.conftest import FakeKubernetes, healthy_pod_spec
 
 #: Every path Apchi mounts a single file at. Only MAPPING_PATH is mounted unconditionally;
 #: the other three appear the first time an Operator configures their Section.
-APCHI_FILES = (MAPPING_PATH, LISTENER_PATH, RULES_PATH, MANAGER_PATH)
+#: Every path Apchi still mounts as a single file. The user-mapping file left this list
+#: when it became a directory (#93); the remaining three are what #125 is about.
+APCHI_FILES = (LISTENER_PATH, RULES_PATH, MANAGER_PATH)
 
 
 def _with_mount(spec: dict[str, Any], mount: dict[str, Any], volume: dict[str, Any]) -> dict:
@@ -66,12 +68,12 @@ async def test_a_whole_directory_config_mount_is_refused(
 async def test_the_refusal_names_every_file_apchi_would_mount_there(
     settings: Settings, fake_kubernetes: FakeKubernetes
 ) -> None:
-    """Including the three whose mounts do not exist yet.
+    """Including the ones whose mounts do not exist yet.
 
-    Only the user-mapping file is mounted unconditionally. Checking what the current
-    Candidate happens to mount would let a Cluster run for months and then crashloop on an
-    Operator's first Event Listener -- the same failure, arriving later and looking like
-    the Operator's doing.
+    None of these three is mounted until an Operator configures its Section. Checking what
+    the current Candidate happens to mount would let a Cluster run for months and then
+    crashloop on an Operator's first Event Listener -- the same failure, arriving later and
+    looking like the Operator's doing.
     """
     with pytest.raises(PreconditionFailed) as raised:
         await check(fake_kubernetes, pod_spec(_whole_config_directory()), settings)
@@ -120,10 +122,24 @@ async def test_apchis_own_single_file_mount_does_not_trip_it(
     settings: Settings, fake_kubernetes: FakeKubernetes
 ) -> None:
     """The mount sits at the file path, not above the directory holding it. Tripping on
-    Apchi's own mount would make the second Apply impossible after the first."""
-    spec = healthy_pod_spec()
-    mounts = spec["containers"][0]["volumeMounts"]
-    assert any(mount["mountPath"] == MAPPING_PATH for mount in mounts), "fixture changed"
+    Apchi's own mount would make the second Apply impossible after the first.
+
+    Made with a file Apchi really does still mount. The user-mapping file was the example
+    until it became a directory (#93), and an assertion against a fixture that no longer
+    has such a mount would pass while testing nothing.
+    """
+    spec = _with_mount(
+        healthy_pod_spec(),
+        {
+            "name": settings.resource_groups_volume_name,
+            "mountPath": RULES_PATH,
+            "subPath": PurePosixPath(RULES_PATH).name,
+        },
+        {
+            "name": settings.resource_groups_volume_name,
+            "secret": {"secretName": settings.resource_groups_secret_name},
+        },
+    )
 
     await check(fake_kubernetes, pod_spec(spec), settings)
 

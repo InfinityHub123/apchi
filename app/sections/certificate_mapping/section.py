@@ -15,7 +15,7 @@ from app.sections import SectionName
 from app.sections.admin import AdminValues
 from app.sections.base import (
     Cluster,
-    CoordinatorFile,
+    CoordinatorDirectory,
     DiscoveredPaths,
     Parsed,
     ParseProblem,
@@ -28,6 +28,7 @@ from app.sections.base import (
 )
 from app.sections.certificate_mapping import RESOURCE, SECTION
 from app.sections.certificate_mapping.generator import (
+    MOUNT_DIR,
     MOUNT_PATH,
     Unreadable,
     parse_rules,
@@ -124,12 +125,23 @@ class CertificateMappingSection:
     #: UserMapping's rule list is immutable once the authenticator exists.
     requires_rollout = True
 
-    def coordinator_files(self, settings: Settings) -> tuple[CoordinatorFile, ...]:
+    def coordinator_files(self, settings: Settings) -> tuple[CoordinatorDirectory, ...]:
+        """One file, and the Admin mounts the directory holding it.
+
+        Apchi used to mount this one file itself, with subPath. That was sound on its own
+        terms -- the rules are read once when the authenticator is built, so there is nothing
+        for the kubelet to keep current -- but it is not portable: a deployment that mounts
+        the whole of `/etc/trino` as one volume cannot take a single-file mount inside it,
+        and the official chart is one (#93).
+
+        The pointer is a property rather than a file, which is why `probe_config` has to
+        exist on this shape too. Without it the probe would hold the rules and not be told
+        to read them, and every pattern would pass.
+        """
         return (
-            CoordinatorFile(
+            CoordinatorDirectory(
                 secret=settings.certificate_mapping_secret_name,
-                volume=settings.certificate_mapping_volume_name,
-                path=MOUNT_PATH,
+                path=MOUNT_DIR,
                 probe_config=PROBE_CONFIG,
             ),
         )

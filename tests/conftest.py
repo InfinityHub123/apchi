@@ -22,7 +22,7 @@ from app.adapters.trino import Trino
 from app.config import Environment, Settings
 from app.main import create_app
 from app.sections.certificate_mapping.generator import FILE_KEY as MAPPING_KEY
-from app.sections.certificate_mapping.generator import MOUNT_PATH as MAPPING_PATH
+from app.sections.certificate_mapping.generator import MOUNT_DIR as MAPPING_DIR
 from app.sections.certificate_mapping.generator import render_rules
 from app.sections.permissions.generator import RULES_KEY
 from app.sections.permissions.generator import render_rules as render_access_control
@@ -146,11 +146,7 @@ def healthy_pod_spec() -> dict[str, Any]:
                         "subPath": "access-control.properties",
                     },
                     {"name": "access-control", "mountPath": "/etc/trino/access-control"},
-                    {
-                        "name": "apchi-user-mapping",
-                        "mountPath": MAPPING_PATH,
-                        "subPath": MAPPING_KEY,
-                    },
+                    {"name": "apchi-user-mapping", "mountPath": MAPPING_DIR},
                     {"name": "catalog-store", "mountPath": "/data/trino/catalogs"},
                 ],
             }

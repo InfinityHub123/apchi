@@ -13,7 +13,7 @@ data:
     discovery.uri={{ include "trino.discoveryUri" . }}
     catalog.management=dynamic
     catalog.store=file
-    {{ include "trino.userMappingProperty" . }}=/etc/trino/user-mapping.json
+    {{ include "trino.userMappingProperty" . }}=/etc/trino/user-mapping/user-mapping.json
     {{- range .Values.trino.additionalCoordinatorProperties }}
     {{ . }}
     {{- end }}

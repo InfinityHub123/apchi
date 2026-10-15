@@ -81,7 +81,7 @@ async def test_a_discovery_says_where_apchi_looked_and_what_it_guessed(
     view = (await client.post(f"{BASE}/discoveries")).json()
 
     mapping = _section(view, "certificate_mapping")
-    assert mapping["looked_at"] == ["/etc/trino/user-mapping.json"]
+    assert mapping["looked_at"] == ["/etc/trino/user-mapping/user-mapping.json"]
     assert "where Apchi would put one" in mapping["guessed_because"]
 
 

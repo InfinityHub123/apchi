@@ -195,6 +195,11 @@ class CoordinatorDirectory:
     #: Admin's. A file Trino was not told to read is a file Trino never rejects, so a probe
     #: that holds the content without the configuration pointing at it proves nothing.
     probe_files: Mapping[str, str] = field(default_factory=dict)
+    #: The same need as `probe_files`, for a pointer that is a property rather than a file.
+    #: Both shapes carry this, because which of the two points Trino at a Section's file is
+    #: Trino's business and not a consequence of how Apchi mounts it: access control is
+    #: turned on by a file, certificate mapping by a property in `config.properties`.
+    probe_config: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

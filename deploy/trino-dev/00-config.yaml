@@ -22,7 +22,7 @@ data:
     discovery.uri=http://trino:8080
     catalog.management=dynamic
     catalog.store=file
-    http-server.authentication.insecure.user-mapping.file=/etc/trino/user-mapping.json
+    http-server.authentication.insecure.user-mapping.file=/etc/trino/user-mapping/user-mapping.json
   worker-config.properties: |
     coordinator=false
     http-server.http.port=8080

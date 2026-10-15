@@ -19,7 +19,7 @@ Cluster looks like:
 | | Here | Where Apchi writes |
 |---|---|---|
 | access-control rules | `/etc/trino/theirs/rules.json` | `/etc/trino/access-control/rules.json` |
-| user mapping | `/etc/trino/theirs/user-mapping.json` | `/etc/trino/user-mapping.json` |
+| user mapping | `/etc/trino/theirs/user-mapping.json` | `/etc/trino/user-mapping/user-mapping.json` |
 | resource groups | `/etc/trino/theirs/groups.json` | `/etc/trino/resource-groups.json` |
 | catalogs | a ConfigMap at `/etc/trino/catalog` | an emptyDir seeded from a Secret |
 
@@ -61,7 +61,7 @@ the namespace and whose baseline fixture would otherwise report this deployment 
 once Apchi has seeded. It is not in this directory because `kubectl apply -f
 deploy/trino-adopted/` has to bring up the Cluster as it was **before** Apchi; applying the
 cutover with it points the coordinator at Secrets that do not exist yet, and Trino refuses to
-boot with `file does not exist: /etc/trino/user-mapping.json`.
+boot with `file does not exist: /etc/trino/user-mapping/user-mapping.json`.
 
 Read it as a diff against `00-config.yaml` and `10-trino.yaml`: that diff is the whole answer
 to "what do I have to change".

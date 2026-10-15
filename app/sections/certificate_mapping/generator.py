@@ -18,8 +18,18 @@ from app.sections.certificate_mapping.model import CertificateMappingWrite
 #: The key inside the Secret, and the filename.
 FILE_KEY = "user-mapping.json"
 
+#: The directory the Admin mounts the Secret at, holding this one file.
+#:
+#: A directory rather than the file itself, which is where this used to be. Trino reads the
+#: rules once when it builds the authenticator, so nothing here needs the kubelet to project
+#: an update -- but a deployment that mounts the whole of `/etc/trino` as one volume cannot
+#: receive a single-file mount inside it at all, and the official `trino/trino` chart is one
+#: (#93, §16). runc fails such a container with "not a directory" and Trino never starts.
+#: A nested *directory* mount in the same position is fine, so this shape works on both.
+MOUNT_DIR = "/etc/trino/user-mapping"
+
 #: Where Apchi puts it. The Admin points an authenticator's `user-mapping.file` at this.
-MOUNT_PATH = f"/etc/trino/{FILE_KEY}"
+MOUNT_PATH = f"{MOUNT_DIR}/{FILE_KEY}"
 
 #: Trino's behaviour with no mapping configured at all: take the name as presented. Always
 #: last, so a principal no pattern matches keeps the name it presented instead of being

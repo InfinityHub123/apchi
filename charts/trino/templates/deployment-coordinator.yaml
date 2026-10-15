@@ -73,14 +73,13 @@ spec:
             - {name: access-control, mountPath: /etc/trino/access-control, readOnly: true}
             # Apchi's mount, pre-created under Apchi's own volume name. The coordinator
             # is configured to read this file at startup and Trino refuses to boot when it
-            # is missing, so it cannot wait for Apchi's first Apply -- and Apchi's
-            # preconditions require the volume at this path to be the one Apchi manages, so
-            # the name is what lets the Admin create it and Apchi take it over.
+            # is missing, so it cannot wait for Apchi's first Apply.
             #
-            # subPath, and correctly so: the rules are read once when the authenticator is
-            # built, so there is nothing for the kubelet to keep current and a Rollout is
-            # what makes a change take.
-            - {name: {{ .Values.volumes.certificateMapping }}, mountPath: /etc/trino/user-mapping.json, subPath: user-mapping.json, readOnly: true}
+            # A whole directory. The rules are read once when the authenticator is built, so
+            # this one does not need the kubelet to project an update -- but a single-file
+            # mount cannot be placed inside a whole /etc/trino mount, which is the shape the
+            # official chart uses, so a directory is the shape that works everywhere (#93).
+            - {name: {{ .Values.volumes.certificateMapping }}, mountPath: /etc/trino/user-mapping, readOnly: true}
             # Whole volume, never subPath: a certificate uploaded after this pod started
             # must appear here without a restart, and a subPath mount never updates
             # (ADR-0005).

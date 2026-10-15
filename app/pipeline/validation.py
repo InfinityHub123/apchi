@@ -29,7 +29,6 @@ from app.pipeline.references import missing_certificates
 from app.sections import SectionName
 from app.sections.base import (
     Cluster,
-    CoordinatorFile,
     Resources,
     SectionPlan,
     ValidationFailure,
@@ -234,10 +233,10 @@ def _why(logs: str) -> str:
 def _blame(logs: str, blame: Mapping[str, str]) -> str | None:
     """Which Section's resource to hang a refusal to start on.
 
-    Trino names the file it choked on -- `Invalid JSON file '/etc/trino/user-mapping.json'
-    for ...` -- so the log is the only honest attribution once more than one Section puts a
-    file in front of the probe. With a single contributor there is nothing to weigh up, and
-    with none the failure is the probe's own.
+    Trino names the file it choked on -- `Invalid JSON file
+    '/etc/trino/user-mapping/user-mapping.json' for ...` -- so the log is the only honest
+    attribution once more than one Section puts a file in front of the probe. With a single
+    contributor there is nothing to weigh up, and with none the failure is the probe's own.
     """
     named = [resource for path, resource in blame.items() if path in logs]
     if len(named) == 1:
@@ -337,8 +336,11 @@ async def validate_candidate(
         files.update(contributed)
         blame.update({path: sorted(staged)[0] for path in contributed if staged})
         for spec in section.coordinator_files(cluster.settings):
-            if isinstance(spec, CoordinatorFile):
-                properties.update(spec.probe_config)
+            # Both shapes, because a pointer is a pointer. Reading it only from
+            # `CoordinatorFile` meant that moving a Section to a directory mount silently
+            # stopped configuring the probe to read it -- and a probe holding a file nothing
+            # points at passes everything.
+            properties.update(spec.probe_config)
     # The Admin's raw files (§14) are validated like everything else: they are the class of
     # configuration most able to stop Trino booting, so the probe is where that should be
     # found out rather than the Cluster.

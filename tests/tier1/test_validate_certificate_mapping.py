@@ -207,11 +207,10 @@ async def test_applying_a_pattern_delivers_the_file_and_restarts_the_coordinator
     assert record["stage"] == "succeeded", record
     delivered = fake_kubernetes.secrets["trino-user-mapping"][FILE_KEY]
     assert '"(.*)@example\\\\.com"' in delivered
-    assert fake_kubernetes.mounts[MOUNT_PATH] == {
-        "volume": "apchi-user-mapping",
-        "secret": "trino-user-mapping",
-        "key": FILE_KEY,
-    }
+    # Apchi fills the Secret and nothing else. The mount is the Admin's, because this is a
+    # directory now rather than a single file Apchi places (#93) -- so a mount appearing
+    # here would mean Apchi had started writing a pod template it does not own.
+    assert MOUNT_PATH not in fake_kubernetes.mounts
     assert len(fake_kubernetes.restarts) == 1
     assert "certificate_mapping" in fake_kubernetes.restarts[0]
 
@@ -231,11 +230,10 @@ async def test_clearing_a_pattern_leaves_the_pass_through_rule_behind(
     delivered = fake_kubernetes.secrets["trino-user-mapping"][FILE_KEY]
     assert '"@example' not in delivered
     assert '"pattern": "(.*)"' in delivered
-    assert fake_kubernetes.mounts[MOUNT_PATH] == {
-        "volume": "apchi-user-mapping",
-        "secret": "trino-user-mapping",
-        "key": FILE_KEY,
-    }
+    # Still exactly one file in the Secret, and still no mount of Apchi's: "no pattern" is
+    # spelled out as a rule, so there is never a moment where the file is absent.
+    assert set(fake_kubernetes.secrets["trino-user-mapping"]) == {FILE_KEY}
+    assert MOUNT_PATH not in fake_kubernetes.mounts
 
 
 async def test_reverting_the_pattern_leaves_the_catalogs_alone_and_warns(

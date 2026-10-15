@@ -3,7 +3,7 @@
 # In a subdirectory on purpose. `kubectl apply -f deploy/trino-adopted/` must bring up the
 # Cluster as it was *before* Apchi, and applying this with it points the coordinator at
 # Secrets that do not exist yet -- Trino then refuses to boot with "file does not exist:
-# /etc/trino/user-mapping.json", which is how this was found.
+# /etc/trino/user-mapping/user-mapping.json", which is how this was found.
 #
 # This is step 4 of §82's five: the deployment change an Admin makes once Apchi has seeded
 # its own Secrets. Committed as a manifest rather than applied as patches because it is also
@@ -14,8 +14,8 @@
 #
 #   1. Trino's configuration now names Apchi's paths instead of the Admin's.
 #   2. Apchi's access-control Secret is mounted whole-volume at /etc/trino/access-control.
-#   3. Apchi's user-mapping Secret is mounted under the volume name Apchi manages, so Apchi
-#      can take the mount over without fighting the Admin for the path.
+#   3. Apchi's user-mapping Secret is mounted whole-volume at /etc/trino/user-mapping. The
+#      Admin owns this mount; Apchi only fills the Secret.
 #   4. The catalog store becomes a writable emptyDir, seeded by an initContainer from the
 #      Secret Apchi now holds -- and this is the one that had to wait. Applied before the
 #      seed, the initContainer copies an empty Secret over the catalogs and loses all of
@@ -36,7 +36,7 @@ data:
     discovery.uri=http://adopted:8080
     catalog.management=dynamic
     catalog.store=file
-    http-server.authentication.insecure.user-mapping.file=/etc/trino/user-mapping.json
+    http-server.authentication.insecure.user-mapping.file=/etc/trino/user-mapping/user-mapping.json
   worker-config.properties: |
     coordinator=false
     http-server.http.port=8080
@@ -102,10 +102,11 @@ spec:
             # Apchi's, whole volume: a subPath mount is frozen at pod creation, so a rewritten
             # rules file would never arrive.
             - {name: access-control, mountPath: /etc/trino/access-control, readOnly: true}
-            # Under the volume name Apchi manages, so Apchi takes the mount over rather than
-            # contending for the path. Trino reads this file once at startup, so subPath is
-            # right here and a Rollout is what makes a change take.
-            - {name: apchi-user-mapping, mountPath: /etc/trino/user-mapping.json, subPath: user-mapping.json, readOnly: true}
+            # Apchi's, and a whole directory. Trino reads this file once at startup, so it
+            # needs no projected update -- it is a directory because a single-file mount
+            # cannot be placed inside a whole /etc/trino mount, which is the shape the
+            # official chart uses (#93).
+            - {name: apchi-user-mapping, mountPath: /etc/trino/user-mapping, readOnly: true}
             - {name: client-certificates, mountPath: /etc/trino/certs, readOnly: true}
             # The Admin's originals, still here and no longer read. This is what reverting
             # this manifest would go back to.

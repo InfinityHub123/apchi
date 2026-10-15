@@ -8,6 +8,7 @@ achieve nothing.
 
 import asyncio
 import json
+from pathlib import PurePosixPath
 
 import pytest
 from httpx import AsyncClient
@@ -15,8 +16,8 @@ from httpx import AsyncClient
 from app.config import Settings
 from app.pipeline.applies import TERMINAL
 from app.pipeline.preconditions import PreconditionFailed, check, pod_spec
-from app.sections.certificate_mapping.generator import MOUNT_PATH as MAPPING_PATH
 from app.sections.permissions.generator import MOUNT_PATH, RULES_KEY, render_rules
+from app.sections.resource_groups.generator import RULES_PATH
 from tests.conftest import FakeKubernetes, healthy_pod_spec
 
 ACCESS_CONTROL_SECRET = "trino-access-control"
@@ -295,14 +296,30 @@ async def test_permissions_appears_in_review_and_costs_no_restart(client: AsyncC
 async def test_a_subpath_mount_of_a_file_apchi_mounts_itself_is_allowed(
     settings: Settings, fake_kubernetes: FakeKubernetes
 ) -> None:
-    """The precondition must not over-reach. Apchi mounts single keys with subPath on
-    purpose -- the user-mapping file is one -- and replaces the mount when the file changes,
-    with a Rollout making the new content live. Rejecting those would refuse every
-    deployment Apchi itself produces."""
-    spec = healthy_pod_spec()
-    mounts = [m["mountPath"] for m in spec["containers"][0]["volumeMounts"]]
+    """The precondition must not over-reach. Apchi still mounts single keys with subPath --
+    the resource-groups and event-listener files are the remaining two (#125) -- and
+    replaces the mount when the file changes, with a Rollout making the new content live.
+    Rejecting those would refuse every deployment Apchi itself produces.
 
-    assert MAPPING_PATH in mounts, "the fixture mounts it the way Apchi does"
+    The user-mapping file used to be the example here and is now a directory (#93), so the
+    case is made with a file Apchi really does still mount rather than by asserting against
+    a fixture that no longer has one.
+    """
+    spec = healthy_pod_spec()
+    spec["containers"][0]["volumeMounts"].append(
+        {
+            "name": settings.resource_groups_volume_name,
+            "mountPath": RULES_PATH,
+            "subPath": PurePosixPath(RULES_PATH).name,
+        }
+    )
+    spec["volumes"].append(
+        {
+            "name": settings.resource_groups_volume_name,
+            "secret": {"secretName": settings.resource_groups_secret_name},
+        }
+    )
+
     await check(fake_kubernetes, pod_spec(spec), settings)
 
 
