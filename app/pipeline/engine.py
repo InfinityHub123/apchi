@@ -15,7 +15,7 @@ import logging
 from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.config import Settings
-from app.pipeline import preconditions
+from app.pipeline import preconditions, raw_files
 from app.pipeline.admin_values import AdminStore
 from app.pipeline.auto_rollback import declare_incident, restore
 from app.pipeline.candidate import CandidateStore
@@ -59,6 +59,7 @@ class Engine:
         self._desired: dict[SectionName, Resources] = {}
         self._plans: dict[SectionName, SectionPlan] = {}
         self._rollout: set[SectionName] = set()
+        self._raw_files_changed = False
         self._cluster = Cluster(trino=trino, kubernetes=kubernetes, settings=settings)
 
     async def _freeze_admin_values(self) -> None:
@@ -97,6 +98,12 @@ class Engine:
         )
 
         self._rollout = await sections_needing_rollout(self._plans, self._desired, self._cluster)
+        # Raw files are not a Section and have no plan, so their restart decision comes from
+        # the Cluster: what the coordinator is holding against what would be delivered. On an
+        # Admin Apply every Section's plan is empty, which makes this the only thing that can
+        # ask for a Rollout -- and §14 requires it to, because these values are read once at
+        # start and are the class most able to stop Trino booting.
+        self._raw_files_changed = await raw_files.changed(self._cluster)
         await validate_candidate(self._desired, self._plans, self._cluster, self._apply_id)
 
     async def _desired_and_baseline(
@@ -136,6 +143,11 @@ class Engine:
             # a file does nothing here at all.
             await deliver(section, self._cluster, desired)
             await section.apply(self._cluster, desired, self._plans[section.name])
+        # After the Sections, so a raw file an Admin wrote to override something a Section
+        # generates lands on top of it -- "Admin wins on conflict" (§14), expressed as
+        # ordering rather than as a merge, because Apchi does not parse a raw file and so
+        # cannot merge one.
+        await raw_files.deliver(self._cluster)
 
     def rollout_needed(self) -> bool:
         """True when a Section Trino adopts only by restarting actually changed.
@@ -145,7 +157,7 @@ class Engine:
         Apply on a Cluster with an Event Listener configured would terminate every running
         query for nothing.
         """
-        return bool(self._rollout)
+        return bool(self._rollout) or self._raw_files_changed
 
     async def roll_out(self) -> None:
         changed = sorted(self._rollout)
@@ -252,6 +264,36 @@ class AdminEngine(Engine):
         # The same on both sides: nothing an Operator owns is changing, so every Section's
         # plan is empty and the Rollout decision comes from the Cluster instead.
         return dict(sections), sections
+
+    async def roll_back(self) -> None:
+        """Put the Admin values back, and the Cluster with them.
+
+        This is where an Admin Apply differs from an Operator one, and the difference is in
+        the spec rather than a choice made here. Invariant 2 says Admin values *survive* a
+        rollback -- they are platform state, and an Operator's rollback should not revert
+        them. But when the Apply that failed **was** the Admin change, those values are what
+        broke the Cluster, and leaving them would redeliver the thing being rolled back.
+
+        There is no Snapshot to restore them from: Admin values never enter one (invariant
+        9). The pre-image `AdminStore.save` keeps is the only record of what the Cluster had,
+        which is why it exists.
+
+        The document is restored before the Cluster, so what the API reports and what the
+        coordinator is running do not disagree in the window between them -- and so that a
+        rollback repeated after a restart (§10) restores the same thing rather than a
+        different one.
+        """
+        restored = await self._admin.restore_previous()
+        self._cluster = Cluster(
+            trino=self._trino,
+            kubernetes=self._kubernetes,
+            settings=self._settings,
+            admin=restored,
+        )
+        latest = await self._snapshots.latest()
+        sections = await self._snapshots.sections_of(None if latest is None else latest.number)
+        await restore(sections, self._cluster)
+        await raw_files.deliver(self._cluster)
 
     async def commit(self) -> int | None:
         logger.info("admin apply committed no snapshot")

@@ -22,16 +22,22 @@ The first is derived from the Sections rather than listed, so a seventh Section 
 without anyone remembering to add it here.
 """
 
+import hashlib
 import logging
 from pathlib import PurePosixPath
+from typing import TYPE_CHECKING
 
 from app.adapters.kubernetes import KubernetesAdapter
 from app.api.errors import UnprocessablePayload
 from app.config import Settings
 from app.pipeline import preconditions
+from app.sections.admin import AdminValues
 from app.sections.base import CoordinatorDirectory, CoordinatorFile
 from app.sections.raw_files import CONFIG_DIR, MAX_FILES, normalised, within_config_dir
 from app.sections.registry import REGISTERED
+
+if TYPE_CHECKING:  # a Cluster carries the adapters and the Admin values together
+    from app.sections.base import Cluster
 
 logger = logging.getLogger(__name__)
 
@@ -166,3 +172,113 @@ def _covers(mount_path: str, directory: str) -> bool:
     """
     normalised_mount = mount_path.rstrip("/")
     return directory == normalised_mount or directory.startswith(f"{normalised_mount}/")
+
+
+def secret_key(path: str) -> str:
+    """The Secret key one raw file is stored under.
+
+    Not the filename, which is what a Section's `CoordinatorFile` uses. Raw files sit at
+    arbitrary paths under /etc/trino, so two of them can share a basename --
+    `/etc/trino/a/x.properties` and `/etc/trino/b/x.properties` -- and a key derived from the
+    name alone would silently deliver one file to both places.
+
+    A digest of the full path makes it unique; the basename is kept on the end so that
+    `kubectl describe secret` is readable by somebody who did not write this. The key never
+    reaches the container: a subPath mount takes its filename from the mount path.
+    """
+    digest = hashlib.sha256(path.encode()).hexdigest()[:12]
+    return f"{digest}-{PurePosixPath(path).name}"
+
+
+def planned(values: AdminValues) -> dict[str, str]:
+    """Every raw file to deliver, by the path it is delivered at."""
+    return dict(values.raw_files)
+
+
+async def deliver(cluster: "Cluster") -> None:
+    """Write the raw files Secret and mount each file -- or unmount what is gone.
+
+    Not a Section, and deliberately not made one. Invariant 9 keeps Admin values out of the
+    Candidate and the Snapshot model, and a Section is defined by participating in both; a
+    seventh Section whose resources were never recorded would be a Section in name only and
+    would have to be special-cased in every walk of the registry.
+
+    So this mirrors `files.deliver` rather than reusing it: one Secret, and a `subPath` mount
+    per file on one volume Apchi owns. The volume arrives with the first raw file and leaves
+    with the last, which is the same arrangement §13.6 already needs for the Event Listener
+    and for the same reason -- "no raw files" can only be expressed by the mounts not being
+    there, since Kubernetes turns a subPath mount of an absent key into a directory Trino
+    dies reading.
+    """
+    desired = planned(cluster.admin)
+    settings = cluster.settings
+    await cluster.kubernetes.write_secret(
+        settings.raw_files_secret_name,
+        {secret_key(path): content for path, content in desired.items()},
+    )
+
+    mounted = await _mounted_paths(cluster)
+    gone = sorted(mounted - set(desired))
+    for path in sorted(desired):
+        await cluster.kubernetes.mount_secret_file(
+            settings.coordinator_deployment_name,
+            settings.trino_container_name,
+            settings.raw_files_volume_name,
+            settings.raw_files_secret_name,
+            path,
+            secret_key(path),
+        )
+    if gone:
+        await cluster.kubernetes.unmount_secret_files(
+            settings.coordinator_deployment_name,
+            settings.trino_container_name,
+            settings.raw_files_volume_name,
+            gone,
+            # The volume goes with the last file. A volume left behind with no mounts is dead
+            # weight on the Admin's pod template, and the API server rejects removing one
+            # while a mount still names it -- so the two have to move together.
+            drop_volume=not desired,
+        )
+    # Paths and counts, never content: §14 treats every raw value as a credential because
+    # Apchi cannot tell which part of one is.
+    logger.info(
+        "delivered admin raw files",
+        extra={"raw_files": sorted(desired), "raw_files_removed": gone},
+    )
+
+
+async def _mounted_paths(cluster: "Cluster") -> set[str]:
+    """Which raw files the coordinator is currently mounting.
+
+    Read from the live pod template rather than from a second record of what Apchi believes it
+    mounted. §11 settled that question for rollback -- a diff of two durable records needs no
+    history to stay honest -- and the same argument applies here: a mount an Admin removed by
+    hand is corrected by the next Apply instead of drifting forever.
+    """
+    spec = preconditions.pod_spec(
+        await cluster.kubernetes.deployment_pod_spec(cluster.settings.coordinator_deployment_name)
+    )
+    return {
+        mount.mount_path
+        for container in spec.containers
+        for mount in container.volume_mounts
+        if mount.name == cluster.settings.raw_files_volume_name and mount.sub_path
+    }
+
+
+async def changed(cluster: "Cluster") -> bool:
+    """Whether delivering would change what the coordinator is holding.
+
+    Raw files are read once at start -- that is what makes them the class §14 calls most able
+    to stop Trino booting -- so any change needs a Rollout. An Admin Apply moves nothing an
+    Operator owns, so the restart decision cannot come from a Section's plan; §14 settles it
+    by comparing the rendered file with what the coordinator actually has, and this is that
+    comparison for raw files.
+    """
+    desired = planned(cluster.admin)
+    if set(desired) != await _mounted_paths(cluster):
+        return True
+    live = await cluster.kubernetes.read_secret_if_present(cluster.settings.raw_files_secret_name)
+    return {secret_key(p): c for p, c in desired.items()} != {
+        key: value for key, value in (live or {}).items()
+    }

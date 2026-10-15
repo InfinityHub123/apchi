@@ -46,6 +46,16 @@ CLIENT_CERTIFICATE_SECRET = "trino-client-certificates"
 
 #: The mounts Apchi adds and removes on the coordinator, by the volume that carries
 #: them. What the reset has to take back off between tests.
+#: Every volume Apchi adds and removes on the coordinator. The raw files volume (§14) is
+#: here but not in APCHI_MOUNTS below: an Admin writes raw files at whatever paths they
+#: choose, so its mount paths are read from the live Deployment rather than listed. A reset
+#: that guessed would leave mounts behind for the next test to trip over.
+OPTIONAL_VOLUMES = (
+    "apchi-event-listener",
+    "apchi-resource-groups",
+    "apchi-admin-raw-files",
+)
+
 APCHI_MOUNTS = {
     "apchi-event-listener": ["/etc/trino/event-listener.properties"],
     "apchi-resource-groups": [
@@ -191,6 +201,30 @@ class PortForward:
         raise AssertionError(f"coordinator not serving through the forward on {self.port}")
 
 
+def mounted_paths(volume: str) -> list[str]:
+    """Which paths a volume is mounted at on the coordinator right now.
+
+    Read rather than listed, because the Admin raw files volume (§14) is mounted at whatever
+    paths an Admin wrote -- there is no static list of them, and a reset that guessed would
+    leave mounts behind for the next test to trip over.
+
+    Filtered in Python rather than with a jsonpath `?()` predicate: kubectl's jsonpath does
+    not accept one reliably across versions and fails the whole command rather than returning
+    nothing, which took out every test in the file that touched this.
+    """
+    spec = json.loads(
+        kubectl(
+            "get",
+            "deployment",
+            "trino-coordinator",
+            "-o",
+            "jsonpath={.spec.template.spec.containers[0].volumeMounts}",
+        )
+        or "[]"
+    )
+    return [mount["mountPath"] for mount in spec if mount.get("name") == volume]
+
+
 def _unmount_patch(volumes: list[str]) -> dict[str, Any]:
     """A strategic patch taking those volumes and their mounts off the pod template."""
     return {
@@ -204,7 +238,7 @@ def _unmount_patch(volumes: list[str]) -> dict[str, Any]:
                             "volumeMounts": [
                                 {"mountPath": path, "$patch": "delete"}
                                 for volume in volumes
-                                for path in APCHI_MOUNTS[volume]
+                                for path in APCHI_MOUNTS.get(volume) or mounted_paths(volume)
                             ],
                         }
                     ],
@@ -228,7 +262,7 @@ def _apchi_volumes_present() -> list[str]:
         "-o",
         "jsonpath={.spec.template.spec.volumes[*].name}",
     ).split()
-    return [name for name in ("apchi-event-listener", "apchi-resource-groups") if name in volumes]
+    return [name for name in OPTIONAL_VOLUMES if name in volumes]
 
 
 def trino_selector(component: str) -> str:
@@ -367,7 +401,7 @@ def _divergence(settings: Settings) -> list[str]:
         "-o",
         "jsonpath={.spec.template.spec.volumes[*].name}",
     ).split()
-    problems.extend(f"mount {volume}" for volume in APCHI_MOUNTS if volume in volumes)
+    problems.extend(f"mount {volume}" for volume in OPTIONAL_VOLUMES if volume in volumes)
 
     # A catalog the seed does not name is one a previous run created. The store is an
     # emptyDir reseeded at pod start, so it survives only until the coordinator restarts --
@@ -439,7 +473,7 @@ def _restore_baseline(settings: Settings) -> None:
 
     if volumes := [
         v
-        for v in APCHI_MOUNTS
+        for v in OPTIONAL_VOLUMES
         if v
         in kubectl(
             "get",
@@ -471,6 +505,16 @@ def _restore_baseline(settings: Settings) -> None:
         )
 
 
+#: Divergence from the manifests immediately after the session's baseline restore. See
+#: `baseline`, and `test_baseline.py` for the assertion that reads it.
+_AT_SESSION_START: list[str] = []
+
+
+def divergence_at_session_start() -> list[str]:
+    """How the cluster differed from the manifests once the session had set it up."""
+    return list(_AT_SESSION_START)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def baseline(cluster: None) -> None:
     """Put the cluster into a known state once, before any test runs.
@@ -492,6 +536,14 @@ def baseline(cluster: None) -> None:
     if problems := _divergence(settings):
         logger.warning("tier 2 cluster is not at baseline: %s", ", ".join(problems))
         _restore_baseline(settings)
+    # Recorded, because "the suite starts from what the manifests ship" is a property of this
+    # moment and of nothing later. The per-test reset restores each Secret to how it found it
+    # at setup, not to the manifest, so a test that changes one leaves it changed for the rest
+    # of the shard -- and a test asserting live divergence passes or fails on which files
+    # happen to share its shard. That is how this broke: adding a tier 2 file shifted the
+    # positional shards and put the assertion after something that moves the catalog seed.
+    _AT_SESSION_START.clear()
+    _AT_SESSION_START.extend(_divergence(settings))
 
 
 @pytest.fixture(scope="session")
@@ -729,7 +781,8 @@ async def cluster_state(
                                     "volumeMounts": [
                                         {"mountPath": path, "$patch": "delete"}
                                         for volume in volumes
-                                        for path in APCHI_MOUNTS[volume]
+                                        for path in APCHI_MOUNTS.get(volume)
+                                        or mounted_paths(volume)
                                     ],
                                 }
                             ],

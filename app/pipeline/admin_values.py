@@ -94,6 +94,26 @@ class AdminStore:
             upsert=True,
         )
 
+    async def restore_previous(self) -> AdminValues:
+        """Put the document back to what it was before the last write, and return it.
+
+        **Without rotating the pre-image.** A rollback is not a new write: rotating here
+        would make the bad values the thing a second rollback restores, which is the opposite
+        of what anybody wants from the word.
+
+        So the pre-image stays where it is, and restoring twice is idempotent -- which it has
+        to be, because §10's recovery can run a rollback after an Apchi restart as well as
+        inside the Apply that failed.
+        """
+        previous = await self.previous()
+        await self._collection.replace_one(
+            {"_id": _DOCUMENT_ID},
+            {"_id": _DOCUMENT_ID, **previous.model_dump(mode="json")},
+            upsert=True,
+        )
+        logger.warning("restored the admin values a failed apply replaced")
+        return previous
+
     async def previous(self) -> AdminValues:
         """What the Admin document held before the last write.
 
