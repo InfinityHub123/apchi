@@ -24,7 +24,8 @@ Trino logs nothing, because it never starts. A nested **directory** mount in the
 works fine, which is what the configuration below relies on.
 
 Apchi refuses such a deployment before an Apply rather than discovering it mid-Rollout — §16's
-fifth precondition.
+sixth precondition. Why it is handled this way rather than by declaring the chart unsupported:
+[ADR-0007](adr/0007-the-deployment-owns-the-pinned-pointers.md).
 
 ## The values
 

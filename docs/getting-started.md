@@ -73,6 +73,11 @@ helm install apchi charts/apchi -n apchi \
 The two `image` settings are because you built the image locally; the chart otherwise
 defaults to the published one, which your cluster cannot pull a locally built tag from.
 
+Nothing here sets `auth.mode`, so this walkthrough runs with authentication **off** — every
+caller is treated as an Admin, which is what makes the `curl` commands below work with no
+credentials. That is the default and it is fine on a laptop; it is not fine on a cluster other
+people can reach. `concepts.md` covers `password` and `sso`.
+
 `charts/apchi/README.md` documents every value and when you would change it.
 
 ## 2. A Trino to configure

@@ -190,6 +190,17 @@ undoes one:
   For platform upgrades, and what an auto rollback failure engages.
 - **Preserved certificate mapping patterns**, for a migration that has to keep an old pattern
   working.
+- **Raw files.** An admin writes a path under Trino's configuration directory and the content
+  to put there, and Apchi delivers it with no schema over it: if Trino accepts it, it works;
+  if not, validation refuses it; if the cluster fails anyway, auto rollback takes it back. The
+  escape hatch for the configuration Apchi does not model, and the reason it is an admin's is
+  that it trades away the safety net operators get — a typo in a section is rejected at
+  request time by a typed model, a typo in a raw file is a validation failure minutes later.
+
+  Whether this works at all depends on how your coordinator mounts its configuration
+  directory. A raw file's path is the admin's to choose, which makes it a single-file mount,
+  and a deployment that mounts the whole of `/etc/trino` as one volume cannot accept one — see
+  [`official-trino-chart.md`](official-trino-chart.md).
 
 **End users** query Trino. They are never Apchi users — only the subject of permissions and
 resource groups.

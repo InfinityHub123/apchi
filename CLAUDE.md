@@ -30,7 +30,8 @@ event listeners. §24.
 app/
   pipeline/   candidate, review, validate, apply, verify, commit, auto_rollback
   sections/   catalogs, client_certificates, certificate_mapping, permissions,
-              resource_groups, event_listeners
+              resource_groups, event_listeners, and raw_files -- which is the Admin's and
+              deliberately not a Section, because it never enters a Snapshot
   adapters/   kubernetes, trino, mongo
   auth/       identity, passwords, users, sessions, tokens, oidc, logins
   audit/      §20's events: who changed what, and when
@@ -45,8 +46,12 @@ strategy, and whether it requires a restart.
 `CONTEXT.md`'s terms are the identifiers: `Snapshot`, `ConfigurationCandidate`, `Section`,
 `apply`, `rollout`, `validate`, `verify`, `commit`, `reset`, `section_revert`,
 `full_rollback`, `auto_rollback`, `maintenance_mode`, `TrinoIdentity`,
-`CertificateMappingPattern`. Where the glossary defines a term, use that term and no
-synonym for it.
+`CertificateMappingPattern`, `Identity`, `Role`, `RawFile`, `AuditEvent`. Where the glossary
+defines a term, use that term and no synonym for it.
+
+Two pairs are easy to conflate, and the glossary separates them deliberately: `Identity` is an
+Apchi caller, `TrinoIdentity` is whoever runs a query; a `Section` enters a Snapshot, a
+`RawFile` never does.
 
 ## Libraries
 
@@ -61,12 +66,47 @@ Reach for these rather than the ones most tutorials suggest:
   `system.runtime.nodes` system table, not `/v1/node` — that endpoint 404s on Trino 483.
 - **Trino in tests** — `testcontainers.community.trino`.
 
+## Deployment shapes
+
+Trino clusters mount `/etc/trino` in one of two ways, and it decides what Apchi can deliver.
+
+**File-by-file**, which `deploy/trino-dev` uses: each file is its own mount, so Apchi can add
+single-file mounts inside it.
+
+**Whole-directory**, which the official `trinodb/charts` chart uses: one ConfigMap at
+`/etc/trino`. Kubernetes will not place a single file inside a read-only directory volume --
+runc fails the container with `not a directory` and Trino never starts, so there is no log to
+read. A nested *directory* mount in the same position is fine, which is why most of what Apchi
+writes is a directory the Admin mounts.
+
+Two files Trino pins to that directory cannot move: `resource-groups.properties` is read as
+`etc/resource-groups.properties`, and the alternative to `etc/event-listener.properties` is
+`event-listener.config-files` in `config.properties`. On a whole-directory deployment the Admin
+provides those two pointers and Apchi fills the directories they name; the settings are
+`resource_groups_properties_from_deployment` and
+`event_listener_config_files_from_deployment`, both off by default. Admin raw files do not work
+there at all, because their path is the Admin's to choose. See §16 and
+`docs/official-trino-chart.md`.
+
+Rendering a chart and checking the pod template is not the same as installing it. Both errors
+in the documented values for the official chart were found by installing it, not by rendering
+it: `additionalConfigProperties` reaches workers as well as the coordinator, and four Secrets
+must hold a file before the coordinator first starts.
+
 ## Tests
 
 Two tiers. Tier 1 drives the HTTP API against real MongoDB and real Trino with Kubernetes
 faked; tier 2 runs against a real cluster and is marked `tier2`.
 
-`pytest tests/tier1` runs the whole suite in one process, in about two and a half minutes.
+`pytest tests/tier1` runs the whole suite in one process, in a bit over three minutes.
+
+**Tier 2 is sharded positionally**, four ways, by
+`ls tests/tier2/test_*.py | awk "NR % 4 == <shard> % 4"`. So **adding a tier 2 file reshuffles
+every shard**, and a test that depends on what ran before it starts failing somewhere else.
+Before pushing a new tier 2 file, compute its shard the way CI does and run that shard
+locally -- which is cheaper than three CI cycles, and is how the last two reshuffles were
+caught. A tier 2 test that changes the Cluster deliberately puts it back itself, rather than
+leaving the rest of its shard to tolerate it.
 
 It used to hang -- 5519s and 18 timeouts, with no assertion ever failing -- which is what
 `scripts/tier1.sh` existed to work around. The cause was the test MongoDB's **open-file

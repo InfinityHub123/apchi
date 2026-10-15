@@ -21,20 +21,28 @@ and node selectors belong to Admins. What it does is make the handful of things 
 *does* require impossible to get wrong, since each of them fails in a way that does not
 look like its cause.
 
-The official `trino/trino` chart is the general-purpose one and has far more in it. It does
-not work with Apchi yet, for a reason worth knowing even if you use this chart: it mounts
-its whole configuration directory from one ConfigMap, and Apchi mounts a single file inside
-`/etc/trino`. A `subPath` mount at a path inside a ConfigMap directory mount fails the
-container outright — runc has no file to bind onto, and the pod crashloops with no Trino
-log at all. See #93.
+The official `trinodb/charts` chart is the general-purpose one and has far more in it. It
+**does** work with Apchi, with two settings and a handful of values —
+[`docs/official-trino-chart.md`](../../docs/official-trino-chart.md) is the whole recipe, and
+CI proves Apchi's preconditions pass against what that chart renders.
 
-This chart mounts each configuration file separately, which is why it works.
+The difference between the two is worth knowing even if you use this one. The official chart
+mounts its whole configuration directory from one ConfigMap, and Kubernetes will not place a
+single file inside a read-only directory volume: runc has no file to bind onto, the container
+fails with `not a directory`, and the pod crashloops with no Trino log at all. A nested
+*directory* mount in the same position is fine.
+
+This chart mounts each configuration file separately instead, which is the shape that lets
+Apchi own the two mounts Trino pins to `/etc/trino` — `resource-groups.properties` and
+`event-listener.properties`. On the official chart the deployment provides those two pointers
+and Apchi fills the directories they name, which costs the ability to empty Event Listeners
+and rules out Admin raw files. Neither limit applies here.
 
 ## What it guarantees
 
 `scripts/check_trino_chart.py` renders this chart and runs **Apchi's own precondition
 checker** against the result, so the chart cannot drift into something Apchi refuses. CI
-runs it. These are the five things it proves:
+runs it. These are the things it proves:
 
 1. **No Apchi-managed file is `subPath`-mounted.** Kubernetes documents that a `subPath`
    mount never receives updates — the file is frozen at pod creation, permanently — so
@@ -51,14 +59,30 @@ runs it. These are the five things it proves:
    means whichever wrote last wins, silently.
 5. **`security.refresh-period` is set.** Without it Trino reads the access-control rules
    once at startup and never again.
+6. **No read-only directory volume covers a path Apchi mounts a single file at.** The
+   `not a directory` failure above, refused before an Apply rather than discovered during
+   one. This is the check the official chart fails without its own configuration.
+
+The checker runs a seventh — **a pointer the deployment claims to provide is really there**,
+and really names the directory Apchi fills — but it has nothing to say here. That check only
+engages on a deployment where the Admin owns those pointers, and this chart is not one: it
+runs against default settings, where Apchi mounts both files itself. The check matters for the
+official chart, not for this one.
 
 ## This chart creates no Secrets
 
-It mounts six and creates none. They hold configuration Apchi writes and rewrites on every
+It creates none, and mounts four: the access-control rules, the user-mapping file, the catalog
+seed and the client certificates. They hold configuration Apchi writes and rewrites on every
 apply, so they are Apchi's data and Apchi's chart creates them — which is why Apchi is
-installed first. Trino reads two of them while loading and refuses to boot when either is
-missing, so it cannot start and wait; Apchi has no such problem, because its readiness
-depends on MongoDB and nothing else.
+installed first. Trino reads the first two while loading and refuses to boot when either is
+missing, so it cannot start and wait; Apchi has no such problem, because its readiness depends
+on MongoDB and nothing else.
+
+Apchi's chart creates **six**. The other two — resource groups and the event listener — are
+not mounted here on purpose: for both of them the *absence* of the mount is how "none
+configured" is expressed, since Trino refuses to start when a file it was told to read is
+missing. So Apchi adds and removes those two mounts itself, and they are the only part of this
+pod template it writes.
 
 Keeping them out of here is what lets this chart be read, reviewed and released without
 Apchi in the picture. The cost is that the two charts must now **agree on names**, and
@@ -76,7 +100,7 @@ can.
 | `trino.environment` | `production` | `node.environment`; lowercase alphanumeric and underscores only |
 | `trino.jvm.maxHeapSize` | `2G` | Per node |
 | `trino.securityRefreshPeriod` | `30s` | How soon a permission change takes effect. Lower is a faster Apply and more file reads |
-| `authentication.type` | `insecure` | `certificate` for production. Both feed the same file to the same parser; Trino rejects the certificate variant unless certificate authentication is configured (§7.6) |
+| `authentication.type` | `insecure` | `certificate` for production. Both feed the same file to the same parser; Trino rejects the certificate variant unless certificate authentication is configured (§13.3) |
 | `fullnameOverride` | `""` | Pins the Deployment names Apchi is configured with, independently of the release name |
 | `trino.additionalCoordinatorProperties` | `[]` | Verbatim into `config.properties`. Properties Apchi owns are not yours to set here, and the preconditions will say so |
 
