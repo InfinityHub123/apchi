@@ -99,6 +99,19 @@ storing the resource and complaining later (§6).
 an Apply — every engine, not only the one that restarts Trino — so what is committed is what
 was verified.
 
+**One Candidate means one document, and one document has a ceiling.** MongoDB caps a document
+at 16MB, so that is the limit on everything staged across all six Sections *together* — not a
+quota per Section and not a policy anybody chose. Apchi refuses an edit that would cross it,
+below 16MB to leave room for BSON overhead and for the Snapshot an Apply makes of the same
+content, with a `candidate_too_large` naming the Section that grew. Without that guard the
+failure arrives as a rejected write on whichever edit happens to cross the line, which tells
+the Operator nothing; an import is refused whole for the same reason it is refused on
+validation.
+
+This is also the real answer to how large a Section can get. §19 names permissions and catalogs
+as likely-large collections, and their limit is this ceiling rather than response size —
+paginating them would make a Candidate that cannot be saved merely easier to read.
+
 ## Candidate lifecycle
 
 - **Apply succeeds** — the Candidate is re-derived from the new Snapshot; its diff is empty.
@@ -187,8 +200,8 @@ Two things about the pod come from the Trino image rather than from Apchi, and b
 get wrong:
 
 - Dynamic catalogs are switched on through the `CATALOG_MANAGEMENT` environment variable, which
-  the image's own `config.properties` reads. Apchi therefore mounts no config file and overrides
-  no command.
+  the image's own `config.properties` reads. Apchi therefore overrides no command, and mounts no
+  config file until a Section needs one.
 - The image ships **example catalogs** — `jmx`, `memory`, `tpch`, `tpcds` — in
   `/etc/trino/catalog`. The validation pod hides them behind an empty volume, so the probe holds
   exactly what the Candidate declares. Without that, a Catalog an Operator quite reasonably named
@@ -213,6 +226,14 @@ leaves nothing the startup sweep cannot find. Inside the probe those files are `
 mounts, which is right for the reason it is wrong on the Cluster (§16): the probe is a fresh
 pod every time, so a mount that never updates is a mount that never needs to.
 
+**A file is only validated if something is configured to read it.** Trino ignores a file no
+property points at, so a probe left with the image's own configuration would start happily on a
+Certificate Mapping Pattern it could never parse — and every pattern would pass. So a Section
+declares the properties that make its file live, and the probe's `config.properties` is
+generated: what the image ships, plus each probing Section's own. Generated rather than patched,
+because the image's file is the thing being replaced. This is only true of the probe; on the
+Cluster those properties are Admin territory (§15), since they choose the authenticator.
+
 **Where the reason comes from.** When a probe refuses to start, its **log** is the only place
 the reason exists — Trino writes nothing to the termination-log file Kubernetes would otherwise
 surface — so Apchi reads it and quotes the error lines back in the Validation failure. That is
@@ -221,9 +242,11 @@ is the *diagnostic an Operator needs to fix their configuration*, where in Verif
 have been a *correctness signal* standing in for a functional check. Reading a log to explain a
 failure is not the same as reading one to decide whether something worked.
 
-The failure names the listener as well as the reason. With one file-based Section that
-attribution is unambiguous; a second will need it to come from whichever Section contributed the
-file Trino choked on.
+The failure names the resource as well as the reason. With more than one file-based Section
+"the first one" is not an answer, so the attribution comes from the log too: Trino names the
+file it choked on — `Invalid JSON file '/etc/trino/user-mapping/user-mapping.json' for ...` — and the file
+belongs to exactly one Section. Where the log names none of them the failure carries the reason
+without a resource, which is honest rather than a guess.
 
 Requirements:
 
@@ -282,7 +305,7 @@ mount is read-only, so that one directory alone is delivered differently:
 | Directory | Written by | Delivery |
 |---|---|---|
 | Catalog `.properties` | **Trino** | Secret at a seed path → initContainer copy → writable container filesystem |
-| `rules.json`, certificates, resource groups, event listeners, user mapping | Apchi | Secret or ConfigMap mounted directly; the kubelet keeps it current |
+| `rules.json`, certificates, user mapping, resource groups, event listeners | Apchi | Secret or ConfigMap mounted directly; the kubelet keeps it current |
 
 ```
                     Apchi patches
@@ -380,6 +403,17 @@ There is no coordinator HA. No configuration of Apchi changes this. See
 
 The Apply confirmation must say so, in those words, with a live running-query count.
 
+`GET /review` carries it: whether applying restarts the coordinator, the sentence saying what
+that does to queries, and how many are running or queued right now. The count is a **live
+reading and not a promise** — it is stale the moment it is returned, and nothing depends on its
+exactness; what matters is the order of magnitude and the sentence beside it. The counting query
+is itself running while it counts, so it is excluded.
+
+The Cluster is asked only when the answer matters. A Candidate needing no restart costs no
+queries, so Review does not touch Trino for it — and when a restart *is* coming but the Cluster
+cannot be reached, the count is reported as unknown rather than guessed at, because Review's job
+is to show an Operator what is staged and an unreachable Cluster must not stop that.
+
 ## 7.4 Minimal restart set
 
 Apchi restarts only what the Candidate's changes require:
@@ -434,12 +468,27 @@ A file written by Apchi does not reach Trino instantly. Two delays stack:
 **Do not sleep a fixed duration.** A fixed 65-second wait is both usually wrong and
 occasionally too short. Poll for the change to become observable, with a timeout:
 
-- **Permissions** — run a probe query as the reserved identity (§8) that the Candidate's
-  rules should newly allow or deny, until the answer matches.
-- **Client certificates** — retry the catalog DDL that references the certificate, with
-  backoff, until it succeeds or the timeout expires. The certificate must be on disk before
-  a catalog using it can connect (§13.2), and Apchi cannot see the pod's filesystem to check
-  directly.
+- **Permissions** — nothing to poll, and the reason is worth setting down because the obvious
+  design does not survive contact with Trino. Apchi cannot observe another identity's access:
+  it cannot impersonate one, and granting itself impersonation would make its identity the
+  most dangerous thing in the Cluster. Its *own* access does not change between Applies,
+  because its rules are generated and constant. A canary rule naming a catalog that does not
+  exist is invisible — `CATALOG_NOT_FOUND` is raised before the access check, verified against
+  a running coordinator. And there is no introspection surface for the loaded rules: Trino 483
+  has no `system.metadata.table_privileges`, and §8 already notes it reports no live file
+  version. So Apply delivers the rules and says so, and adoption is Trino's timer (§7.2).
+
+  What makes that safe rather than negligent is the precondition below: Apchi refuses to run
+  against a Cluster that would never re-read the file at all. The failure mode being guarded
+  is not "the change took a minute" but "the change will never arrive".
+- **Client certificates** — nothing to poll, and that is worth stating because the obvious
+  mechanism does not work. `CREATE CATALOG` does **not** open a connection: a catalog whose
+  `sslcert` names a file that is not there is created quite happily, and the failure appears
+  only when a query runs. Verified against a running coordinator. Retrying the DDL until it
+  succeeds would therefore prove nothing about whether the certificate arrived, so Apchi does
+  not do it. The Secret is still written before the DDL — the file should be on its way before
+  the catalog exists — but Apchi claims nothing about when it lands, and a query issued before
+  the kubelet projects it fails until it does.
 
 **Catalogs: Secret first, then DDL.** The catalog Secret is patched before the DDL is issued.
 A failed DDL then leaves a catalog recorded but not yet live — Apchi knows, because the DDL
@@ -454,7 +503,7 @@ too. A Kubernetes merge patch merges the data map key by key, so removing a key 
 explicit null — without it a dropped Catalog is seeded straight back in at the next pod restart,
 which is the same silent, weeks-later failure in reverse. A consequence worth stating: a catalog
 that exists on the Cluster but not in the Candidate is removed from the seed by the next Apply.
-Bringing pre-existing catalogs under management is Adoption's job (§12), not Apply's.
+Bringing pre-existing catalogs under management is Adoption's job (§15), not Apply's.
 
 # 8. Verification
 
@@ -465,8 +514,9 @@ configuration and stay healthy?*
 2. `/v1/status` — node liveness
 3. `SELECT count(*) FROM system.runtime.nodes WHERE NOT coordinator AND state = 'active'` —
    worker count matches the Kubernetes replica count
-4. `SHOW CATALOGS` — every catalog in the Candidate is present
-5. A smoke query against a default catalog, run as Apchi's reserved identity
+4. A smoke query against a default catalog, run as Apchi's reserved identity
+5. `SHOW CATALOGS` — every catalog in the Candidate is present
+6. The resource group that smoke query ran in is the one the selectors name (§13.5)
 
 Step 4 catches divergence between the catalog Secret and Trino's store while the Apply is
 still in flight, rather than leaving it to surface at the next restart. It is Verification,
@@ -478,10 +528,37 @@ that endpoint returns 404 on Trino 483, verified against a running cluster. The 
 is a documented SQL interface reachable over the connection Apchi already holds, and needs no
 management credentials.
 
-Step 4 is what distinguishes "the coordinator came back up" from "the coordinator came back
+Step 5 is what distinguishes "the coordinator came back up" from "the coordinator came back
 up running the configuration we just applied". Trino exposes no endpoint reporting which
 version of a rules file is active, so verification must be functional rather than
 introspective.
+
+Step 6 is that same principle reaching a file-based Section for the first time. The smoke
+query runs *before* the Sections are asked rather than after, because what became of it is
+evidence: Trino records the resource group a query ran in, and a Section is handed the query
+id so it can ask the Cluster what happened instead of reading configuration back. Event
+Listeners and Certificate Mapping still have nothing of the kind — a listener's output goes
+to a sink Apchi cannot read, and proving a mapping pattern would mean holding a client
+certificate Apchi does not have.
+
+**What Verification cannot say about Permissions.** Nothing beyond what it already says. The
+only access Apchi can observe is its own, and its own rules are generated and constant -- so
+the smoke query (step 4) and the catalog DDL already prove everything there is to prove. It
+cannot check an Operator's grant, because it cannot act as the identity the grant is for:
+impersonation is denied, and granting Apchi impersonation would make its identity the most
+dangerous thing in the Cluster. §7.5 records the other three dead ends. What guards this
+Section instead is a precondition (§16, the refresh period) and Validation: the probe is
+started with the rules *and* the properties that make Trino read them, so a file Trino will
+not parse fails before the Cluster is touched. That matters because a running Cluster hides
+it -- Trino keeps the old rules when a refresh fails, and the coordinator then fails to start
+whenever it next restarts.
+
+**A check that cannot be certain says nothing.** Predicting where a query lands means
+evaluating the selectors the way Trino does, and a wrong prediction fails Verification on a
+healthy Cluster and rolls a good Apply back. So the prediction stops rather than guesses
+whenever a selector turns on something Apchi cannot know about its own query — which groups
+its user belongs to, who it was before impersonation — and the check is skipped. The same
+holds when no selector claims the query at all, or when the Cluster reports no group.
 
 ## The reserved identity
 
@@ -489,6 +566,10 @@ Apchi holds a reserved Trino Identity with `MANAGEMENT_READ` and `SELECT` on a d
 verification catalog. Its rule is injected at configuration-generation time, shown in the
 Permissions UI as a system-owned row that Operators can see but not edit, and Validation
 rejects any Candidate whose rules would shadow it.
+
+That injection is now real, and it is two rules rather than one: `owner` on catalogs, which
+is what restricts catalog DDL to Apchi, and SELECT on the verification catalog, which is what
+survives a `tables` block denying everything it does not name (§13.4).
 
 Without this, the first Operator who tightens their permission matrix breaks Verification
 for every future Apply with no indication why.
@@ -677,8 +758,10 @@ The warning must be specific: "3 catalogs will be dropped" is materially differe
 "resource groups will be rewritten".
 
 Both actions therefore return the **effect** rather than a bare acknowledgement: which catalogs
-an Apply would drop, create and replace, which Snapshot the other Sections stay at, and a
-sentence saying what it does. The drop list names the catalogs, it does not count them — an
+an Apply would drop, create and replace, which Snapshot the other Sections stay at, whether
+applying restarts the coordinator and what that costs in queries, and a sentence saying what it
+does. A recovery action that destroys every running query must not be quieter about it than the
+change that made it necessary. The drop list names the catalogs, it does not count them — an
 Operator about to lose one should see which. The plan behind it is the same one Apply computes,
 against the Candidate's base Snapshot, so it is the statements an Operator would actually cause
 rather than an estimate. Whether the other Sections stay put is stated by the action, never
@@ -799,17 +882,59 @@ Automatic renewal may follow later.
 The UI exposes: name, CN, subject, issuer, expiration, status. Expiry is first-class —
 `GET /api/v1/certificates?status=expiring`.
 
+**Members are identified by what they parse as, never by their extension.** One tool exports
+the key as `client-key.pem` and another as `privkey.pk8`; both are keys and neither name is
+worth trusting. A bundle often carries the issuing CA as well, and the pair check doubles as
+the way the leaf is chosen: the certificate Trino should present is the one whose public key
+matches the private key. Nothing else in the archive is stored — a chain is configuration of
+its own, and guessing at it would put key material in files nobody asked for.
+
+**The key is normalised to PKCS#8 PEM.** Uploads arrive as PKCS#1 (`BEGIN RSA PRIVATE KEY`),
+as PKCS#8 and as DER; storing each as it came would make every consumer handle all three. An
+**encrypted** key is refused rather than stored: it is not malformed, it is a key with a
+passphrase Apchi was not given, and saying "not a key" would send an Operator looking for the
+wrong problem.
+
+**PKCS#8 PEM is what the drivers want, so there is no DER to deliver.** The `.pk8` naming in
+older PostgreSQL guides comes from a real constraint that no longer applies: the pgjdbc that
+Trino 483 ships — 42.7.13 — carries a `Pk8OrPemKeyManager` that sniffs the file for a
+`BEGIN PRIVATE KEY` header and hands PEM to a `PEMKeyManager` and anything else to the old
+DER path. Read out of the jar in the image rather than out of documentation. Apchi therefore
+writes `<name>.crt` and `<name>.key`, both PEM, and needs no way to put binary into a Secret.
+
+The limit worth knowing instead is **driver-specific and not about encoding**: some drivers
+want a *keystore* rather than a key file — MySQL Connector/J takes
+`clientCertificateKeyStoreUrl` pointing at a JKS or PKCS#12. A Catalog needing mTLS to such a
+source is not reachable through this Section as it stands, and a keystore is binary, so it
+would need more than a format change.
+
+**Key material lives in the Candidate and in Snapshots, and is never returned.** It has to be
+in the Candidate, because a Section Revert rewrites the whole Secret and cannot do that from
+metadata alone (ADR-0005). The redaction filter keeps it out of the logs, and no response
+carries it: an API that hands back key material makes every reader of every response a place
+it can leak from. Everything an Operator sees is derived by parsing the stored certificate,
+so the metadata cannot drift from the bytes Trino will present.
+
+**An upload that would outgrow the Secret is refused with that reason.** Kubernetes caps a
+Secret at 1MB; a rejected write from the API server mid-Apply would be a much worse way to
+find out.
+
 ### Delivery
 
 Trino consumes these as **files on disk**, because connector properties reference paths:
 
 ```
 connection-url = jdbc:postgresql://host:5432/db
-  ?sslcert=/etc/trino/certs/finance.crt&sslkey=/etc/trino/certs/finance.pk8&sslmode=require
+  ?sslcert=/etc/trino/certs/finance.crt&sslkey=/etc/trino/certs/finance.key&sslmode=require
 ```
 
 **One Kubernetes Secret holds every client certificate**, mounted once at a fixed directory on
-the coordinator and on workers. See
+the coordinator and on workers — workers open their own connections to data sources, so a
+certificate only the coordinator can read is a catalog that works for metadata and fails for
+data. It is the second of the two shapes a Section's delivery can take: a *directory* the
+Admin mounts and Apchi fills, rather than a single file Apchi mounts. How many files are in it
+is the Candidate's business, which is the other reason it cannot be a list of declared
+files — Apchi cannot know in advance what an Operator will upload. See
 [ADR-0005](./docs/adr/0005-single-certificate-secret.md). Adding a certificate adds a key to
 that Secret, so the file
 appears in an already-mounted directory — the pod spec does not change, and **no restart is
@@ -846,18 +971,74 @@ need for a mapping entry per identity.
 trino-<identity>.customer.internal → <identity>
 ```
 
-When the pattern changes, the previous one remains valid for a defined grace period. Trino's
-user-mapping **file** format supports multiple rules evaluated top-to-bottom, first match
-wins, so a grace period is expressible directly as two rules — one per pattern.
+Because there is exactly one, it is a resource rather than a collection: `GET`, `PUT` and
+`DELETE` on `/certificate-mapping`, with no name to address it by. Trino's user-mapping
+**file** supports a list of rules evaluated top to bottom, first match wins; Apchi uses that
+list for two things and exposes neither as a second pattern.
 
-Changing the pattern is a breaking operational change regardless: clients must obtain new
-certificates, deploy them, and migrate before the grace period ends. Allowing Operators to
-choose the destination pattern does not remove that migration; it gives freedom over the
-convention at the cost of more operational responsibility. This trade was made deliberately,
-and the migration tooling must account for it.
+**Apchi's own rule comes first.** The file always opens with `^<trino user>$ → <trino user>`,
+the mapping twin of the reserved verification identity in §8. Without it an Operator could
+set a pattern matching only their own certificates and lock Apchi out of the Cluster it
+manages — not at Apply time, when everything still works, but at the first Verification after
+the Rollout, with recovery needing the very connection the pattern just removed. The rule is
+generated, never stored in the Candidate, and it is first because first match wins.
+
+**The catch-all is always last, and the file always exists.** A principal that matches no
+rule is **denied**, not passed through, and the authenticator refuses to start when the file
+it was told to read is missing. Apchi therefore always writes the file, and always ends it
+with `(.*)` — every name as presented, which is Trino's behaviour with no mapping configured
+at all. Two consequences worth being explicit about: "no Certificate Mapping Pattern" is a
+file rather than an absent mount, which is the difference from Event Listeners (§13.6), where
+the absence of the mount *is* the configuration; and setting a pattern narrows who is
+*renamed*, never who is *admitted*. Apchi denies nobody here. What a caller may do is
+Permissions' answer (§13.4), and an authentication file that quietly became an authorisation
+one would be the wrong place to decide it.
+
+**Preserving the patterns a Cluster arrives with.** Apchi models one pattern; a Cluster being
+onboarded may run several, and its clients cannot all re-issue certificates at once. So an
+Admin lists the patterns already in use and Apchi renders them into the same file, beneath the
+Operator's pattern — first match wins, so a subject matching both resolves to the convention
+being migrated *to*. They are **Admin values** (§14): applied through the pipeline, never
+recorded in a Snapshot, and deliberately surviving a rollback. When the Admin is satisfied
+their clients have moved they remove them, and the Cluster ends on the single pattern Apchi
+models.
+
+Apchi does not time that migration. It schedules no removal, counts nothing down, and never
+warns that a preserved pattern is overdue. Only the Admin knows whether their clients have
+moved, and a deadline Apchi invented would be a deadline it could enforce by accident.
+
+**Which authenticator reads the file is the Admin's choice**, not Apchi's: `certificate`,
+`password` and `insecure` each take their own `...user-mapping.file` property and all three
+parse it with the same `UserMapping`. Apchi owns the file; the property that points at it
+lives in `config.properties` and is therefore Admin territory (§15). Production sets the
+certificate variant; the development cluster and the validation probe set the insecure one,
+because Trino rejects the certificate property outright unless certificate authentication is
+configured, and a probe with no TLS could not use it.
+
+**Java's regex engine is the authority.** Static validation rejects the mistake worth
+catching at request time — a replacement naming a capturing group the pattern does not have,
+which substitutes nothing and produces no identity at all — but it compiles the pattern with
+Python's engine, so it is an approximation. An expression only Python accepts, such as
+`(?P<name>...)`, reaches the ephemeral coordinator and fails there (§6), before the Cluster is
+touched.
 
 **Rollout-required.** `UserMapping` parses an immutable rule list at authenticator
-construction, so entering and leaving a grace period each cost a coordinator restart.
+construction, so every change to the pattern costs a coordinator restart. Nothing re-reads the
+file, which is why a Rollout is the only way a pattern takes effect and why no manifest here
+relies on a refresh timer.
+
+**Delivered as a directory**, at `/etc/trino/user-mapping/`, mounted by the Admin. Apchi used
+to mount this one file itself with `subPath`, which was sound on its own terms — nothing
+re-reads the file, so there is nothing for the kubelet to keep current — but it is not
+portable: a deployment that mounts the whole of `/etc/trino` as one volume cannot take a
+single-file mount inside it (§16). A directory works on both shapes and costs nothing here,
+since the Rollout is what makes a change take either way.
+
+Changing the pattern is a breaking operational change regardless: clients must obtain new
+certificates, deploy them, and migrate. Allowing Operators to choose the destination pattern
+does not remove that migration; it gives freedom over the convention at the cost of more
+operational responsibility. There is **no grace period by default**: the preserved patterns
+above are an Admin's explicit act, not something Apchi arranges when a pattern changes.
 
 **Identity flow:**
 
@@ -886,8 +1067,42 @@ SQL — the Web UI docs state "If no system access control is installed, then al
 able to view and kill any query", and `/v1/query` is annotated `@ResourceSecurity(AUTHENTICATED_USER)`
 and returns unredacted query text. Query text routinely contains data.
 
-Apchi therefore injects a `queries` rules block: `execute` for everyone, `view` and `kill`
-restricted to the query owner, plus the reserved verification identity.
+Apchi therefore injects a `queries` rules block. What it can and cannot say was settled
+against a running coordinator, and it is not what the format looks like:
+
+- **`execute` for everyone, last.** The block is all-or-nothing, so this rule is what keeps
+  the Cluster serving at all.
+- **Nobody is granted sight of their own queries, because Trino grants it anyway.** With only
+  a catch-all allowing `execute`, alice saw her own query and not bob's. The rules are what
+  stops her seeing *his*.
+- **Killing your own query is not implicit, and cannot be expressed generically.** There is no
+  back-reference from `queryOwner` to the requesting user, and a rule carrying a `queryOwner`
+  may not carry `execute` at all — Trino refuses to start on one ("A valid query rule cannot
+  combine an queryOwner condition with access mode 'execute'"). So it is **a rule per identity
+  Apchi knows**: every identity named in a grant gets `view` and `kill` over its own queries.
+- **The reserved identity gets `view` over everyone's queries**, and that is load-bearing
+  rather than ceremonial: the running-query count Review shows before a Rollout reads
+  `system.runtime.queries`, and Trino filters those rows by who may view them. Without it
+  Apchi would count its own queries and report that a Rollout destroys nothing.
+
+**Killing a query happens two ways, and both are now covered.** Trino's own endpoint is
+governed by the block above. `CALL system.runtime.kill_query(...)` is governed by a
+`procedures` rule, which is a separate permission — and a file-based access control denies
+procedure execution unless a rule allows it. Apchi has written such a file since slice 1, so
+it had taken that procedure away from every End User, including from an owner killing their
+own query. Verified by contrast: with no access control at all, the same kill succeeds.
+
+Apchi now grants `EXECUTE` on that one procedure, to everyone, and nothing else. Granting it
+widens no authority: *whose* query may be killed is still the queries block's answer, verified
+on a running coordinator where one End User was refused another's query and allowed their own.
+Trino's runtime schema has neighbours and every connector brings procedures of its own;
+granting execute on all of them would be handing out what nobody has asked for or tested.
+
+What is **not** established is whether table procedures — `ALTER TABLE … EXECUTE optimize` and
+friends — go through these rules or the `tables` rules. `FileBasedSystemAccessControl` has a
+`checkCanExecuteTableProcedure`, but what it consults was not determined, and the probe image
+has no connector supporting one. So whether Apchi also took those away is an open question,
+and it deserves its own evidence rather than a speculative grant.
 
 This must be **visible** in the Permissions UI as a system-owned rule, not a silent default,
 for two reasons: Operators need to understand why they cannot see each other's queries and
@@ -895,12 +1110,68 @@ be able to widen it deliberately; and the block is all-or-nothing — the moment
 section exists, anything unmatched is denied, *including `execute`*. A mistake here does not
 leak data, it stops the Cluster serving queries.
 
+**A grant is an identity, a place, and a set of privileges**, and every name in it is
+literal. Trino matches these fields as regular expressions, so the generator anchors them:
+granting on `finance` grants on `finance` and not on `finance_archive`. Patterns may follow
+if anyone needs them, but a pattern an Operator did not know they were writing is a data
+leak. The privileges are Trino's own six — SELECT, INSERT, UPDATE, DELETE, OWNERSHIP,
+GRANT_SELECT — and an unknown one fails the coordinator's startup, so Apchi refuses it at
+the keyboard instead.
+
+A grant is addressed by a key Apchi derives from the identity and the place it applies to,
+with `*` for the levels it does not name. Derived rather than chosen, so the same grant is
+always the same resource — which is what lets Review name the grant that changed rather than
+saying the permissions changed.
+
+**A `tables` block denies every table it does not match, to everyone.** Verified against a
+running coordinator: with one grant in the file, `apchi` was refused a table in a catalog it
+plainly held `owner` on. This has two consequences and both are load-bearing.
+
+The first is a **reserved table rule**: Apchi grants itself SELECT on the verification
+catalog, first, for the same reason §8 reserves an identity and §13.3 reserves a mapping
+rule. Verification's smoke query reads a table, the running-query count reads another and
+§13.5's group read-back reads a third, all in that catalog — so without this rule the first
+Apply carrying a grant would pass only by luck, and the day the catch-all below is removed
+Apchi would lose the connection it needs to recover.
+
+The second is that **writing a grant must not be an act of revocation**. Before Apchi wrote
+a `tables` block at all, every End User could reach every table; emitting one flips that to
+deny-by-default in a single Apply. So the generated block ends with a catch-all allowing
+everything to everyone, and staging a grant records intent without taking anything away.
+
+**Removing that catch-all is an Admin value** (§14), not an Operator setting and not
+something Apchi does on an upgrade. It is the moment grants start meaning something, and on
+a Cluster already serving users it denies every identity without a grant everything it had —
+a platform decision with a difficult morning after it, which is the same reason the preserved
+mapping patterns of §13.3 are an Admin's. An Operator who could close a Cluster by editing
+configuration would be able to cause an outage with a permissions edit.
+
+Three things make the decision recoverable rather than a one-way door. It is a value, so
+reversing it is another value change and an ordinary Apply — proven on a real cluster by
+closing, watching an identity be denied, reopening, and watching it allowed again. It needs
+no restart, because Trino re-reads the rules on its timer. And Apchi's own access survives
+it, because the reserved rules grant that directly rather than relying on the catch-all,
+which is what leaves Apchi able to verify and to recover a Cluster it has just closed.
+
+What enforcement does *not* narrow is catalog visibility: the `catalogs` block still allows
+everyone, so an identity with no grant can see that a catalog exists while reaching nothing
+inside it. Names are not data, and narrowing that is a separate decision nobody has asked
+for.
+
 **No restart required** — Trino re-reads the rules file on its own timer, so a permission
-change reaches the Cluster without touching the pod (§7.2).
+change reaches the Cluster without touching the pod (§7.2). It is the first Section whose
+changes cost no queries at all.
 
 `security.refresh-period` must be set on the Cluster, or the rules file is read once at
-startup and never again. Apchi asserts this at Adoption and fails loudly if absent —
-otherwise Apchi will believe it applied permissions Trino never read.
+startup and never again. Apchi asserts this **before every Apply** and at Adoption, and fails
+loudly if absent — otherwise Apchi will believe it applied permissions Trino never read.
+
+It is the one precondition that reads the Admin's *configuration* rather than their pod
+template, and it finds it the same way Trino does: whichever volume is mounted at Trino's
+`access-control.properties` is the file in force, and its content is in the ConfigMap or
+Secret behind that volume. Nothing mounted there at all is also a failure — Trino would then
+not be reading Apchi's rules file, and every permission Apchi applied would be written and
+ignored. Apchi reads that one property and nothing else from a file that is not its own.
 
 **Permission observability** is a goal: explain what an identity can access, and which
 identities can access a given resource, without anyone reading access-control files.
@@ -914,6 +1185,56 @@ Trino Identities.
 constructor: no timer, no watcher. A change needs a coordinator restart. (The DB-backed
 manager polls every second and would make this Section dynamic; that is a future migration,
 not the current design.)
+
+**Fully typed, with no pass-through.** Trino owns this format and documents it, so unlike a
+connector's properties or an uncurated event listener there is nothing to wave through:
+every field is modelled, and anything else is refused with the property named. The names are
+Apchi's snake_case on the API and Trino's camelCase in the file, translated by a rule rather
+than a table so a field cannot be added to one and forgotten in the other.
+
+**Groups are keyed by their dotted path; the selectors are one ordered list.** The two halves
+of the file have different shapes because they mean different things. Order between groups is
+irrelevant, so they are resources -- `global`, `global.etl` -- and Review names the group that
+changed rather than saying the configuration did. Order between selectors *is* the
+configuration, because first match wins, so they are read and replaced whole: editing one in
+place would let an Operator change what matches without seeing what now shadows it. Trino
+rejects a group name containing a dot, which is what makes a path unambiguous; Apchi also
+rejects `#`, which is what keeps the reserved keys the selectors and the file's own settings
+live under out of reach of anything an Operator can name.
+
+**The Section owns two files**, the rules and the `resource-groups.properties` that points at
+them, because the JSON is inert without it and `resource-groups.configuration-manager` is
+rejected outright in `config.properties`. They arrive together and leave together: an empty
+Section that unmounted only the rules would leave Trino pointed at a file that is no longer
+there, which it refuses to start on. This is the one Section where "no configuration" really
+is the absence of the mounts, and it is only safe *because* Apchi owns the switch as well as
+the content.
+
+**What Validation catches that a request cannot.** Two rules span the whole Candidate rather
+than one resource, so they are checked at Validate: a selector naming a group that does not
+exist, and a selector naming a group that has subgroups. The first Trino catches too, at the
+cost of a probe that will not start. The second it does not catch at all -- such a
+configuration starts cleanly and fails the queries that select into it, which is exactly the
+kind of failure Validation exists to move earlier. Deferring both to Validate is also what
+lets an Operator write a selector before the group it points at.
+
+**Verification proves the file is in force.** Trino reports the resource group a query ran
+in, so the Section reads back the group its Apply's smoke query landed in and compares it
+with the group the selectors name for that query. Two details were verified against a
+running coordinator, because getting either wrong would produce the false failure this check
+must never produce: selector regexes are **full matches**, so a selector for user `apch` does
+not match `apchi`; and a Cluster with no resource group manager still reports a group, since
+Trino's legacy manager files every query under `global`. Apchi's own queries carry the source
+`apchi`, which is both what lets an Operator route them deliberately and what makes the
+prediction certain.
+
+**Where Trino is stricter than it looks.** Three rules were found by putting generated files
+in front of a real coordinator, and each one is a coordinator that does not come back:
+`hardConcurrencyLimit` is required while `maxQueued` is not; a `softCpuLimit` without a
+`hardCpuLimit` is refused ("Must specify hard CPU limit in addition to soft limit"); and any
+CPU limit at all requires a top-level `cpuQuotaPeriod`. The first two are within one group, so
+Apchi refuses them at request time; the quota period governs the whole file, so it is the
+Section's own setting and the check spans the Candidate.
 
 ## 13.6 Event Listeners
 
@@ -948,8 +1269,24 @@ update rather than a silent pass.
 configuring more than one requires `event-listener.config-files` in `config.properties`, which is
 Admin-owned Trino configuration Apchi does not write (§14). The Candidate therefore holds one
 listener and refuses a second, saying why. The Section is still modelled as a set of resources, so
-lifting the limit later changes the limit and not the model. Whoever owns
-`event-listener.config-files` is the decision that lifts it.
+lifting the limit later changes the limit and not the model.
+
+**The limit stays an Operator limit, even once an Admin can write `config.properties` raw**
+(§14). An Admin who sets `event-listener.config-files` gets what they asked for: Trino reads
+their listener files, Apchi keeps managing the one it mounts, and the Section still holds one.
+So a Cluster can be running listeners Apchi cannot see, and `GET /event-listeners` reports
+only Apchi's.
+
+That is accepted rather than overlooked, and it is the same shape as §17: Apchi does not detect
+drift, and this is drift an Admin created deliberately. The two alternatives are both worse.
+Refusing `config.properties` would remove the file most incident fixes need. Reading it, so the
+Section could permit as many listeners as the Admin configured, would have Apchi parsing a raw
+file it promised not to understand — the "no schema, if it works it works" contract of §14 does
+not survive Apchi making decisions from the contents.
+
+The precondition rejecting anything else mounted at `/etc/trino/event-listener.properties`
+stays, so an Admin's extra listeners live at other paths and the two never fight over the one
+file Apchi owns.
 
 **Rollout-required.** `EventListenerManager.loadEventListeners()` is guarded by a
 `compareAndSet` that permits exactly one call per process lifetime. There is no reload path.
@@ -990,6 +1327,12 @@ configuration files. An Admin-only escape hatch, not exposed to Operators.
 Operator configuration — but never part of a Snapshot.** Snapshots are the history of
 Operator-managed configuration; Admin values are platform state with a different lifecycle.
 
+They are passed to a Section's generator alongside the Candidate's resources rather than
+merged into them, and that is not a detail of plumbing: only the Candidate half is ever
+recorded, so the two must stay distinguishable right up to the point where the file is
+written. The first implementation is the preserved mapping patterns of §13.3; the document is
+typed for exactly what is settled, because the wider escape hatch below is not.
+
 **Admin wins on conflict.** Where an Admin value and generated Operator configuration set the
 same property, the Admin value takes effect. It is an escape hatch used during upgrades and
 incidents; one an Operator could override would not be an escape hatch.
@@ -998,6 +1341,18 @@ incidents; one an Operator could override would not be an escape hatch.
 
 An Admin change gets its own Apply, running the same pipeline — Validate on the ephemeral pod,
 render, roll out, Verify — but **creating no Snapshot**.
+
+It delivers the **latest Snapshot merged with today's Admin values**, not the Candidate. That
+is invariant 2 read forwards, and it is what stops an Admin Apply pushing an Operator's staged,
+unreviewed changes to the Cluster on an Admin's authority.
+
+Because nothing an Operator owns has moved, every Section's plan is empty — so the Rollout
+decision cannot come from the plan. It comes from the Cluster instead: Apchi renders the file
+and compares it with the one the coordinator is actually holding. A diff of two durable
+records, which is the same answer §11 settled on for rollback, and it needs no second history
+to stay honest. Review asks the same question, so an Operator sees the coming restart whether
+the change that caused it was theirs or an Admin's, and a Secret edited by hand is corrected
+by the next Apply rather than drifting forever.
 
 Arbitrary low-level values are precisely the class of configuration most able to stop Trino
 booting, so they go through the same validation as everything else rather than straight to the
@@ -1008,8 +1363,59 @@ Operator Apply.
 An Admin Apply **freezes the Candidate** exactly as an Operator Apply does: both mutate one
 Cluster, and the pipeline's guarantees depend on nothing else changing underneath.
 
-Still to decide: which files and properties may be targeted, and how secrets among these
-values are handled.
+### Raw files, not curated properties
+
+**An Admin writes a file path and its content, and Apchi delivers it.** No schema, no
+per-property model, no list of blessed settings: if Trino accepts it, it works; if it does not,
+Validation refuses it, and if the Cluster fails anyway, Auto Rollback puts it back.
+
+That is the whole point of an escape hatch. Curating the properties an Admin may set would
+mean predicting which ones an incident will need, and the cases this exists for are the ones
+nobody predicted. Trino's own configuration surface is large, versioned and changes between
+releases; a model of it in Apchi would be a second, worse copy that is wrong after every
+upgrade.
+
+It costs the Admin the safety net Operators get. A typo in a Section is a 422 at request time
+from a typed model; a typo in a raw file is a Validation failure minutes later. That trade is
+deliberate and it is why this surface is Admin-only.
+
+**All raw content is treated as secret.** Apchi cannot know which parts of a file an Admin
+wrote are credentials, so it assumes all of it is: delivered through a Secret rather than a
+ConfigMap, redacted wholesale from logs at every level, and — already true by invariant 9 —
+never recorded in a Snapshot. That answers the secret-handling question by refusing to guess.
+
+**Rolling back an Admin change needs the previous values.** Auto Rollback restores what the
+Cluster had, and for an Admin Apply that is not a Snapshot — Admin values never enter one. So
+the Admin document has to keep its pre-image for the duration of an Apply, which is the one
+thing this design requires that the §14 machinery does not already have.
+
+**Apchi's own generated files are not targetable.** The six Sections render files at known
+paths, and a raw file overwriting one of them would be worse than an escape hatch: overwriting
+the generated access-control rules would turn invariant 8's fail-closed authorization into a
+silently open Cluster, with the Operator's grants still displayed in the API. "Admin wins on
+conflict" governs a *property* an Admin sets inside a file Apchi generates; it does not extend
+to replacing the file. A raw file targeting an Apchi-owned path is refused by name.
+
+**Auto Rollback is the only thing that recovers a bad raw file.** `kubectl rollout undo` does
+not: the content lives in a Secret and the mount lives on the pod template, so every revision
+carrying that mount crashes the same way. Recovery means taking the mount and the Secret back,
+which is what restoring the pre-image does and what nothing else will do by accident. That is
+why the pre-image exists and why a raw-file Apply must never skip the rollback path.
+
+**A raw `config.properties` is proved on the Cluster, not on the probe.** Every other raw
+file is validated on the ephemeral coordinator like anything else — they are the class most
+able to stop Trino booting, so that is where it should be found out. But the probe assembles
+its *own* `config.properties` from the properties without which it would not read the files
+under test at all, and a raw file at that path would replace them: a probe configured by the
+thing it is probing starts cleanly having validated nothing. So that one file reaches the
+Cluster unvalidated, and if it is broken the Cluster fails and Auto Rollback puts it back —
+the same contract, one stage later. Apchi logs a warning saying so when an Admin writes it.
+
+**Not every remaining path is reachable**, and that is a property of the deployment rather
+than a decision here. Apchi delivers a single file by mounting it (§16), and precondition 6
+already refuses a single-file mount whose parent is covered by a whole-directory mount. A
+deployment that mounts `/etc/trino` as one volume therefore cannot receive raw files there, and
+Apchi says so before applying rather than after.
 
 ## Maintenance Mode
 
@@ -1080,8 +1486,55 @@ volume over that path, because those are always mounted read-only, which is the 
 seed design rests on. Apchi therefore checks the volume's *kind*, not whether a volume is present
 at all.
 
-All three checks report every problem they find rather than the first, because an Admin fixing a
+**The third precondition: nothing but Apchi is mounted at the paths Apchi's Sections
+declare.** An Admin mounting their own file at one of them would be fighting Apchi over one
+file, and whichever of the two wrote last would win, silently. The list comes from the Section
+registry rather than from a list kept here, so a new file-owning Section is guarded without
+anyone remembering to add it.
+
+**The fourth precondition: `security.refresh-period` is set.** Without it Trino reads the
+access control rules once at startup and never again, so Apchi would write a permission
+change, report success, and the Cluster would never see it (§13.4). This is the one
+precondition that reads the Admin's Trino configuration rather than their pod template: Apchi
+follows whatever is mounted at `access-control.properties` back to its ConfigMap or Secret and
+reads the property out of it.
+
+**The fifth precondition: no read-only directory volume covers a path Apchi mounts a single
+file at.** A `subPath` mount of one key at a path inside a ConfigMap or Secret directory mount
+has no file to bind onto, and runc fails the container with "not a directory" before Trino
+runs at all. Reproduced on a real cluster; a nested *directory* mount in the same position
+works, which is what makes the shape below the answer rather than a workaround.
+
+Every check reports every problem it finds rather than the first, because an Admin fixing a
 manifest should see the whole list.
+
+## Deployment shapes
+
+Two shapes exist in the wild and Apchi has to be honest about which it supports.
+
+**File-by-file**, which `deploy/trino-dev` uses: each file in `/etc/trino` is its own mount,
+so Apchi can add and remove single-file mounts inside it. Everything works here.
+
+**Whole directory**, which the official `trino/trino` chart uses: one ConfigMap mounted at
+`/etc/trino`. No single file can be placed inside it, so anything Apchi delivers there has to
+be a nested directory — which the kubelet layers happily.
+
+The target is that every Section delivers a **directory**, mounted by the Admin: Apchi fills
+the Secret and never touches the pod template. Permissions, Client Certificates and
+Certificate Mapping are there. Resource Groups and Event Listeners are not, because Trino pins
+`resource-groups.properties` and `event-listener.properties` to its configuration directory and
+no property relocates either — so on a whole-directory deployment the Admin provides them as
+pointers, exactly as they already provide `access-control.properties` (§13.4).
+
+That is a deployment concern and **not** a change of Section ownership: Operators still own all
+six Sections (§3). A pointer names where a file lives and never varies with the Candidate; what
+is in the file stays the Operator's.
+
+The one capability this does not reach is **Admin raw files** (§14). Their path is the Admin's
+to choose, which makes them single-file mounts by nature, so on a whole-directory deployment
+they are refused — including `config.properties`, which belongs to the chart's own ConfigMap.
+An Admin on such a chart uses its `additionalConfigProperties` instead.
+
 
 ## Rollout mechanics
 
@@ -1115,9 +1568,32 @@ This keeps persistence separate from Trino implementation details. If a mechanis
 later — resource groups moving from a file to an external database, permissions moving to
 OPA — the Operator-facing model need not change.
 
-**Mongo holds the only copy of every Snapshot and the entire audit trail.** If it is lost,
-the Cluster keeps running configuration nobody can reproduce. This is the real disaster
-scenario the design creates, and it is not currently addressed.
+**Operating that MongoDB is the platform's job, not Apchi's.** This is §16's ownership
+boundary applied to Apchi's own storage: the platform runs the Trino deployment and Apchi
+configures it, and the same division puts running, replicating and backing up the database
+on the side that already does those things for every other database it owns. Apchi has no
+backup feature, no restore path and no opinion about either. Point it at a MongoDB that is
+operated the way the rest of the platform's state is operated.
+
+Mongo does hold the only copy of every Snapshot, and that is a fact about where to point it
+rather than a disaster the design has to answer. Losing it would not take the Cluster down:
+Trino reads Kubernetes Secrets, and those are untouched. What would be missing is Apchi's
+record — the numbered history that Section Revert and Full Rollback aim at, and any edit
+staged but never applied.
+
+Two things follow from that boundary rather than from a recovery plan:
+
+- **Apchi keeps exactly one number outside MongoDB**: the highest Snapshot it has ever
+  committed, in a ConfigMap. It is not a second source of truth and nothing reads it to
+  decide what the configuration is. It exists because an empty `snapshots` collection is two
+  different situations — a Cluster that was never managed, and one that is managed by an
+  Apchi whose database is not in front of it right now — and §15's Adoption answers those
+  differently.
+- **Configuration is portable, which is not the same as backed up.** A configuration can be
+  exported as a document and imported as the Configuration Candidate, at Operator scope (the
+  six Sections) and at Admin scope (those plus the Admin values, which no Snapshot records).
+  That exists so a configuration can be moved, shared and edited elsewhere — not so a
+  database can be reconstructed. An export holds one configuration, never the history.
 
 # 19. API design
 
@@ -1194,19 +1670,123 @@ unfrozen, which is the part that must never be left to chance.
 
 ## Authentication
 
-The UI uses the normal SSO model. Machine-to-machine access uses tokens issued through the
-UI.
+One setting with three values, and tokens alongside them rather than among them.
+
+```
+APCHI_AUTH_MODE = none | password | sso        (default: none)
+```
+
+**`none`** treats every caller as an **Admin**. It is the default because it is what Apchi did
+before authentication existed — every endpoint open — and any other default would lock an
+existing install out of its own Admin surface on upgrade. A Cluster that asks nobody to
+authenticate cannot tell §3's two roles apart anyway. It is also the reason adding
+authentication is a compatible change to an API §19 calls stable.
+
+**`password`** authenticates against users Apchi stores, hashed with Argon2id. There is no
+self-registration, email verification or password reset: Operators are platform staff an Admin
+onboards (§3), not members of the public. The first Admin comes from the Secret the chart
+mounts — a username and a password *hash* — created only when the user collection is empty, so
+the setting can never resurrect a deleted account or silently reset a changed password.
+
+**`sso`** is OIDC authorization code with PKCE. Apchi is a client and never an identity
+provider, so it works against whatever the platform already runs, and **every endpoint is
+discovered from the issuer** rather than configured one by one: a provider that rotates its
+keys or moves an endpoint keeps working, and a mistyped endpoint fails at install rather than
+during the one login somebody needed.
+
+Three decisions inside that mode are worth stating, because each one could reasonably have
+gone the other way:
+
+- **The role comes from a claim, and the default is Operator.** Everyone who authenticates is
+  an Operator; a subject whose role claim holds one of the configured admin groups is an
+  Admin. The failure mode of a mapping that matches nothing is then a Cluster whose six
+  Sections still work and whose `/admin/*` is closed — not one where everybody can inject
+  low-level configuration.
+- **The username comes from a claim, not from `sub`.** `sub` is the only claim OIDC guarantees
+  is stable, and it is routinely an opaque identifier. §20's audit records an *actor*, and an
+  actor nobody can look up is worse than a refused login, so a token with no usable username
+  claim is refused. The consequence: a provider that changes somebody's login name produces a
+  new Apchi user, and the tokens they minted stay with the old name for an Admin to revoke.
+- **User rows are a mirror, not a second place to administer people.** The provider is
+  authoritative for the role and for existence, re-read at each login. It is not authoritative
+  for `disabled`, which is Apchi's own override and survives a login: locking somebody out of
+  this control plane while they still hold a valid account at the identity provider is the
+  case it exists for.
+
+One collection of users either way, so a session, a token and an audit record resolve an actor
+the same way in every mode.
+
+**Tokens are not a mode.** They are a credential any authenticated user mints for automations,
+available whenever the mode is not `none`. They are opaque rather than signed, because a signed
+token cannot be revoked without the blocklist it was supposed to avoid, and because a token
+that resolves to its owner on every request takes the role that user has *now* — so demoting a
+user demotes their tokens.
+
+Two rules hold across every mode:
+
+- **Nothing degrades.** A mode that cannot establish an identity refuses. Apchi never falls
+  back to `none` because a credential store or an identity provider is unreachable; a control
+  plane that quietly drops its own authentication under failure is worse than one that
+  refuses.
+- **`/health` needs no credential.** It is the readiness *and* liveness probe, so a condition
+  an Operator must log in to clear would crashloop the pod they need alive to reach it (§16).
+
+Roles come from §3 and there are two: Operators own the six Sections, Admins also inject
+low-level configuration and freeze mutation. Every `/api/v1/admin/*` path requires an Admin;
+every other path requires an identity.
 
 ## PATCH semantics
 
-Must be explicitly defined and consistent across every endpoint — whether a partial body
-updates only the named fields, uses JSON Merge Patch, uses JSON Patch, or uses custom
-semantics.
+**Named fields.** Not JSON Merge Patch and not JSON Patch: a body names the fields it changes.
+
+- **Omitted means unchanged.**
+- **Present means replaces.** Including `properties`, which is replaced **wholesale** rather
+  than merged — a PATCH naming one property discards the others. That is the sharp edge, and
+  it is the defensible of the two readings: the usual outcome is a `422` naming the property a
+  Catalog now lacks, rather than a silently truncated Catalog that cannot start. A client has
+  to be told, so the contract says so on the body itself.
+- **`null` means clear**, for the fields that can be cleared. A field that cannot — a Catalog's
+  connector, anything's `properties` — refuses by name rather than treating null as "leave it
+  alone".
+- **The name is immutable.** Renaming is a drop and a create, which is a different and more
+  destructive operation; the models forbid the field rather than ignoring it.
+
+That third rule is the one with history. Omitted and null both arrive as `None`, so code that
+checks for `None` cannot tell them apart — which made a Catalog's client certificate
+**set-once**: the only way to remove one was to drop the Catalog and create it again, and in
+Trino that is a `DROP CATALOG`. The distinction comes from which fields a request actually
+set, not from the values it sent.
 
 ## Idempotency
 
-Clients retry after network failures. `POST /applies`, catalog creation, certificate upload
-and rollback all need an idempotency mechanism so a retry does not duplicate work.
+Clients retry after network failures. An **opt-in `Idempotency-Key` header** makes a retry
+safe: the first call with a key does the work, and a repeat returns that call's recorded
+response with `Idempotent-Replay: true` rather than doing it again. Honoured on every mutating
+method; reusing a key for a different request is refused rather than answered.
+
+Opt-in because the header is the only thing that can tell a deliberate retry from a second,
+genuinely intended request. Two Applies in a row is a reasonable thing to want.
+
+Keys are scoped by **actor and key together** — two Operators picking the same key must not
+collide, and certainly must not be shown each other's responses — and expire, because a key is
+only interesting for as long as a retry might arrive.
+
+The four endpoints this was asked for are not equally at risk, and the difference is worth
+recording. `POST /applies` already refuses while an Apply is in flight, so its open window is
+a retry arriving after the first *finished*: that starts a second Apply, which means a second
+rollout, a second Snapshot and running queries terminated (§7.4). The creates already refuse a
+duplicate name with a `409`, which is safe but gives a retrying client an error for work it
+succeeded at. Rollback stages deterministically from a Snapshot and was already idempotent.
+
+**A failed request releases its key**, so a retry after a failure runs. Replaying a failure
+would make a key a way to get permanently stuck.
+
+**`POST /tokens` claims its key but stores no response.** It answers with a secret Apchi
+deliberately never keeps (§19's authentication, invariant: a digest and nothing else), so
+caching it to replay would make that store the one place a live token exists. The claim is the
+part that matters — a retry does not mint a second credential — and the retry is told the
+credential cannot be shown again and that nothing ran twice, which is true and more useful
+than a second token nobody expected.
 
 ## Errors
 
@@ -1230,15 +1810,35 @@ no client branches on, so the default stands.
 
 ## Collections
 
-One consistent pagination, filtering and sorting model.
+One envelope, one set of parameter names, one cursor semantics:
 
 ```
-GET /api/v1/certificates?status=expiring
 GET /api/v1/snapshots?limit=20
-GET /api/v1/catalogs?connector=iceberg
+GET /api/v1/applies?limit=20&before=<cursor>
+GET /api/v1/audit?category=catalogs&actor=jo&limit=20
+
+{ "items": [...], "next": "<cursor>" }
 ```
 
-Likely large collections: snapshots, audit events, permissions, certificates, catalogs.
+**Keyset cursors, not offsets.** These collections grow at the *head*, so an offset pager
+silently repeats rows it has already shown while new ones arrive above them. A cursor names
+the last row seen and cannot drift. It carries the sort key **and** the id, because two
+Applies can begin in the same instant and a boundary that cannot tell them apart repeats or
+skips one.
+
+The sort key itself is per collection and documented per collection — snapshots by number,
+applies and validations by when they started — because no single key is meaningful across all
+of them. Cursors are opaque: a client that parses one breaks when a collection changes how it
+sorts.
+
+**Paginated:** `snapshots`, `applies`, `validations`, `audit`, `tokens`. Append-only, and
+nothing removes them.
+
+**Not paginated, by decision:** the six Sections. Five of them live inside the single
+Candidate document (§4), which is loaded whole on every read — so slicing it afterwards saves
+nothing — and §21 needs every Section at once to show the full diff before an Apply. A
+paginated Section is a diff assembled from several round trips that can disagree with each
+other. Their real limit is the 16MB document ceiling of §4, not response size.
 
 # 20. Audit history
 
@@ -1543,22 +2143,34 @@ Additional constraints:
 
 # 27. Open items
 
-- **Admin arbitrary configuration** — which files and properties may be targeted, and how
-  secrets among those values are handled (§14). Storage, precedence, validation, audit and
-  Snapshot scope are settled.
+- ~~**Admin arbitrary configuration**~~ — **settled** (§14, "Raw files, not curated
+  properties"): an Admin writes a path and its content, all raw content is treated as secret,
+  Apchi-owned paths are refused by name, and rollback keeps the Admin document's pre-image for
+  the duration of an Apply. Not built; the preserved mapping patterns of §13.3 remain the only
+  user of the Admin Apply.
 - **Maintenance Mode mechanics** — behaviour when an Apply is already in flight. The endpoint
   and the persistence model are settled (§14).
-- **Certificate mapping migration** — the procedure for moving an existing Cluster onto a
-  single Certificate Mapping Pattern is undefined: sequencing, authorization edge cases,
-  naming and domain constraints, grace-period duration, rollback, and whether every existing
-  setup can migrate cleanly. Note each pattern change costs a coordinator restart (§13.3).
-- **Field-level models for Resource Groups** — hierarchy, selectors and guardrails. Event
-  Listeners are settled for `http` and `kafka` (§13.6); `mysql` and `openlineage` pass through
-  until someone needs them curated.
-- **Who owns `event-listener.config-files`**, which is what limits the Candidate to a single
-  Event Listener (§13.6). It is `config.properties`, so today it is Admin territory.
+- **Certificate mapping migration** — the mechanism is built: a Cluster arriving with patterns
+  of its own keeps them as Admin values beside Apchi's single Operator pattern, and an Admin
+  removes them when the migration is done, with no grace period by default (§13.3). What
+  remains undefined is the procedure around it: sequencing, authorization edge cases, naming
+  and domain constraints, rollback, and whether every existing setup can migrate cleanly. Note
+  each pattern change costs a coordinator restart.
+- **Field-level models for Event Listeners** — settled for `http` and `kafka` (§13.6);
+  `mysql` and `openlineage` pass through until someone needs them curated. Resource Groups
+  are settled and fully typed (§13.5).
+- ~~**Who owns `event-listener.config-files`**~~ — **settled** (§13.6): it stays Admin
+  territory, and the Operator limit of one Event Listener stays too. An Admin who sets it gets
+  the listeners they configured; Apchi keeps managing the one file it mounts and the Section
+  keeps refusing a second. A Cluster may therefore run listeners Apchi cannot see, which is
+  accepted on §17's grounds — Apchi does not detect drift, and this is drift an Admin created
+  deliberately.
 
-- **Apchi's own disaster recovery** — Mongo is the single copy of all Snapshots and audit
-  history (§18).
+- ~~**Apchi's own disaster recovery**~~ — **out of scope.** §18 already puts operating that
+  MongoDB with the platform, and the same answer applies to losing it: Apchi is not in charge
+  of its own backups any more than it is of Trino's. What Apchi does provide is the one thing
+  a restored-or-lost database cannot tell you itself — the high-water mark lives in a
+  ConfigMap outside MongoDB, so an empty `snapshots` collection is distinguishable from a new
+  install and Adoption answers those two differently (§15).
 - **API policy** — breaking changes, deprecation, new versions.
 - **Draining** — deferred to Trino Gateway blue/green.

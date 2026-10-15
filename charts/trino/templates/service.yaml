@@ -1,0 +1,18 @@
+# One Service, selecting the coordinator only. It is both the client endpoint and the
+# discovery URI every node registers with, so a worker that restarts finds the coordinator
+# again without knowing a pod IP.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "trino.fullname" . }}
+  labels: {{- include "trino.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "trino.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator

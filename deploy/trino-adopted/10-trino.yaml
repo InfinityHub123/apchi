@@ -1,0 +1,84 @@
+# Hand-written. Not generated, not drift-checked -- see README.md.
+#
+# Deliberately NOT what §16 wants: the catalog directory is a read-only ConfigMap and there
+# is no catalog-seed initContainer. Both are what the cutover has to fix, and the catalog one
+# is why the cutover must come after the seed rather than before it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adopted-coordinator
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate. A rolling update briefly runs two coordinators, which
+  # is a second 1G JVM on a machine already running two Trino clusters -- and Apchi wants
+  # one coordinator anyway, because Trino cannot drain one (ADR-0003).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: adopted, component: coordinator}
+  template:
+    metadata:
+      labels: {app: adopted, component: coordinator}
+    spec:
+      containers:
+        - name: trino
+          image: trinodb/trino:483
+          ports: [{containerPort: 8080, name: http}]
+          readinessProbe:
+            exec: {command: ["/usr/lib/trino/bin/health-check"]}
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 40
+          volumeMounts:
+            - {name: config, mountPath: /etc/trino/config.properties, subPath: coordinator-config.properties}
+            - {name: config, mountPath: /etc/trino/node.properties, subPath: node.properties}
+            - {name: config, mountPath: /etc/trino/jvm.config, subPath: jvm.config}
+            - {name: config, mountPath: /etc/trino/catalog-store.properties, subPath: catalog-store.properties}
+            - {name: config, mountPath: /etc/trino/access-control.properties, subPath: access-control.properties}
+            - {name: config, mountPath: /etc/trino/resource-groups.properties, subPath: resource-groups.properties}
+            # The Admin's own files, in the Admin's own place. Apchi finds them by following
+            # the properties above, not by looking where it would have put them.
+            - {name: theirs, mountPath: /etc/trino/theirs, readOnly: true}
+            # Read-only, over the catalog directory. A §16 violation, deliberately: this is
+            # the one the cutover must fix, and fixing it before the seed loses the catalogs.
+            - {name: catalogs, mountPath: /etc/trino/catalog, readOnly: true}
+      volumes:
+        - {name: config, configMap: {name: adopted-config}}
+        - {name: theirs, configMap: {name: adopted-theirs}}
+        - {name: catalogs, configMap: {name: adopted-catalogs}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adopted
+spec:
+  selector: {app: adopted, component: coordinator}
+  ports: [{port: 8080, targetPort: http, name: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adopted-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: adopted, component: worker}
+  template:
+    metadata:
+      labels: {app: adopted, component: worker}
+    spec:
+      containers:
+        - name: trino
+          image: trinodb/trino:483
+          ports: [{containerPort: 8080, name: http}]
+          readinessProbe:
+            exec: {command: ["/usr/lib/trino/bin/health-check"]}
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 40
+          volumeMounts:
+            - {name: config, mountPath: /etc/trino/config.properties, subPath: worker-config.properties}
+            - {name: config, mountPath: /etc/trino/node.properties, subPath: node.properties}
+            - {name: config, mountPath: /etc/trino/jvm.config, subPath: jvm.config}
+      volumes:
+        - {name: config, configMap: {name: adopted-config}}

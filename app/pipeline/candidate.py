@@ -12,9 +12,15 @@ the only record of whose work an Apply is shipping.
 from datetime import UTC, datetime
 from typing import Any
 
+from bson import encode as bson_encode
 from pydantic import BaseModel, Field
+from pymongo import ReturnDocument
 from pymongo.asynchronous.database import AsyncDatabase
 
+from app.api.errors import CandidateTooLarge
+from app.audit.actor import actor
+from app.audit.changes import Sections, changes_between
+from app.audit.events import Action, AuditStore, Category, Entry
 from app.pipeline.snapshots import SnapshotStore
 from app.sections import SectionName
 from app.sections.registry import SECTIONS
@@ -46,9 +52,17 @@ class CandidateStore:
     non-empty Snapshot would read as "remove everything".
     """
 
-    def __init__(self, database: AsyncDatabase[dict[str, Any]], snapshots: SnapshotStore) -> None:
+    def __init__(
+        self,
+        database: AsyncDatabase[dict[str, Any]],
+        snapshots: SnapshotStore,
+        audit: AuditStore,
+        max_bytes: int = 15 * 1024 * 1024,
+    ) -> None:
         self._collection = database["candidate"]
         self._snapshots = snapshots
+        self._audit = audit
+        self._max_bytes = max_bytes
 
     async def load(self) -> Candidate:
         document = await self._collection.find_one({"_id": CANDIDATE_ID})
@@ -60,6 +74,20 @@ class CandidateStore:
             candidate.sections.setdefault(name, {})
         return candidate
 
+    async def stored(self) -> Candidate | None:
+        """What the collection actually holds, or None when it holds nothing.
+
+        `load` answers "what are Operators editing", deriving a Candidate when none is
+        stored. An export asks the narrower question -- what would be lost -- and a
+        derived Candidate would not be lost: it comes back from the Snapshot it was
+        derived from, which the export already holds (#113).
+        """
+        document = await self._collection.find_one({"_id": CANDIDATE_ID})
+        if document is None:
+            return None
+        document.pop("_id", None)
+        return Candidate.model_validate(document)
+
     async def _derive_from_latest(self) -> Candidate:
         latest = await self._snapshots.latest()
         number = None if latest is None else latest.number
@@ -68,13 +96,108 @@ class CandidateStore:
             sections=await self._snapshots.sections_of(number),
         )
 
-    async def save(self, candidate: Candidate) -> None:
+    async def save(
+        self,
+        candidate: Candidate,
+        *,
+        category: Category | None = None,
+        action: Action | None = None,
+        detail: str | None = None,
+    ) -> None:
+        """Store the Candidate, and record who changed what (§20).
+
+        **This is where the audit of Operator work is written**, because this is the one
+        function every Operator edit reaches: create, update, delete, Section Revert, Reset
+        and Import all end here. Recording in each of the routes instead would be about forty
+        places to remember, and the first one anybody forgot would be a change with no actor
+        that still worked -- the same argument that made `operator_mutation_allowed` one
+        dependency rather than three a route could pick from.
+
+        With no `category`, the events are **derived** from the difference between what was
+        stored and what is being stored: one per resource added, removed or edited. A route
+        therefore never describes its own change, so it cannot describe it wrongly, and a
+        Section added later is audited without anything here changing.
+
+        `category` and `action` together override that, for the operations whose shape is not
+        a set of resource edits: a Reset or an Import is one act on the whole Candidate, and a
+        Section Revert is one act on one Section. Deriving those would record a plausible
+        list of resource changes and lose the only thing somebody reading the trail wants to
+        know, which is that it was a revert.
+
+        `detail` carries the Snapshot such an act restored *from*. Not the `snapshot` field:
+        that one means the Snapshot an Apply **produced** (§20), and a staged act has produced
+        none -- putting a source number there would read as a commit that never happened.
+        """
         candidate.updated_at = datetime.now(UTC)
-        await self._collection.replace_one(
+        dumped = candidate.model_dump(mode="json")
+        # Before the write, so a Candidate that would not fit is refused with the stored one
+        # untouched. A 422 naming what grew, rather than the BSON failure an unguarded
+        # replace_one would raise on whichever edit happened to cross the line (#149).
+        _refuse_if_too_large(dumped, self._max_bytes)
+        # `find_one_and_replace` rather than a read followed by a `replace_one`: the diff needs
+        # the pre-image, and this returns it *from the write itself*. One round trip instead of
+        # two, and the pre-image is the document this call replaced rather than one another
+        # request may have changed in between.
+        #
+        # Round trips are not an abstract concern here: tier 1 starts an app per test and the
+        # suite wedges its MongoDB when per-operation traffic grows (#69), which is how this
+        # version came to be measured rather than assumed.
+        previous = await self._collection.find_one_and_replace(
             {"_id": CANDIDATE_ID},
-            {"_id": CANDIDATE_ID, **candidate.model_dump(mode="json")},
+            {"_id": CANDIDATE_ID, **dumped},
             upsert=True,
+            return_document=ReturnDocument.BEFORE,
         )
+        # After the write, never before. An event naming a change that then failed to store is
+        # worse than no event: it attributes something to somebody that never happened.
+        await self._record(_sections_of(previous), dumped["sections"], category, action, detail)
+
+    async def _record(
+        self,
+        before: Sections,
+        after: Sections,
+        category: Category | None,
+        action: Action | None,
+        detail: str | None,
+    ) -> None:
+        who = actor()
+        if category is not None and action is not None:
+            await self._audit.record(
+                who.subject, who.via, category, action, detail=detail, token_id=who.token_id
+            )
+            return
+        # One write for however many resources moved. A request that edited five of them is
+        # one act by one person, and five round trips for it is five times the traffic for no
+        # extra information.
+        await self._audit.record_each(
+            who.subject,
+            who.via,
+            [
+                Entry(category=change.category, action=change.action, resource=change.resource)
+                for change in changes_between(before, after)
+            ],
+            token_id=who.token_id,
+        )
+
+    async def replace(self, sections: dict[SectionName, dict[str, Any]]) -> Candidate:
+        """Replace the Candidate wholesale with an imported configuration (#121).
+
+        `base_snapshot` is **this** Cluster's latest Snapshot, never anything the document
+        says. A Candidate's base is what Review diffs against, and Review has to keep
+        meaning "what would applying this change here": a base taken from the document
+        would diff an imported configuration against a Cluster this one is not, and report
+        a change nobody is about to make.
+
+        Distinct from `reset`, which re-derives from a Snapshot and so always produces an
+        empty diff. This one is expected to produce a large one -- that is what importing
+        somebody else's configuration looks like.
+        """
+        latest = await self._snapshots.latest()
+        fresh = Candidate(
+            base_snapshot=None if latest is None else latest.number, sections=sections
+        )
+        await self.save(fresh, category="pipeline", action="imported")
+        return fresh
 
     async def reset(self, base_snapshot: int | None = None) -> Candidate:
         """Discard the Candidate's changes and re-derive it from a Snapshot.
@@ -90,5 +213,74 @@ class CandidateStore:
                 base_snapshot=base_snapshot,
                 sections=await self._snapshots.sections_of(base_snapshot),
             )
-        await self.save(fresh)
+        await self.save(
+            fresh,
+            category="pipeline",
+            action="reset",
+            detail=_from_snapshot(fresh.base_snapshot),
+        )
         return fresh
+
+
+def _sections_of(document: dict[str, Any] | None) -> Sections:
+    """A stored Candidate's Sections, dumped by the same model as the incoming one.
+
+    Normalised through `Candidate` rather than compared raw, because MongoDB returns BSON -- a
+    datetime comes back as a datetime where the incoming side has an ISO string -- and
+    comparing those two directly would report every resource as edited on every save.
+    """
+    if document is None:
+        return {}
+    document.pop("_id", None)
+    dumped: Sections = Candidate.model_validate(document).model_dump(mode="json")["sections"]
+    return dumped
+
+
+def _from_snapshot(number: int | None) -> str:
+    """Which Snapshot a staged act took its content from, in words.
+
+    None is the pre-first-Snapshot case, which is a real state rather than missing data: a
+    Reset on a Cluster that has never committed anything re-derives an empty baseline.
+    """
+    return (
+        "restored from an empty baseline" if number is None else f"restored from Snapshot {number}"
+    )
+
+
+#: MongoDB's hard limit on one document. Here for the error message rather than for the check:
+#: what Apchi refuses at is `candidate_max_bytes`, which sits below this deliberately.
+BSON_DOCUMENT_LIMIT = 16 * 1024 * 1024
+
+
+def _refuse_if_too_large(dumped: dict[str, Any], max_bytes: int) -> None:
+    """Refuse a Candidate that would not fit in one document.
+
+    The Candidate is one MongoDB document (ADR-0002, §4) and MongoDB caps a document at 16MB,
+    so this ceiling is a consequence of that design rather than a policy. Nothing capped the
+    *number* of catalogs, rules or certificates -- only the length of individual fields -- so
+    before this a Cluster that accumulated enough configuration met `replace_one` failing
+    inside a routine edit and reported a 500.
+
+    Measured as BSON, not as JSON text: the limit is on the encoded document, and the two
+    differ by enough to matter at this size.
+
+    The message names the largest Section, because "your configuration is too big" is not
+    actionable and "permissions is 12.4 MB of it" is.
+    """
+    encoded = len(bson_encode({"_id": CANDIDATE_ID, **dumped}))
+    if encoded <= max_bytes:
+        return
+    sections: dict[str, Any] = dumped.get("sections") or {}
+    largest = max(
+        sections,
+        key=lambda name: len(bson_encode({"s": sections[name]})),
+        default="the Candidate",
+    )
+    raise CandidateTooLarge(
+        f"This change would make the Configuration Candidate {encoded / 1048576:.1f} MB, over "
+        f"the {max_bytes / 1048576:.0f} MB limit. The Candidate is one MongoDB document "
+        f"(§4) and MongoDB caps a document at {BSON_DOCUMENT_LIMIT // 1048576} MB, so this is "
+        f"a ceiling on everything staged together rather than on any one Section. "
+        f"{largest!r} is the largest. Remove something before adding more.",
+        details=[{"section": largest, "problem": "the Candidate is at its size limit"}],
+    )

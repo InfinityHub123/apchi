@@ -15,17 +15,20 @@ import logging
 from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.config import Settings
-from app.pipeline import preconditions
-from app.pipeline.access_control import deliver as deliver_access_control
+from app.pipeline import preconditions, raw_files
+from app.pipeline.admin_values import AdminStore
 from app.pipeline.auto_rollback import declare_incident, restore
 from app.pipeline.candidate import CandidateStore
+from app.pipeline.files import deliver
+from app.pipeline.high_water import HighWaterMark
+from app.pipeline.impact import sections_needing_rollout
 from app.pipeline.maintenance import MaintenanceStore
 from app.pipeline.rollout import roll_out
 from app.pipeline.snapshots import SnapshotStore
 from app.pipeline.validation import validate_candidate
 from app.pipeline.verification import verify
 from app.sections import SectionName
-from app.sections.base import Cluster, Resources, Section, SectionPlan
+from app.sections.base import Cluster, Resources, SectionPlan
 from app.sections.registry import REGISTERED
 
 logger = logging.getLogger(__name__)
@@ -43,6 +46,7 @@ class Engine:
         trino: Trino,
         kubernetes: KubernetesAdapter,
         maintenance: MaintenanceStore,
+        admin: AdminStore,
     ) -> None:
         self._apply_id = apply_id
         self._settings = settings
@@ -51,9 +55,25 @@ class Engine:
         self._trino = trino
         self._kubernetes = kubernetes
         self._maintenance = maintenance
+        self._admin = admin
         self._desired: dict[SectionName, Resources] = {}
         self._plans: dict[SectionName, SectionPlan] = {}
+        self._rollout: set[SectionName] = set()
+        self._raw_files_changed = False
         self._cluster = Cluster(trino=trino, kubernetes=kubernetes, settings=settings)
+
+    async def _freeze_admin_values(self) -> None:
+        """Read the Admin values once and hold them for the rest of this Apply.
+
+        Loaded here rather than in the constructor because it is I/O, and rebuilt into the
+        Cluster because that is what every Section renders against.
+        """
+        self._cluster = Cluster(
+            trino=self._trino,
+            kubernetes=self._kubernetes,
+            settings=self._settings,
+            admin=await self._admin.load(),
+        )
 
     async def validate(self) -> None:
         """Capture the Candidate, plan the change, then prove it against a real Trino.
@@ -63,11 +83,9 @@ class Engine:
         Cluster, so a failure leaves it exactly as it was.
         """
         await self._assert_preconditions()
+        await self._freeze_admin_values()
 
-        candidate = await self._candidates.load()
-        self._desired = dict(candidate.sections)
-
-        current = await self._snapshots.sections_of(candidate.base_snapshot)
+        self._desired, current = await self._desired_and_baseline()
         self._plans = {
             section.name: section.plan(
                 self._desired.get(section.name, {}), current.get(section.name, {})
@@ -79,7 +97,25 @@ class Engine:
             extra={name: plan.summary() for name, plan in self._plans.items()},
         )
 
+        self._rollout = await sections_needing_rollout(self._plans, self._desired, self._cluster)
+        # Raw files are not a Section and have no plan, so their restart decision comes from
+        # the Cluster: what the coordinator is holding against what would be delivered. On an
+        # Admin Apply every Section's plan is empty, which makes this the only thing that can
+        # ask for a Rollout -- and §14 requires it to, because these values are read once at
+        # start and are the class most able to stop Trino booting.
+        self._raw_files_changed = await raw_files.changed(self._cluster)
         await validate_candidate(self._desired, self._plans, self._cluster, self._apply_id)
+
+    async def _desired_and_baseline(
+        self,
+    ) -> tuple[dict[SectionName, Resources], dict[SectionName, Resources]]:
+        """What this Apply delivers, and what it is a change from.
+
+        An Operator Apply delivers the Candidate, measured against the Snapshot it was
+        derived from.
+        """
+        candidate = await self._candidates.load()
+        return dict(candidate.sections), await self._snapshots.sections_of(candidate.base_snapshot)
 
     async def _assert_preconditions(self) -> None:
         """Before every Apply, not once at startup: a chart change can reintroduce a
@@ -87,7 +123,7 @@ class Engine:
         spec = preconditions.pod_spec(
             await self._kubernetes.deployment_pod_spec(self._settings.coordinator_deployment_name)
         )
-        preconditions.check(spec, self._settings)
+        await preconditions.check(self._kubernetes, spec, self._settings)
 
     async def apply(self) -> None:
         """Patch the Secret, then issue the DDL.
@@ -101,16 +137,17 @@ class Engine:
         There is no propagation race: nothing reads the seed mount until the next pod
         start, so the Secret write needs no wait before the DDL.
         """
-        # Re-asserted every Apply rather than written once. It is generated, not
-        # Operator-editable, so this is idempotent -- and it means a Cluster whose
-        # access-control Secret was changed outside Apchi is corrected by the next Apply
-        # instead of quietly keeping catalog DDL open to everyone.
-        await deliver_access_control(self._kubernetes, self._settings)
-
         for section in REGISTERED:
-            await section.apply(
-                self._cluster, self._desired.get(section.name, {}), self._plans[section.name]
-            )
+            desired = self._desired.get(section.name, {})
+            # The file first, then whatever else the Section does. A Section that only owns
+            # a file does nothing here at all.
+            await deliver(section, self._cluster, desired)
+            await section.apply(self._cluster, desired, self._plans[section.name])
+        # After the Sections, so a raw file an Admin wrote to override something a Section
+        # generates lands on top of it -- "Admin wins on conflict" (§14), expressed as
+        # ordering rather than as a merge, because Apchi does not parse a raw file and so
+        # cannot merge one.
+        await raw_files.deliver(self._cluster)
 
     def rollout_needed(self) -> bool:
         """True when a Section Trino adopts only by restarting actually changed.
@@ -120,14 +157,10 @@ class Engine:
         Apply on a Cluster with an Event Listener configured would terminate every running
         query for nothing.
         """
-        return any(self._rollout_changed(section) for section in REGISTERED)
-
-    def _rollout_changed(self, section: Section) -> bool:
-        plan = self._plans.get(section.name)
-        return section.requires_rollout and plan is not None and not plan.empty
+        return bool(self._rollout) or self._raw_files_changed
 
     async def roll_out(self) -> None:
-        changed = sorted(section.name for section in REGISTERED if self._rollout_changed(section))
+        changed = sorted(self._rollout)
         await roll_out(
             self._kubernetes,
             self._settings.coordinator_deployment_name,
@@ -155,6 +188,7 @@ class Engine:
         two durable records, which is what would let it run after an Apchi restart as
         well as inside the Apply that failed.
         """
+        await self._freeze_admin_values()
         latest = await self._snapshots.latest()
         sections = await self._snapshots.sections_of(None if latest is None else latest.number)
         await restore(sections, self._cluster)
@@ -173,6 +207,19 @@ class Engine:
         because it is otherwise only findable by noticing the numbering.
         """
         snapshot = await self._snapshots.commit(self._desired, self._apply_id)
+        # Outside MongoDB, so that losing MongoDB leaves evidence that this Snapshot
+        # existed (§18). Best-effort on purpose: a Snapshot that was applied and verified
+        # is real whatever the API server says, and failing the Apply because a ConfigMap
+        # could not be written would report a healthy Cluster as broken.
+        try:
+            await HighWaterMark(self._kubernetes, self._settings).record(snapshot.number)
+        except Exception:
+            logger.warning(
+                "committed Snapshot %s but could not raise the high-water mark; a MongoDB "
+                "loss from here would not know this Snapshot existed",
+                snapshot.number,
+                exc_info=True,
+            )
         try:
             # The Candidate is re-derived from the new Snapshot, so its diff is empty.
             await self._candidates.reset(base_snapshot=snapshot.number)
@@ -187,3 +234,67 @@ class Engine:
             raise
         logger.info("committed", extra={"snapshot": snapshot.number})
         return snapshot.number
+
+
+class AdminEngine(Engine):
+    """An Apply that carries an Admin change and creates no Snapshot.
+
+    Two differences from an Operator Apply, and both follow from what Admin values are.
+
+    It delivers the **latest Snapshot**, not the Candidate. Invariant 2 says what ran on a
+    Cluster was the Snapshot merged with the Admin values current at the time, and that is
+    exactly what this rebuilds with today's values. Delivering the Candidate instead would
+    push an Operator's staged, unreviewed changes to the Cluster on an Admin's authority.
+
+    It commits nothing. Snapshots are the history of Operator-managed configuration, and
+    this Apply changed none of it (invariant 9, §14). The Apply record is the history of
+    what the Admin did; the Snapshot pointer does not move.
+
+    Everything else is the same pipeline -- validated on the ephemeral coordinator, rolled
+    out, verified, rolled back on failure -- because arbitrary low-level values are
+    precisely the class of configuration most able to stop Trino booting, and an Admin
+    fixing something during an incident cannot be made to wait for an Operator.
+    """
+
+    async def _desired_and_baseline(
+        self,
+    ) -> tuple[dict[SectionName, Resources], dict[SectionName, Resources]]:
+        latest = await self._snapshots.latest()
+        sections = await self._snapshots.sections_of(None if latest is None else latest.number)
+        # The same on both sides: nothing an Operator owns is changing, so every Section's
+        # plan is empty and the Rollout decision comes from the Cluster instead.
+        return dict(sections), sections
+
+    async def roll_back(self) -> None:
+        """Put the Admin values back, and the Cluster with them.
+
+        This is where an Admin Apply differs from an Operator one, and the difference is in
+        the spec rather than a choice made here. Invariant 2 says Admin values *survive* a
+        rollback -- they are platform state, and an Operator's rollback should not revert
+        them. But when the Apply that failed **was** the Admin change, those values are what
+        broke the Cluster, and leaving them would redeliver the thing being rolled back.
+
+        There is no Snapshot to restore them from: Admin values never enter one (invariant
+        9). The pre-image `AdminStore.save` keeps is the only record of what the Cluster had,
+        which is why it exists.
+
+        The document is restored before the Cluster, so what the API reports and what the
+        coordinator is running do not disagree in the window between them -- and so that a
+        rollback repeated after a restart (§10) restores the same thing rather than a
+        different one.
+        """
+        restored = await self._admin.restore_previous()
+        self._cluster = Cluster(
+            trino=self._trino,
+            kubernetes=self._kubernetes,
+            settings=self._settings,
+            admin=restored,
+        )
+        latest = await self._snapshots.latest()
+        sections = await self._snapshots.sections_of(None if latest is None else latest.number)
+        await restore(sections, self._cluster)
+        await raw_files.deliver(self._cluster)
+
+    async def commit(self) -> int | None:
+        logger.info("admin apply committed no snapshot")
+        return None

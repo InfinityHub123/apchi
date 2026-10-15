@@ -31,9 +31,67 @@ jobs:
       - name: Access-control manifest matches what Apchi generates
         run: uv run python scripts/export_access_control.py --check
 
+      - name: The committed user-mapping Secret matches what Apchi generates
+        run: uv run python scripts/export_user_mapping.py --check
+
+      # The chart is how Apchi is installed, and both ways it can drift from the
+      # application produce a pod that will not start: a name no setting reads, which
+      # Settings ignores so Apchi silently runs on a default, and a value it will not
+      # parse -- Helm rendered 1048576 as "1.048576e+06" the first time this was
+      # written, which Pydantic refuses outright.
+      - name: Helm charts are ones Apchi accepts
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          helm lint charts/apchi --set mongodb.deploy=true
+          helm lint charts/trino
+          uv run python scripts/check_chart_env.py
+          # Renders the Trino chart and runs Apchi's own preconditions against it, rather
+          # than a second opinion about what they mean. A chart that ships with Apchi must
+          # not be able to drift into something Apchi refuses to Apply against.
+          uv run python scripts/check_trino_chart.py
+          # deploy/trino-dev is rendered from that same chart, and it is what every tier 2
+          # test runs against -- so a chart fix not mirrored into it was a fix no
+          # end-to-end test exercised. Here rather than beside the other three export
+          # checks because it is the only one that needs Helm.
+          uv run python scripts/export_trino_dev.py --check
+
       # Real MongoDB and real Trino via Testcontainers; only Kubernetes is faked.
       - name: Tier 1 -- behavioural
-        run: uv run pytest tests/tier1 -q
+        # A per-test limit so a test that stops making progress names itself. Without it a
+        # suite that stalls looks like a suite that is working, and the job dies on the
+        # runner's own timeout with nothing to point at. Generous: the slowest test here
+        # genuinely restarts a Trino container.
+        run: uv run pytest tests/tier1 -q --timeout=300 --timeout-method=signal
+
+  image:
+    name: The image docs/getting-started.md tells you to build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Not pushed anywhere: this exists so the Dockerfile cannot rot while the
+      # getting-started walkthrough keeps telling a new user to build it. A broken
+      # Dockerfile is the first thing they would hit and the last thing anyone would
+      # notice.
+      - name: Build
+        run: docker build -t apchi:ci .
+      - name: It starts and serves
+        run: |
+          # No MongoDB, so /api/v1/health reports 503 by design -- any HTTP answer at all
+          # proves the image's dependencies resolved and the app imported.
+          #
+          # The wait is generous because startup with nothing reachable takes about a
+          # minute, measured: PyMongo spends its 30s server-selection timeout on the
+          # interrupted-Apply recovery, and the orphaned-validation sweep then spends its
+          # own on a Kubernetes that is not there. Both are meant to fail that way --
+          # starting degraded and reporting 503 beats crashlooping on a transient blip.
+          docker run -d --name apchi -p 8000:8000 -e APCHI_MONGO_URI=mongodb://127.0.0.1:1 apchi:ci
+          for _ in $(seq 120); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' localhost:8000/api/v1/health || true)
+            case "$code" in 200|503) echo "serving ($code)"; exit 0;; esac
+            sleep 1
+          done
+          docker logs apchi
+          exit 1
 
   tier2:
     # Sharded because the suite is dominated by coordinator restarts, which are wall clock

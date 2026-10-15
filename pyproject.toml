@@ -16,6 +16,18 @@ dependencies = [
     "httpx>=0.28",
     "trino>=0.330",
     "kubernetes>=31.0",
+    "cryptography>=44",
+    "python-multipart>=0.0.20",
+    # Argon2id, which is OWASP's first recommendation for password hashing. Not passlib,
+    # which most FastAPI material still suggests: unmaintained since 2020 and built on the
+    # `crypt` module Python 3.13 removed.
+    "argon2-cffi>=25.1",
+    # JWS/JWK/JWT for OIDC ID tokens. The Authlib project's own JOSE library and what Authlib
+    # itself depends on, with the algorithm registry that makes "RS256 only" enforceable.
+    # Authlib's client is not used: its Starlette integration needs SessionMiddleware and a
+    # shared signing key, and its httpx integration is deprecated in favour of a separate
+    # httpx2 distribution. See app/auth/oidc.py.
+    "joserfc>=1.7.5",
 ]
 
 [project.optional-dependencies]
@@ -58,3 +70,8 @@ packages = ["app"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = ["tier2: end-to-end tests requiring a Kubernetes cluster"]
+
+[dependency-groups]
+dev = [
+    "pytest-timeout>=2.3",
+]

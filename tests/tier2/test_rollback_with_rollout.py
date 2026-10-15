@@ -81,7 +81,9 @@ async def test_a_rollout_that_exceeds_its_timeout_puts_the_configuration_back(
     spec = await real_kubernetes.deployment_pod_spec("trino-coordinator")
     assert "apchi-event-listener" not in [volume["name"] for volume in spec["volumes"]]
 
-    assert (await e2e_client.get("/api/v1/snapshots")).json() == [], "no Snapshot was created"
+    assert (await e2e_client.get("/api/v1/snapshots")).json()["items"] == [], (
+        "no Snapshot was created"
+    )
 
 
 async def test_the_coordinator_comes_back_on_the_restored_configuration(

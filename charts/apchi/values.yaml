@@ -1,0 +1,259 @@
+# Apchi configures ONE Trino cluster, and it has to run in that cluster's namespace:
+# a Validation reaches its ephemeral coordinator by pod IP, and it reads and writes
+# the Secrets the coordinator mounts. Install it where Trino already is.
+
+image:
+  repository: ghcr.io/infinityhub123/apchi
+  # Empty means the chart's appVersion, so an install gets the image the chart was
+  # released with rather than whatever `latest` happens to be today.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# One replica, and Recreate rather than RollingUpdate. An Apply is in-process state --
+# the runner holds the task and the Candidate lock -- so a second Apchi would run a
+# second pipeline against one Trino. This is not a value you want to raise.
+replicaCount: 1
+
+# How a caller proves who they are (section 19).
+#
+#   none      every request is treated as an Admin. This is the default because it is
+#             what Apchi has always done -- every endpoint open -- and changing it on
+#             upgrade would lock an existing install out of its own Admin surface.
+#   password  a username and password, against users Apchi stores. Not built yet.
+#   sso       OIDC against your identity provider. Not built yet.
+#
+# `none` means anyone who can reach the pod can disable permission enforcement across
+# the cluster. Reach it only through something that authenticates, or set a real mode
+# once one exists.
+auth:
+  mode: none
+  # The one Admin a new install starts with, in password mode. Applied only when Apchi's
+  # user collection is empty, so it can never resurrect a deleted account or reset a
+  # changed password on a restart.
+  #
+  # A password *hash*, never the password: values end up in the release, in `helm get
+  # values` and often in a git repository. Generate one with
+  #
+  #   python -c 'from argon2 import PasswordHasher as P; print(P().hash("your password"))'
+  #
+  # The hash is still worth protecting -- it is offline-crackable -- so point
+  # existingSecret at a Secret you manage instead of putting it here.
+  initialAdmin:
+    username: admin
+    passwordHash: ""
+    # A Secret holding the hash, used in preference to passwordHash above.
+    existingSecret: ""
+    existingSecretKey: password-hash
+  # How long an untouched browser session lasts. Sessions are rows in MongoDB, so a
+  # logout or a disabled account takes effect at once rather than when this elapses.
+  sessionHours: 12
+  # sso mode: Apchi as an OpenID Connect client against your identity provider. Apchi is
+  # never an identity provider itself, so this works against Keycloak, Authentik, Zitadel,
+  # Okta or Entra without Apchi knowing which.
+  oidc:
+    # Every endpoint Apchi uses is discovered from here. Not six configured endpoints: a
+    # provider that rotates its keys or moves an endpoint keeps working, and a mistyped
+    # endpoint would fail during the one login somebody needed.
+    issuer: ""
+    clientId: ""
+    # Put the secret in a Secret you manage. clientSecret below exists for a quick trial and
+    # puts it in the release, in `helm get values`, and usually in a git repository.
+    clientSecret: ""
+    existingSecret: ""
+    existingSecretKey: client-secret
+    # Where the provider sends the browser back, and the one value nothing can guess for
+    # you: it must be the URL a *browser* reaches Apchi on, through whatever Ingress or
+    # port-forward is in front of it, and it must be registered with the provider verbatim.
+    #
+    # A wrong one is a login loop with no error anywhere -- the provider refuses a redirect
+    # URI it does not recognise, and the browser never gets as far as Apchi. Set it.
+    redirectUrl: ""
+    # `groups` is not a standard OIDC scope, and providers disagree about whether one is
+    # needed to emit group membership at all: Dex and Keycloak want it, Entra puts roles in
+    # the token without it. Trim this if your provider rejects a scope it does not know.
+    scopes: "openid profile email groups"
+    # Which claim is the person's Apchi username. `sub` is the only claim OIDC guarantees is
+    # stable, but it is routinely an opaque blob, and the audit trail records an actor
+    # somebody has to be able to read.
+    #
+    # The consequence, because it is not recoverable afterwards: this value *is* the Apchi
+    # username, so a provider that changes somebody's login name produces a new Apchi user.
+    # Any tokens they minted stay with the old name for an Admin to revoke.
+    usernameClaim: preferred_username
+    # Which claim carries group membership, and which of its values mean Admin. Comma
+    # separated. Everyone who authenticates is an Operator; only a member of one of these
+    # groups is an Admin.
+    #
+    # Leaving adminGroups empty means nobody is an Admin -- which closes /admin/* to
+    # everybody rather than opening it to everybody. That is the safe direction, but it does
+    # mean nobody can inject low-level configuration or release Maintenance Mode.
+    roleClaim: groups
+    adminGroups: ""
+
+# §20's audit history: who changed what, and when. Always on -- it is the only record of
+# which operator staged which change into the shared Configuration Candidate, and the only
+# record of an admin change at all, since those never appear in a Snapshot.
+audit:
+  # How long to keep it. Empty means forever, and that is the default deliberately: an audit
+  # trail that silently deletes itself is worse than one that grows, because the first thing
+  # an incident asks is what happened before the window you kept.
+  #
+  # Setting this creates a TTL index on the collection, so history older than it is discarded
+  # by MongoDB without further warning. Choose it on purpose.
+  retentionDays: ""
+
+# The most the configuration candidate may occupy. It is one MongoDB document by design,
+# and MongoDB caps a document at 16MB -- so this is a ceiling on everything staged across all
+# six sections together, not a quota per section.
+#
+# Below 16MB deliberately: BSON overhead means the serialised size is not the document size,
+# and there has to be room for the snapshot an apply makes of the same content. Raise it only
+# if you know what the overhead is for your data; an edit that crosses it is refused with
+# `candidate_too_large` naming the section that grew.
+candidateMaxBytes: 15728640
+
+service:
+  type: ClusterIP
+  port: 8000
+
+serviceAccount:
+  create: true
+  # Defaults to the release name.
+  name: ""
+  annotations: {}
+
+# The Role grants only what Apchi calls: see templates/rbac.yaml, which says why for
+# each verb. Set create: false to bind your own.
+rbac:
+  create: true
+
+# np | test | prep | prod. Decides the log level and format unless logging overrides
+# them: DEBUG and console in np and test, INFO and JSON in prep and prod.
+environment: np
+
+logging:
+  # Null means "derive from environment". An explicit value always wins, so the level
+  # can be raised during an incident without a rebuild.
+  level: null
+  json: null
+
+trino:
+  # The coordinator's Service. Apchi issues catalog DDL and the Verification smoke
+  # query through it.
+  host: trino
+  port: 8080
+  # The identity Apchi issues DDL as, and the only identity granted `owner` on
+  # catalogs -- which is what restricts catalog DDL to Apchi.
+  user: apchi
+  # Validation reads the image from this Deployment, so the ephemeral coordinator is
+  # always the version the Cluster runs. A Rollout patches it.
+  coordinatorDeployment: trino-coordinator
+  # Compared against the worker count Trino reports, so the expectation adjusts when
+  # an Admin scales the Cluster.
+  workerDeployment: trino-worker
+  containerName: trino
+  # Where Trino keeps its dynamic catalog store. Nothing read-only may be mounted here
+  # or above it, or every CREATE CATALOG fails.
+  catalogStoreDir: /data/trino/catalogs
+  # The catalog the Verification smoke query runs against.
+  verificationCatalog: system
+
+mongodb:
+  # Apchi's own storage: every Snapshot and all in-flight state.
+  uri: ""
+  database: apchi
+  # true deploys a single-replica MongoDB on an emptyDir alongside Apchi, for trying
+  # Apchi out. It loses every Snapshot when its pod restarts. Point `uri` at a real
+  # MongoDB for anything else.
+  deploy: false
+  image: mongo:7
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 50m
+
+# The Secrets Apchi generates configuration into. These must be the names the Trino
+# deployment mounts -- Apchi writes them, Trino reads them, and nothing reconciles a
+# disagreement.
+# Where Apchi records the highest Snapshot number it has ever committed. Adoption reads it,
+# and nothing else does: an empty `snapshots` collection is both a Cluster that was never
+# managed and one whose database is empty right now, and adopting the second renumbers it
+# from Snapshot 1. A ConfigMap rather than a Secret: it holds a number.
+#
+# Apchi creates and updates it directly, so it is not part of this release and `helm
+# uninstall` leaves it behind. That is correct: the next install into this namespace should
+# find it. Default: <release>-high-water.
+highWaterConfigMap: ""
+
+secrets:
+  catalogSeed: trino-catalog-seed
+  accessControl: trino-access-control
+  eventListener: trino-event-listener
+  certificateMapping: trino-user-mapping
+  clientCertificates: trino-client-certificates
+  resourceGroups: trino-resource-groups
+
+# The volumes Apchi owns on the coordinator's pod template. Everything else there
+# belongs to the Admin, and Apchi never touches it.
+#
+# The user-mapping Secret is not here: the Admin mounts it as a directory and Apchi only
+# fills it (#93). `charts/trino` still names a volume for it, because something has to
+# mount it -- but Apchi does not need to know that name.
+volumes:
+  eventListener: apchi-event-listener
+  resourceGroups: apchi-resource-groups
+
+timeouts:
+  # How long a Rollout may take before the Apply fails. A coordinator that never comes
+  # back must not hang the pipeline.
+  rolloutSeconds: 600
+  # The hard limit on Validation. A coordinator that never starts serving fails
+  # Validation rather than hanging it.
+  validationSeconds: 300
+
+certificates:
+  # How close to expiry a Client Certificate has to be before Apchi calls it expiring.
+  # Renewal is manual for now, so this is the warning an Operator acts on.
+  expiringWithinDays: 30
+  # What a Kubernetes Secret may hold. An upload that would exceed it is refused with
+  # that reason rather than as a rejected write from the API server.
+  maxBytes: 1048576
+
+# Where a failed Auto Rollback is reported -- a Mattermost or Slack incoming webhook.
+# Empty means log only: an alert that cannot be delivered must never stop Maintenance
+# Mode engaging.
+alertWebhookUrl: ""
+
+# Trino refuses to boot without the access-control rules and the user-mapping file, so a
+# Cluster cannot wait for Apchi to write them. This chart creates all six Secrets Apchi
+# writes into, **once, on install only**, and never touches them again -- Apchi owns their
+# content from its first Apply, and a `helm upgrade` must not revert a permission change.
+#
+# They live here rather than in the Trino chart because they are Apchi's data. Which means
+# installing this chart *before* Trino: Trino mounts these and will not start without two of
+# them, while Apchi starts fine with no Trino at all.
+#
+# Set create: false when the Secrets already exist -- adopting a Cluster, or a second Apchi
+# release against one that is already configured.
+bootstrap:
+  create: true
+  # The catalogs the Cluster comes up with before Apchi has ever applied. Normally empty:
+  # anything here that Apchi does not know about disappears at the first Apply that rewrites
+  # the seed. Useful for a demo, and for nothing else.
+  catalogs: {}
+
+# Anything not covered above, as APCHI_-prefixed names. An escape hatch for a setting
+# newer than this chart.
+extraEnv: []
+
+resources:
+  requests:
+    memory: 256Mi
+    cpu: 100m
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

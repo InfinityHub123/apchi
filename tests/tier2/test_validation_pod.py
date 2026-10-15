@@ -165,7 +165,7 @@ async def test_a_catalog_trino_rejects_fails_the_apply_in_a_real_cluster(
     assert record["stage"] == "failed"
     assert "imaginary" in record["failure_reason"]
     assert forwarded_kubernetes.created_pods
-    assert (await e2e_client.get("/api/v1/snapshots")).json() == []
+    assert (await e2e_client.get("/api/v1/snapshots")).json()["items"] == []
 
 
 async def _settled_apply(client: AsyncClient, apply_id: str, timeout: float = 600.0) -> dict:

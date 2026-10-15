@@ -18,5 +18,49 @@ stringData:
         {
           "allow": "all"
         }
+      ],
+      "tables": [
+        {
+          "user": "^apchi$",
+          "catalog": "^system$",
+          "privileges": [
+            "SELECT"
+          ]
+        },
+        {
+          "privileges": [
+            "SELECT",
+            "INSERT",
+            "UPDATE",
+            "DELETE",
+            "OWNERSHIP",
+            "GRANT_SELECT"
+          ]
+        }
+      ],
+      "procedures": [
+        {
+          "catalog": "^system$",
+          "schema": "^runtime$",
+          "procedure": "^kill_query$",
+          "privileges": [
+            "EXECUTE"
+          ]
+        }
+      ],
+      "queries": [
+        {
+          "user": "^apchi$",
+          "allow": [
+            "execute",
+            "view",
+            "kill"
+          ]
+        },
+        {
+          "allow": [
+            "execute"
+          ]
+        }
       ]
     }

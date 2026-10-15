@@ -9,7 +9,13 @@ import logging
 import pytest
 
 from app.config import Environment, Settings
-from app.logging import ApplyIdFilter, RedactionFilter, apply_id_var, redact
+from app.logging import (
+    ApplyIdFilter,
+    RedactionFilter,
+    apply_id_var,
+    configure_logging,
+    redact,
+)
 
 
 @pytest.mark.parametrize(
@@ -102,3 +108,98 @@ def test_credentials_embedded_in_a_url_are_redacted() -> None:
 
 def test_a_url_without_credentials_is_untouched() -> None:
     assert redact("https://example.com/path") == "https://example.com/path"
+
+
+#: Attributes logging sets on every LogRecord itself. Passing one of these in `extra` raises
+#: KeyError("Attempt to overwrite ...") *at the call site*, so the failure only appears when
+#: that line runs -- which for a log line in an uncommon path can be a long time after it
+#: shipped. A token mint did exactly this (#131).
+RESERVED_ON_A_LOG_RECORD = frozenset(
+    {
+        "args",
+        "asctime",
+        "created",
+        "exc_info",
+        "exc_text",
+        "filename",
+        "funcName",
+        "levelname",
+        "levelno",
+        "lineno",
+        "message",
+        "module",
+        "msecs",
+        "msg",
+        "name",
+        "pathname",
+        "process",
+        "processName",
+        "relativeCreated",
+        "stack_info",
+        "taskName",
+        "thread",
+        "threadName",
+    }
+)
+
+
+def test_no_log_call_passes_a_reserved_key_in_extra() -> None:
+    """Statically, over the whole application, because the alternative is finding out on the
+    day the unlucky code path runs.
+
+    Read with `ast` rather than by importing: the point is to cover every log call in `app/`,
+    including the ones no test exercises.
+    """
+    import ast
+    from pathlib import Path
+
+    offenders: list[str] = []
+    for path in sorted(Path(__file__).resolve().parents[2].joinpath("app").rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg != "extra" or not isinstance(keyword.value, ast.Dict):
+                    continue
+                for key in keyword.value.keys:
+                    if isinstance(key, ast.Constant) and key.value in RESERVED_ON_A_LOG_RECORD:
+                        offenders.append(f"{path.name}:{key.lineno} extra={{{key.value!r}: ...}}")
+
+    assert offenders == [], f"these log calls raise KeyError when they run: {offenders}"
+
+
+def test_a_dependencys_debug_output_stays_off() -> None:
+    """`configure_logging` raises the level on Apchi's namespace, never on the root.
+
+    This is not tidiness, it is what keeps §12's credentials out of the log. PyMongo's
+    `pymongo.command` logger prints **every command Apchi sends, including the document**, so
+    at DEBUG it would dump Snapshots -- which hold real connection passwords and private keys
+    -- straight into the log, past a redaction filter that keys on field names and would never
+    see them.
+
+    The same argument covers the Kubernetes client and httpx. `app/logging.py` states the
+    reasoning; nothing asserted it until a raw-files test turned the root logger up and found
+    MongoDB printing the file it had just written.
+    """
+    configure_logging(Settings(log_level="DEBUG"))
+
+    assert logging.getLogger().getEffectiveLevel() == logging.WARNING
+    assert logging.getLogger("app").getEffectiveLevel() == logging.DEBUG
+
+    # Not DEBUG, rather than exactly WARNING. The trino client sets its own logger to INFO on
+    # import -- `trino/logging.py` calls `setLevel` on the `trino` root -- so a dependency can
+    # overrule the level chosen here and asserting equality would fail on a library's own
+    # choice rather than on anything Apchi did. What matters for secrets is the DEBUG
+    # threshold: INFO lines are messages, DEBUG lines are payloads.
+    at_debug = [
+        name
+        for name in ("pymongo", "pymongo.command", "httpx", "kubernetes", "trino")
+        if logging.getLogger(name).getEffectiveLevel() <= logging.DEBUG
+    ]
+
+    assert at_debug == [], (
+        f"these would log at DEBUG: {at_debug}. pymongo.command at DEBUG prints every "
+        "document Apchi writes -- Snapshots included, which hold real connection passwords "
+        "and private keys (§12) -- past a filter that keys on field names and would never "
+        "see them."
+    )

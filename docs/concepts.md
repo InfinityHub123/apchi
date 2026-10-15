@@ -1,0 +1,275 @@
+# Concepts
+
+Apchi has one idea in it: configuration changes are staged, reviewed and applied as a unit,
+and what has been applied is kept forever. Everything else follows from that.
+
+If you want the terms alone, `CONTEXT.md` is the glossary and its words are the identifiers
+in the code. This page is the same material in the order you meet it.
+
+## The loop
+
+```
+         ┌──────────── you edit here ────────────┐
+         ▼                                       │
+  Configuration Candidate ──review──▶ validate ──┘
+         │
+      apply ──▶ rollout (if needed) ──▶ verify ──▶ commit ──▶ Snapshot N
+         │                                 │
+         │                            failed? auto rollback
+         ▼
+   the running cluster
+```
+
+**Configuration Candidate.** The one mutable configuration. Every edit any operator makes
+lands here, and nothing in it reaches Trino. There is exactly one — it is not per-user and
+not per-change — which is why review shows you every section rather than only the one you
+touched. An apply promotes all of it.
+
+**Review.** The diff between the Candidate and the Snapshot the Candidate came from, plus
+what applying it would cost the running cluster. Not a dump of what is staged: if you stage a
+catalog and then delete it again, review shows nothing.
+
+**Validation.** Whether the Candidate *should* be applied, decided before the cluster is
+touched. For anything a coordinator could refuse, Apchi starts a throwaway coordinator, feeds
+it the generated files and asks it — so a resource group file that would stop Trino booting
+fails your validation instead of your cluster. It names the resource responsible rather than
+handing you a coordinator log. An apply validates first; validating separately is for
+checking without committing.
+
+**Apply.** The only moment anything reaches Trino. One at a time, and the Candidate is frozen
+while one is in flight.
+
+**Rollout.** Restarting the coordinator, for configuration Trino adopts no other way. Trino
+cannot drain a coordinator, so a rollout destroys every running and queued query — there is
+no way to soften it, which is why review tells you the number beforehand.
+
+**Verification.** Whether the cluster adopted the configuration and is still healthy, decided
+after the apply. Trino exposes nothing saying which configuration is live, so verification is
+functional rather than introspective: the coordinator answers, the workers have registered,
+and a real query runs — and then each section says what it can about its own configuration.
+What a section can say varies, and the honest answer is sometimes nothing. Resource groups
+check which group that real query actually landed in. Catalogs ask the coordinator which
+catalogs it has. Permissions and client certificates assert nothing yet: proving a rule is in
+force means asking the cluster what an identity may do, and whether a certificate works is
+something only the data source behind it knows.
+
+**Commit.** Recording the verified Candidate as the next **Snapshot** — immutable, numbered
+sequentially, and the complete configuration rather than a diff.
+
+**Auto rollback.** If an apply or verification fails, Apchi returns the cluster to the latest
+Snapshot: one attempt, bounded. It creates no Snapshot. If it also fails, Apchi engages
+maintenance mode and alerts, because at that point no automatic action is safe.
+
+## Undoing things
+
+Four different things, deliberately not one:
+
+| | What it does | Reaches the cluster |
+| --- | --- | --- |
+| **Reset** | Throws away everything staged, re-derives the Candidate from the latest Snapshot | No — nothing staged ever reached it |
+| **Section revert** | Replaces one section of the Candidate with its content from an earlier Snapshot | Only when you then apply |
+| **Full rollback** | Replaces the whole Candidate with an earlier Snapshot | Only when you then apply |
+| **Auto rollback** | Returns the cluster to the latest Snapshot after a failure | Yes, by itself |
+
+Section revert is the routine recovery: one catalog broke, the other five sections are
+nobody's business. Full rollback is for a disaster and is never implicit.
+
+Neither rewrites history. Rolling back to Snapshot 1 while Snapshot 2 is current produces
+Snapshot 3, whose content equals Snapshot 1's. So a rollback is itself something you can roll
+back, and the sequence of Snapshots is always the sequence of things that were really live.
+
+### Where Apchi's own state lives
+
+All four of those read from Snapshots, and Snapshots live in MongoDB. Keeping that MongoDB is
+your platform's job, not Apchi's — the same division Apchi draws for the Trino deployment it
+configures. Point `mongodb.uri` at a MongoDB that is operated and backed up the way your other
+databases are. The MongoDB the chart can deploy for you is for trying Apchi out and runs on an
+emptyDir.
+
+If Apchi's database were empty, the cluster itself would be unaffected — Trino keeps serving,
+because what it reads are Kubernetes Secrets and those are untouched. What would be missing is
+Apchi's record of it, and that matters in one place worth knowing about: **adoption**.
+
+Adoption onboards a cluster Apchi does not manage yet, and it decides "do I manage this
+already?" by looking for Snapshots. An empty database answers no in two different situations —
+a cluster that was never managed, and one that is managed but whose database is not in front
+of Apchi right now. Adopting the second renumbers it from Snapshot 1.
+
+So Apchi keeps one number outside MongoDB, in a ConfigMap: the highest Snapshot it has ever
+committed. Adoption reads it and refuses, naming the number, until you repeat it back:
+
+```sh
+curl -XPOST '.../admin/adoption/adopt?discard_history_through=13'
+```
+
+A number rather than a flag, so it cannot be set out of habit. And worth knowing if you ever
+do take that route: adoption reads the configuration back off the coordinator, so every
+section comes back — catalogs with their connection URLs, grants, mapping patterns, resource
+groups. What does not come back is the numbered history behind it, or an edit you staged and
+never applied.
+
+## Moving a configuration
+
+Export and import are about portability, not backup: you have a configuration you like — on
+another cluster, from last month, from a colleague — and you want it here to edit.
+
+| | |
+| --- | --- |
+| `GET /api/v1/snapshots/{n}/export` | one committed Snapshot's configuration |
+| `GET /api/v1/candidate/export` | what is staged right now, which is in no Snapshot |
+| `PUT /api/v1/candidate` | replace everything staged with a document |
+| `GET /api/v1/admin/configuration/export` | the six sections **and** the admin values |
+| `PUT /api/v1/admin/configuration` | replace both |
+
+The only difference between the two scopes is the admin values. They are applied through the
+pipeline and never recorded in a Snapshot, so a Snapshot export is less than what the cluster
+is running; the admin export is the pair. Operators cannot set them, so an operator's document
+does not carry them and an operator's import will not apply them.
+
+**A document holds real credentials.** Snapshots store actual secret values rather than
+references, so every connection password and private key is in the file, in the clear. That is
+what makes an imported configuration work rather than need re-entering. Handle the file the way
+you handle a password database.
+
+Three things worth knowing before you import:
+
+- **It replaces.** That is what `PUT` means. Staged edits are discarded, and every section in
+  the document is the whole of that section. A section you want empty is written as `{}`;
+  leaving it out is refused rather than treated as "empty it".
+- **It is rejected whole.** Every problem is named at once, and nothing is stored unless all of
+  it is acceptable — the Candidate is shared, so one invalid resource in it would block
+  everyone's apply, not just yours.
+- **Nothing reaches the cluster.** An import stages, exactly like any other edit. The response
+  is the review of what applying it would now change, diffed against *this* cluster's latest
+  Snapshot rather than whatever the document came from.
+
+Not included: the numbered history (that is MongoDB's, and your platform's), maintenance mode
+(operational state, not configuration), and the records of applies and validations.
+
+## Sections, and what an apply costs
+
+A **section** is one managed area of the configuration, and the unit of revert. There are six,
+and which of three apply engines a section uses is a fact about how Trino consumes that
+configuration — never about when your edit takes effect. Everything waits for apply.
+
+| Section | Engine | Cost |
+| --- | --- | --- |
+| Catalogs | DDL — `CREATE CATALOG` against the running coordinator | None |
+| Permissions | A file Trino re-reads on its own refresh timer | None |
+| Client certificates | A new file in a directory Trino already has mounted | None |
+| Certificate mapping | A file read once, when the authenticator is built | **Coordinator restart** |
+| Resource groups | A file read once, at startup | **Coordinator restart** |
+| Event listeners | A file read once, at startup | **Coordinator restart** |
+
+A single apply mixing both kinds restarts once, at the end, after everything is delivered.
+
+The no-restart sections are cheap, not instant, and this is the one place where a
+successful apply does not mean the cluster is already running what you asked for. A file
+Apchi writes reaches the pod when the kubelet next syncs its volume — up to its
+`syncFrequency`, 60 seconds by default — and Trino then re-reads it on its own
+`security.refresh-period` timer. The two delays add, Apchi does not wait them out, and
+there is nothing it can ask the cluster to find out whether the file has landed: Trino
+exposes no view of the rules it loaded. So a permissions apply succeeding means the file was
+written correctly and the cluster is healthy. Expect the grant itself a minute or two later.
+
+## Who owns what
+
+**Operators** are the platform staff Apchi is for. They own all six sections, which is most
+of the API.
+
+**Admins** run the underlying platform. They own the few decisions that are not an operator's
+to make, and those decisions are deliberately not part of a Snapshot, so a rollback never
+undoes one:
+
+- **Permissions enforcement.** Apchi ships a catch-all rule allowing everything no grant
+  mentions, because writing grants on a cluster already serving users must not cut off
+  everyone you have not reached yet. Removing that catch-all — making grants actually
+  restrictive — is an admin's switch, and from then on an identity with no grant has no
+  access.
+- **Maintenance mode.** Operators keep read access; every configuration change is refused.
+  For platform upgrades, and what an auto rollback failure engages.
+- **Preserved certificate mapping patterns**, for a migration that has to keep an old pattern
+  working.
+
+**End users** query Trino. They are never Apchi users — only the subject of permissions and
+resource groups.
+
+## What Apchi is not
+
+It does not install or upgrade Trino, and it does not own the Trino deployment. It configures
+one cluster that somebody else deployed, and it needs that deployment to satisfy a set of
+preconditions — a writable catalog store, the generated files mounted where Apchi puts them,
+a refresh period on the access control file. Apchi checks them before every apply and names
+the one that failed rather than half-applying.
+
+It manages one cluster. One Apchi, one Trino, one namespace.
+
+And it manages what it configured — but configuration that predates Apchi can now be
+imported, through **Adoption** (`CONTEXT.md`). That matters most for catalogs: the durable copy
+of every catalog is a Secret Apchi rewrites, and the coordinator reseeds from it at every
+start, so a catalog Apchi does not hold disappears at the next restart. Adopting a cluster is
+what stops that happening to configuration somebody set up by hand.
+
+**Authentication is off by default.** `auth.mode` defaults to `none`, which treats every caller
+as an admin — the same thing Apchi has always done, now with a name and a setting. On `none`,
+anything that can reach the pod can disable permission enforcement across the cluster.
+
+`auth.mode: password` turns it on: operators and admins Apchi stores, hashed with Argon2id, and
+a session cookie. There is no self-registration or password reset, because operators are
+platform staff an admin onboards rather than members of the public. The first admin comes from
+`auth.initialAdmin` — a username and a password *hash* — and is created only when Apchi has no
+users at all, so the setting can never resurrect a deleted account or reset a changed password
+on a restart.
+
+Sessions are rows in MongoDB rather than signed cookies, which is what makes logging out, and
+disabling somebody, take effect on their next request instead of whenever their cookie would
+have expired.
+
+`auth.mode: sso` hands authentication to your identity provider: OpenID Connect, authorization
+code with PKCE, every endpoint discovered from the issuer. Apchi is only ever the *client*, so
+it works against Keycloak, Authentik, Zitadel, Okta or Entra without knowing which. Everyone
+who signs in is an operator; a member of one of `auth.oidc.adminGroups` is an admin, read from
+a claim at each login. A mapping that matches nothing therefore leaves a cluster whose sections
+still work and whose `/admin/*` is closed, which is the direction worth failing in.
+
+Nothing degrades. If the provider is unreachable, logging in fails — Apchi never falls back to
+a mode that would let somebody in, because a control plane that quietly dropped its own
+authentication would look like it was working.
+
+Automations use **tokens** instead of either (`POST /tokens`). A token is minted by a person,
+acts as that person, and takes their *current* role on every request — so demoting somebody
+demotes their automations, and disabling them stops them, without anybody having to go and
+find their tokens.
+
+**It records who changed what.** Snapshots answer *what complete configuration was
+committed*; the audit history answers *who changed what, and when* (`GET /audit`). They are
+not the same question, and the audit is the more load-bearing of the two in one specific way:
+the candidate is shared, so the audit is the only record of whose work an apply is shipping —
+which is what makes that concurrency trade acceptable at all (`adr/0002`). It is also the only
+record of an admin change, because admin values deliberately never enter a snapshot.
+
+An event records *which* resource changed and never what it changed to. Snapshots hold the
+contents, and hold real credentials to do it, so a second copy in the audit trail would be a
+second thing to protect. History is kept forever unless `audit.retentionDays` says otherwise;
+a trail that silently deletes itself is worse than one that grows.
+
+Operators can read it, not only admins — an operator about to apply needs to see whose changes
+they are shipping.
+
+**A retry is safe if you ask for it.** Send an `Idempotency-Key` on any change and the first
+call does the work; a repeat returns that call's response with `Idempotent-Replay: true`
+instead of doing it again. It matters most on apply: without a key, a retry that arrives after
+the first apply finished starts a second one, which means a second rollout and running queries
+terminated. Minting a token is the one case where the response cannot be replayed — the secret
+is shown once and never stored — so a retry is told so rather than handed a second credential.
+
+It does not detect drift. Changes made to the cluster outside Apchi are not noticed,
+reconciled or reported (§17) — which is why catalog DDL is restricted to Apchi's own identity,
+since a `DROP CATALOG` issued elsewhere would delete a file Apchi believes it owns.
+
+## Further reading
+
+- [`getting-started.md`](getting-started.md) — the loop above, run for real.
+- `CONTEXT.md` — the glossary.
+- `apchi_implementation.md` — the design, and the reasoning behind every choice in it.
+- `adr/` — the decisions that went the other way first, and why they were changed.

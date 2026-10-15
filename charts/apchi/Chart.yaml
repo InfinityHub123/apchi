@@ -1,0 +1,15 @@
+apiVersion: v2
+name: apchi
+description: Control plane for configuring one Trino cluster
+type: application
+# The chart version moves when the chart changes; appVersion tracks Apchi itself.
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/InfinityHub123/apchi
+sources:
+  - https://github.com/InfinityHub123/apchi
+keywords:
+  - trino
+  - configuration
+maintainers:
+  - name: Apchi

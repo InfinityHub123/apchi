@@ -15,6 +15,14 @@ from typing import Any
 from pydantic import BaseModel, Field
 from pymongo.asynchronous.database import AsyncDatabase
 
+from app.api.pages import (
+    DEFAULT_LIMIT,
+    BadCursor,
+    Page,
+    bounded,
+    decode_cursor,
+    encode_cursor,
+)
 from app.sections import SectionName
 from app.sections.registry import SECTIONS
 
@@ -43,9 +51,25 @@ class SnapshotStore:
         document = await self._collection.find_one({"_id": number})
         return None if document is None else self._as_snapshot(document)
 
-    async def list(self, limit: int = 50) -> list[Snapshot]:
-        cursor = self._collection.find().sort("number", -1).limit(limit)
-        return [self._as_snapshot(document) async for document in cursor]
+    async def page(self, limit: int = DEFAULT_LIMIT, before: str | None = None) -> Page[Snapshot]:
+        """Newest first, by Snapshot number.
+
+        The number is sequential and unique, so it is the whole sort key -- but the cursor
+        still carries the `_id` beside it, because `_id` *is* the number here and keeping the
+        shape identical across collections is what §19 asked for.
+        """
+        limit = bounded(limit)
+        query: dict[str, Any] = {}
+        if before is not None:
+            query["number"] = {"$lt": _number_in(before)}
+        cursor = self._collection.find(query).sort("number", -1).limit(limit + 1)
+        documents = [document async for document in cursor]
+        items = [self._as_snapshot(document) for document in documents[:limit]]
+        more = len(documents) > limit
+        return Page(
+            items=items,
+            next=encode_cursor(str(items[-1].number)) if more and items else None,
+        )
 
     async def sections_of(self, number: int | None) -> dict[SectionName, dict[str, Any]]:
         """The configuration a Snapshot holds, or an empty baseline before the first."""
@@ -74,3 +98,12 @@ class SnapshotStore:
             {"_id": snapshot.number, **snapshot.model_dump(mode="json")}
         )
         return snapshot
+
+
+def _number_in(cursor: str) -> int:
+    """A snapshot cursor is one number. Anything else is a cursor from somewhere else."""
+    (number,) = decode_cursor(cursor, expected=1)
+    try:
+        return int(number)
+    except ValueError as bad:
+        raise BadCursor(cursor) from bad

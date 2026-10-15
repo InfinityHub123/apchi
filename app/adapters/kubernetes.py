@@ -6,6 +6,7 @@ mention threads. Keeping the whole surface in one protocol is also what lets the
 fast test tier substitute it while MongoDB and Trino stay real.
 """
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
@@ -77,6 +78,12 @@ _HOPELESS = frozenset(
 class KubernetesAdapter(Protocol):
     async def read_secret(self, name: str) -> dict[str, str]: ...
 
+    async def read_secret_if_present(self, name: str) -> dict[str, str] | None: ...
+
+    async def read_config_map(self, name: str) -> dict[str, str]: ...
+
+    async def write_config_map(self, name: str, data: dict[str, str]) -> None: ...
+
     async def write_secret(self, name: str, data: dict[str, str]) -> None: ...
 
     async def ready_replicas(self, deployment: str) -> int: ...
@@ -111,8 +118,8 @@ class KubernetesAdapter(Protocol):
         self, deployment: str, container: str, volume: str, secret: str, path: str, key: str
     ) -> None: ...
 
-    async def unmount_secret_file(
-        self, deployment: str, container: str, volume: str, path: str
+    async def unmount_secret_files(
+        self, deployment: str, container: str, volume: str, paths: Sequence[str], drop_volume: bool
     ) -> None: ...
 
 
@@ -152,10 +159,96 @@ class RealKubernetes:
         return self._apps_api
 
     async def read_secret(self, name: str) -> dict[str, str]:
+        """A Secret's contents, or empty when there is no such Secret.
+
+        Absence is not an error here, and treating it as one was a real bug: on a Cluster
+        being adopted none of Apchi's Secrets exist yet, so discovery reading the catalog
+        seed raised a 404 from the API server and failed the whole read (§15). The fake in
+        the tests returned an empty mapping all along, which is why only tier 2 found it.
+        """
         import base64
 
-        secret = await run_in_threadpool(self._core.read_namespaced_secret, name, self._namespace)
+        secret = await self._read(self._core.read_namespaced_secret, name)
+        if secret is None:
+            return {}
         return {k: base64.b64decode(v).decode() for k, v in (secret.data or {}).items()}
+
+    async def read_secret_if_present(self, name: str) -> dict[str, str] | None:
+        """The same read, with absence distinguishable from emptiness.
+
+        `read_secret` folds the two together, which is right for almost every caller and
+        wrong for one: Adoption's seed skips a Secret whose contents already match, and an
+        empty Secret that does not exist matches an empty one that does. It skipped creating
+        the client-certificate Secret for a Cluster with no certificates, and the cutover
+        then could not mount it -- `MountVolume.SetUp failed ... secret not found`, with the
+        coordinator stuck in Init forever.
+
+        So the distinction lives in the type rather than in a comment somewhere.
+        """
+        import base64
+
+        secret = await self._read(self._core.read_namespaced_secret, name)
+        if secret is None:
+            return None
+        return {k: base64.b64decode(v).decode() for k, v in (secret.data or {}).items()}
+
+    async def read_config_map(self, name: str) -> dict[str, str]:
+        """A ConfigMap's contents, or empty when there is no such ConfigMap.
+
+        Mostly read-only: Apchi reads an Admin's ConfigMaps to check a precondition it
+        cannot check any other way -- whether Trino was told to re-read the rules file --
+        and, since §15, to find configuration an Admin put somewhere Apchi would not have.
+        It writes exactly one of its own, the high-water mark (§18).
+        """
+        config_map = await self._read(self._core.read_namespaced_config_map, name)
+        return {} if config_map is None else dict(config_map.data or {})
+
+    async def write_config_map(self, name: str, data: dict[str, str]) -> None:
+        """The ConfigMap's contents become exactly `data`, creating it if absent.
+
+        The only ConfigMap Apchi writes, and it writes it for one reason: the high-water
+        mark has to outlive MongoDB, so it cannot live in MongoDB. An Admin's ConfigMaps are
+        read and never touched.
+
+        Patch-then-create for the same reason `write_secret` does it: a patch cannot create,
+        and on first commit this ConfigMap does not exist yet.
+        """
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            await run_in_threadpool(
+                self._core.patch_namespaced_config_map, name, self._namespace, {"data": data}
+            )
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+            await run_in_threadpool(
+                self._core.create_namespaced_config_map,
+                self._namespace,
+                {
+                    "apiVersion": "v1",
+                    "kind": "ConfigMap",
+                    "metadata": {"name": name},
+                    "data": data,
+                },
+            )
+
+    async def _read(self, read: Any, name: str) -> Any:
+        """One read, with "there is no such object" distinguished from a real failure.
+
+        Only a 404 is swallowed. A 403 means Apchi's Role is wrong and a 500 means the API
+        server is unwell, and reporting either as an empty object would make a Cluster look
+        unconfigured -- which during Adoption is the difference between importing nothing and
+        knowing Apchi cannot see.
+        """
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            return await run_in_threadpool(read, name, self._namespace)
+        except ApiException as exc:
+            if exc.status == 404:
+                return None
+            raise
 
     async def write_secret(self, name: str, data: dict[str, str]) -> None:
         """The Secret's contents become exactly `data`.
@@ -169,12 +262,32 @@ class RealKubernetes:
         stale = {key: None for key in existing if key not in data}
         if stale:
             body["data"] = stale
-        await run_in_threadpool(
-            self._core.patch_namespaced_secret,
-            name,
-            self._namespace,
-            body,
-        )
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            await run_in_threadpool(
+                self._core.patch_namespaced_secret,
+                name,
+                self._namespace,
+                body,
+            )
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+            # A patch cannot create, and on a Cluster being adopted none of Apchi's Secrets
+            # exist yet -- so the seed that writes them for the first time got a 404 from
+            # the API server (§15). Creating is the same operation from Apchi's side: the
+            # Secret's contents become exactly `data` either way.
+            await run_in_threadpool(
+                self._core.create_namespaced_secret,
+                self._namespace,
+                {
+                    "apiVersion": "v1",
+                    "kind": "Secret",
+                    "metadata": {"name": name},
+                    "stringData": data,
+                },
+            )
 
     async def ready_replicas(self, deployment: str) -> int:
         dep = await run_in_threadpool(
@@ -273,22 +386,33 @@ class RealKubernetes:
             },
         )
 
-    async def unmount_secret_file(
-        self, deployment: str, container: str, volume: str, path: str
+    async def unmount_secret_files(
+        self, deployment: str, container: str, volume: str, paths: Sequence[str], drop_volume: bool
     ) -> None:
-        """Remove that mount and its volume, leaving every other mount alone. Idempotent:
-        deleting what is not there is the outcome the caller wanted."""
+        """Remove these mounts, and the volume with them when nothing is left on it.
+
+        One patch for all of them, and `drop_volume` decided by the caller, because the two
+        cannot be separated safely: removing a volume while another mount still names it is
+        rejected by the API server ("volumeMounts[0].name ... not found"), and removing the
+        last mount while leaving the volume behind leaves a volume nothing uses.
+
+        Idempotent: deleting what is not there is the outcome the caller wanted.
+        """
         await self._patch_deployment(
             deployment,
             {
                 "spec": {
                     "template": {
                         "spec": {
-                            "volumes": [{"name": volume, "$patch": "delete"}],
+                            "volumes": (
+                                [{"name": volume, "$patch": "delete"}] if drop_volume else []
+                            ),
                             "containers": [
                                 {
                                     "name": container,
-                                    "volumeMounts": [{"mountPath": path, "$patch": "delete"}],
+                                    "volumeMounts": [
+                                        {"mountPath": path, "$patch": "delete"} for path in paths
+                                    ],
                                 }
                             ],
                         }
@@ -347,10 +471,21 @@ class RealKubernetes:
         from kubernetes.client.exceptions import ApiException
 
         try:
-            logs = await run_in_threadpool(
-                self._core.read_namespaced_pod_log, name, self._namespace, tail_lines=tail
+            # `_preload_content=False` because the client's own deserialisation of this
+            # endpoint is `str(response.data)` -- a `b'...'` repr with the newlines
+            # escaped, which arrives as one enormous line that no error can be picked out
+            # of. Taking the raw body and decoding it is the only way to get a log back.
+            # An earlier attempt at this guarded on `isinstance(logs, bytes)`, which never
+            # fires: what comes back is a str that *contains* the repr.
+            response = await run_in_threadpool(
+                self._core.read_namespaced_pod_log,
+                name,
+                self._namespace,
+                tail_lines=tail,
+                _preload_content=False,
             )
-            return str(logs)
+            raw = response.data
+            return raw.decode(errors="replace") if isinstance(raw, bytes) else str(raw)
         except ApiException:
             return ""
 

@@ -1,18 +1,54 @@
-# Trino deployment for development and Tier 2 tests
+# Trino deployment for the end-to-end tests
 
-A Trino satisfying §7.1 of `apchi_implementation.md`, small enough to run on kind or
-minikube. It is the fixture the end-to-end tests need, and an executable reference for what
-the production chart must do.
+The same Trino `charts/trino` installs, as raw manifests. It exists because the tier 2
+suite needs a fixture it can apply and reset in seconds without a Helm release in the way,
+and because `tests/tier2/conftest.py` restores the Cluster to these exact manifests between
+tests (#53).
+
+**For installing Trino, use `charts/trino`.** It is the same deployment with values, a
+bootstrap that survives `helm upgrade`, and a CI gate that runs Apchi's own preconditions
+against what it renders.
+
+They cannot disagree, because these manifests are **generated from the chart**.
+`scripts/export_trino_dev.py` renders `charts/trino` with `deploy/trino-dev.values.yaml` and
+writes `00-config.yaml`, `10-coordinator.yaml` and `20-worker.yaml`; CI fails on a diff. Edit
+the chart or the values and regenerate — never these three files.
+
+The values file sits *beside* this directory rather than in it, because everything here is
+applied with `kubectl apply -f deploy/trino-dev/`, which sweeps in every `.yaml` it finds and
+fails on one that is not a manifest.
 
 ```sh
 kubectl apply -f deploy/trino-dev/
-kubectl wait --for=condition=ready pod -l app=trino --timeout=300s
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=trino --timeout=300s
 ```
 
-`05-access-control.yaml` is **generated** — `scripts/export_access_control.py` writes it from
-Apchi's own generator, and CI fails if the two disagree. Do not edit it by hand. It is committed
-only because Trino refuses to boot without the file, so the coordinator has to be able to start
-before Apchi has ever run; Apchi rewrites the Secret on every Apply.
+These carry the chart's `app.kubernetes.io/*` labels, which they inherited when they became
+generated output. If you have a cluster from before that, `kubectl apply` will refuse both
+Deployments with `spec.selector: field is immutable` — delete them once and re-apply. The
+tier 2 fixture does this for you.
+
+`01-secrets.yaml` is the one file here written by hand, and there is no chart to generate it
+from: `charts/trino` creates no Secrets, because they hold configuration Apchi writes and
+Apchi's chart creates them. Tier 2 does not install Apchi's chart, so the fixture ships its
+own copies.
+
+`05-access-control.yaml` and `06-user-mapping.yaml` are **generated** —
+`scripts/export_access_control.py` and `scripts/export_user_mapping.py` write them from Apchi's
+own generators, and CI fails if the two disagree. Do not edit them by hand. They are committed
+only because Trino refuses to boot without either file, so the coordinator has to be able to
+start before Apchi has ever run; Apchi rewrites both Secrets as the configuration changes. The
+same generators write `charts/apchi/files/`, which the Apchi chart's bootstrap reads, so there
+is one source and no second copy to drift.
+
+The coordinator sets `http-server.authentication.insecure.user-mapping.file` rather than the
+certificate variant, because there is no TLS here and Trino rejects
+`http-server.authentication.certificate.user-mapping.file` unless certificate authentication is
+configured. Both properties feed the same file to the same parser, so a pattern proven here is
+a pattern proven for production. Two consequences worth knowing before you run a query against
+this cluster: the rules are read once, when the authenticator is built, so a change takes only
+on a Rollout; and a principal no rule matches is **denied**, not passed through — which is why
+Apchi always emits the catch-all `(.*)` rule when no Certificate Mapping Pattern is set.
 
 ## The mechanism
 
@@ -48,6 +84,12 @@ fails with `mkdir: Permission denied` before Trino starts. `/data/trino` is trin
 **`access-control.name` belongs only in `access-control.properties`.** In
 `config.properties` it is rejected with _"Did you mean to use 'access-control.config-files'?"_
 
+A fifth, found while writing `charts/trino`: **each configuration file is mounted
+separately, deliberately.** One mount of the whole `/etc/trino` directory would be more
+idiomatic and would break the cluster — Apchi mounts a single file inside that directory,
+and a `subPath` mount at a path inside a ConfigMap directory mount fails the container
+outright, with no Trino log at all. See #93.
+
 ## What it proves
 
 Verified on Kubernetes v1.35.1 with Trino 483:
@@ -65,5 +107,5 @@ Verified on Kubernetes v1.35.1 with Trino 483:
 ## Not production
 
 One replica each, no TLS, no authentication, `tpch` as the seeded catalog, and Apchi's
-identity is the literal string `apchi`. The production chart must satisfy the same §7.1
-requirements; this is not that chart.
+identity is the literal string `apchi`. `charts/trino` is the one to install; this is the
+test fixture.

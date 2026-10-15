@@ -7,27 +7,62 @@ MongoDB still comes from testcontainers: what tier 2 adds is a real Kubernetes a
 a real in-cluster Trino, not a different database.
 """
 
+import asyncio
+import base64
+import json
+import logging
 import socket
 import subprocess
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
+import yaml
 from httpx import ASGITransport, AsyncClient
 
 from app.adapters.kubernetes import PodState, RealKubernetes, RolloutState
+from app.adapters.mongo import Mongo
 from app.adapters.trino import Trino
+from app.audit.events import AuditStore
 from app.config import Settings
 from app.main import create_app
+from app.pipeline.admin_values import AdminStore
+
+logger = logging.getLogger(__name__)
 
 COORDINATOR = "deploy/trino-coordinator"
 TRINO_SERVICE = "svc/trino"
 CATALOG_SEED_SECRET = "trino-catalog-seed"
 ACCESS_CONTROL_SECRET = "trino-access-control"
 EVENT_LISTENER_SECRET = "trino-event-listener"
+USER_MAPPING_SECRET = "trino-user-mapping"
+RESOURCE_GROUPS_SECRET = "trino-resource-groups"
+CLIENT_CERTIFICATE_SECRET = "trino-client-certificates"
+
+#: The mounts Apchi adds and removes on the coordinator, by the volume that carries
+#: them. What the reset has to take back off between tests.
+#: Every volume Apchi adds and removes on the coordinator. The raw files volume (§14) is
+#: here but not in APCHI_MOUNTS below: an Admin writes raw files at whatever paths they
+#: choose, so its mount paths are read from the live Deployment rather than listed. A reset
+#: that guessed would leave mounts behind for the next test to trip over.
+OPTIONAL_VOLUMES = (
+    "apchi-event-listener",
+    "apchi-resource-groups",
+    "apchi-admin-raw-files",
+)
+
+APCHI_MOUNTS = {
+    "apchi-event-listener": ["/etc/trino/event-listener.properties"],
+    "apchi-resource-groups": [
+        "/etc/trino/resource-groups.json",
+        "/etc/trino/resource-groups.properties",
+    ],
+}
 
 
 def _cluster_available() -> bool:
@@ -40,7 +75,7 @@ def _cluster_available() -> bool:
     return True
 
 
-def _free_port() -> int:
+def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
@@ -69,7 +104,7 @@ class PortForward:
     def __init__(self, target: str, remote_port: int) -> None:
         self._target = target
         self._remote_port = remote_port
-        self.port = _free_port()
+        self.port = free_port()
         self._process: subprocess.Popen[bytes] | None = None
 
     def _spawn(self) -> None:
@@ -166,11 +201,59 @@ class PortForward:
         raise AssertionError(f"coordinator not serving through the forward on {self.port}")
 
 
-def _listener_volume_present() -> bool:
-    """Whether Apchi's volume is on the coordinator right now.
+def mounted_paths(volume: str) -> list[str]:
+    """Which paths a volume is mounted at on the coordinator right now.
 
-    Checked before patching it away, because a patch that changes nothing still bumps the
-    Deployment's generation and starts a rollout nobody needed.
+    Read rather than listed, because the Admin raw files volume (§14) is mounted at whatever
+    paths an Admin wrote -- there is no static list of them, and a reset that guessed would
+    leave mounts behind for the next test to trip over.
+
+    Filtered in Python rather than with a jsonpath `?()` predicate: kubectl's jsonpath does
+    not accept one reliably across versions and fails the whole command rather than returning
+    nothing, which took out every test in the file that touched this.
+    """
+    spec = json.loads(
+        kubectl(
+            "get",
+            "deployment",
+            "trino-coordinator",
+            "-o",
+            "jsonpath={.spec.template.spec.containers[0].volumeMounts}",
+        )
+        or "[]"
+    )
+    return [mount["mountPath"] for mount in spec if mount.get("name") == volume]
+
+
+def _unmount_patch(volumes: list[str]) -> dict[str, Any]:
+    """A strategic patch taking those volumes and their mounts off the pod template."""
+    return {
+        "spec": {
+            "template": {
+                "spec": {
+                    "volumes": [{"name": volume, "$patch": "delete"} for volume in volumes],
+                    "containers": [
+                        {
+                            "name": "trino",
+                            "volumeMounts": [
+                                {"mountPath": path, "$patch": "delete"}
+                                for volume in volumes
+                                for path in APCHI_MOUNTS.get(volume) or mounted_paths(volume)
+                            ],
+                        }
+                    ],
+                }
+            }
+        }
+    }
+
+
+def _apchi_volumes_present() -> list[str]:
+    """Which of Apchi's optional volumes are on the coordinator right now.
+
+    Checked before patching them away, because a patch that changes nothing still bumps the
+    Deployment's generation and starts a rollout nobody needed. The user-mapping volume is
+    not here: it is part of the manifest, because that file cannot be absent.
     """
     volumes = kubectl(
         "get",
@@ -178,14 +261,49 @@ def _listener_volume_present() -> bool:
         "trino-coordinator",
         "-o",
         "jsonpath={.spec.template.spec.volumes[*].name}",
+    ).split()
+    return [name for name in OPTIONAL_VOLUMES if name in volumes]
+
+
+def trino_selector(component: str) -> str:
+    """How `deploy/trino-dev` labels a Trino pod.
+
+    The chart's scheme, which the manifests inherited when they became generated output
+    (#95). Stated once because it is a real selector -- the Deployments match on exactly
+    these labels, and a stale copy of it silently selects nothing, which looks like a
+    Cluster with no pods rather than like a test looking in the wrong place.
+    """
+    return (
+        "app.kubernetes.io/name=trino,"
+        "app.kubernetes.io/instance=trino,"
+        f"app.kubernetes.io/component={component}"
     )
-    return "apchi-event-listener" in volumes.split()
 
 
 def _coordinator_pods() -> int:
     """How many coordinator pods exist, Terminating included."""
-    listed = kubectl("get", "pods", "-l", "app=trino,component=coordinator", "--no-headers")
+    listed = kubectl("get", "pods", "-l", trino_selector("coordinator"), "--no-headers")
     return len([line for line in listed.splitlines() if line.strip()])
+
+
+async def file_appears(
+    directory: str, filename: str, deployment: str = COORDINATOR, within: float = 150.0
+) -> bool:
+    """Polls a pod's own filesystem until the file is there.
+
+    Read from outside the product, like the coordinator log below. Apchi cannot see the
+    pod's filesystem -- which is why nothing in Apply waits for a certificate to land, and
+    why a test that wants to see one arrive has to look for itself.
+
+    The bound is the kubelet's `syncFrequency`, a minute by default, with room to spare:
+    projection is normally seconds, but the worst case is what a test must tolerate.
+    """
+    deadline = asyncio.get_running_loop().time() + within
+    while asyncio.get_running_loop().time() < deadline:
+        if filename in kubectl("exec", deployment, "-c", "trino", "--", "ls", directory).split():
+            return True
+        await asyncio.sleep(3)
+    return False
 
 
 def coordinator_log(lines: int = 400) -> str:
@@ -201,6 +319,231 @@ def coordinator_log(lines: int = 400) -> str:
 def restart_coordinator() -> None:
     kubectl("rollout", "restart", COORDINATOR)
     kubectl("rollout", "status", COORDINATOR, "--timeout=600s")
+
+
+#: The manifests are the baseline rather than a copy of them kept here. Two of them are
+#: generated by scripts with CI drift gates, so a restated copy would be a third truth.
+MANIFESTS = Path(__file__).resolve().parents[2] / "deploy" / "trino-dev"
+
+
+def manifest_secrets() -> dict[str, dict[str, str]]:
+    """Every Secret `deploy/trino-dev` ships, with the contents it ships."""
+    secrets: dict[str, dict[str, str]] = {}
+    for path in sorted(MANIFESTS.glob("*.yaml")):
+        for document in yaml.safe_load_all(path.read_text()):
+            if document and document.get("kind") == "Secret":
+                secrets[document["metadata"]["name"]] = document.get("stringData") or {}
+    return secrets
+
+
+def _live_secret(name: str) -> dict[str, str] | None:
+    """What the cluster holds, or None when the Secret is not there at all."""
+    try:
+        raw = kubectl("get", "secret", name, "-o", "json")
+    except subprocess.CalledProcessError:
+        return None
+    data = json.loads(raw).get("data") or {}
+    return {key: base64.b64decode(value).decode() for key, value in data.items()}
+
+
+def _off_the_loop(coroutine_function: Callable[[], Awaitable[set[str]]]) -> set[str]:
+    """Run an async call from code that may itself be inside a running event loop.
+
+    This check is called from two places: a synchronous session fixture, which has no loop,
+    and tests, which do. `asyncio.run` refuses the second, and refuses it with an exception
+    this function's caller would read as "the cluster is unreachable" -- so the loop gets a
+    thread of its own rather than an answer that is quietly wrong.
+    """
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(lambda: asyncio.run(coroutine_function())).result()
+
+
+def _live_catalogs(settings: Settings, within: float = 180.0) -> set[str] | None:
+    """What the coordinator is serving, or None when it cannot be asked.
+
+    Read through a port-forward of its own rather than the `forward` fixture: this runs once
+    per session, before any test has a fixture.
+    """
+    # Retried, because "cannot reach Trino this second" is not the same as "the cluster is
+    # wrong": a coordinator that has just been restarted has no endpoints for a moment, and
+    # a port-forward to a Service with no endpoints exits rather than waiting.
+    deadline = time.monotonic() + within
+    while time.monotonic() < deadline:
+        tunnel = PortForward(TRINO_SERVICE, 8080)
+        try:
+            tunnel.start()
+            return _off_the_loop(
+                Trino(host="127.0.0.1", port=tunnel.port, user=settings.trino_user).catalogs
+            )
+        except Exception:
+            time.sleep(5)
+        finally:
+            tunnel.stop()
+    return None
+
+
+def _divergence(settings: Settings) -> list[str]:
+    """How the cluster differs from what the manifests ship.
+
+    Every check is a comparison rather than a correction, so a cluster already at baseline
+    can be left completely alone: rewriting a Secret that already matches would be free, but
+    taking a mount off the coordinator costs a rollout, and paying that on every run would
+    make the whole suite slower to avoid a problem it does not have.
+    """
+    problems = []
+    for name, wanted in manifest_secrets().items():
+        if _live_secret(name) != wanted:
+            problems.append(f"secret {name}")
+    volumes = kubectl(
+        "get",
+        "deployment",
+        "trino-coordinator",
+        "-o",
+        "jsonpath={.spec.template.spec.volumes[*].name}",
+    ).split()
+    problems.extend(f"mount {volume}" for volume in OPTIONAL_VOLUMES if volume in volumes)
+
+    # A catalog the seed does not name is one a previous run created. The store is an
+    # emptyDir reseeded at pod start, so it survives only until the coordinator restarts --
+    # which means finding one is also how a half-finished run announces itself.
+    seeded = {
+        key.removesuffix(".properties") for key in manifest_secrets().get(CATALOG_SEED_SECRET, {})
+    } | {"system"}
+    serving = _live_catalogs(settings)
+    if serving is None:
+        problems.append("the coordinator is not serving")
+    else:
+        problems.extend(f"catalog {name}" for name in sorted(serving - seeded))
+    return problems
+
+
+def _manifest_selectors() -> dict[str, dict[str, str]]:
+    """Each Deployment the manifests ship, with the selector it declares."""
+    selectors: dict[str, dict[str, str]] = {}
+    for path in sorted(MANIFESTS.glob("*.yaml")):
+        for document in yaml.safe_load_all(path.read_text()):
+            if document and document.get("kind") == "Deployment":
+                selectors[document["metadata"]["name"]] = document["spec"]["selector"][
+                    "matchLabels"
+                ]
+    return selectors
+
+
+def _drop_deployments_with_a_stale_selector() -> None:
+    """Delete a Deployment whose selector the manifests no longer declare.
+
+    `spec.selector` is immutable, so `kubectl apply` cannot change it -- it fails with
+    "field is immutable", and the baseline apply fails with it. CI never sees this, because
+    its cluster is new every run; a developer's cluster sees it the first time the labels
+    change, as a setup error that says nothing about what to do.
+
+    It happened when deploy/trino-dev became generated output and inherited the chart's
+    `app.kubernetes.io/*` labels in place of its own `app`/`component` ones (#95). Deleting
+    the Deployment costs one coordinator start, which the baseline was going to wait for
+    anyway.
+    """
+    for name, wanted in _manifest_selectors().items():
+        live = kubectl(
+            "get",
+            "deployment",
+            name,
+            "-o",
+            "jsonpath={.spec.selector.matchLabels}",
+            "--ignore-not-found",
+        ).strip()
+        if not live or json.loads(live) == wanted:
+            continue
+        # Said out loud rather than logged: this path is unreachable in CI, so the only
+        # person who ever sees it is someone whose cluster just lost a Deployment.
+        print(f"deleting {name}: its selector {live} is not the {wanted} these manifests use")
+        kubectl("delete", "deployment", name, "--wait=true")
+
+
+def _restore_baseline(settings: Settings) -> None:
+    """Put the cluster back to what the manifests ship, and prove it worked.
+
+    Deleted and re-applied rather than patched: `kubectl apply` leaves keys it never
+    applied, and those are exactly the keys a previous run added -- a catalog in the seed, a
+    certificate, a rules file an Operator's grant rewrote.
+    """
+    for name in manifest_secrets():
+        kubectl("delete", "secret", name, "--ignore-not-found")
+    _drop_deployments_with_a_stale_selector()
+    kubectl("apply", "-f", str(MANIFESTS))
+
+    if volumes := [
+        v
+        for v in OPTIONAL_VOLUMES
+        if v
+        in kubectl(
+            "get",
+            "deployment",
+            "trino-coordinator",
+            "-o",
+            "jsonpath={.spec.template.spec.volumes[*].name}",
+        ).split()
+    ]:
+        kubectl(
+            "patch",
+            "deployment",
+            "trino-coordinator",
+            "--type=strategic",
+            "-p",
+            json.dumps(_unmount_patch(volumes)),
+        )
+
+    # The catalog store is an emptyDir reseeded from the Secret at pod start, so a restart
+    # is what removes a catalog a previous run created -- and it is also how the coordinator
+    # picks up a restored user-mapping file, which it reads once when it starts.
+    restart_coordinator()
+
+    if remaining := _divergence(settings):
+        raise AssertionError(
+            "the cluster could not be brought to the baseline deploy/trino-dev describes: "
+            f"{', '.join(remaining)}. Running the suite against it would prove less than it "
+            "claims."
+        )
+
+
+#: Divergence from the manifests immediately after the session's baseline restore. See
+#: `baseline`, and `test_baseline.py` for the assertion that reads it.
+_AT_SESSION_START: list[str] = []
+
+
+def divergence_at_session_start() -> list[str]:
+    """How the cluster differed from the manifests once the session had set it up."""
+    return list(_AT_SESSION_START)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def baseline(cluster: None) -> None:
+    """Put the cluster into a known state once, before any test runs.
+
+    The per-test reset restores what a test changed, which is not the same thing: it
+    captures each Secret as it finds it at setup, so a run that dies mid-test leaves its
+    mess behind and every run after it adopts that mess as its own baseline and faithfully
+    preserves it. That has cost real time more than once, and CI never saw any of it --
+    each shard gets a fresh kind cluster, so nothing carries over there.
+
+    A cluster already at baseline is left completely alone, because the restore ends in a
+    coordinator restart and paying that on every run would make the suite slower to avoid a
+    problem it does not have.
+    """
+    # Its own Settings rather than the test fixture's: that one is function-scoped, and
+    # nothing it overrides -- the MongoDB a test talks to -- has any bearing on the state of
+    # the cluster.
+    settings = Settings()
+    if problems := _divergence(settings):
+        logger.warning("tier 2 cluster is not at baseline: %s", ", ".join(problems))
+        _restore_baseline(settings)
+    # Recorded, because "the suite starts from what the manifests ship" is a property of this
+    # moment and of nothing later. The per-test reset restores each Secret to how it found it
+    # at setup, not to the manifest, so a test that changes one leaves it changed for the rest
+    # of the shard -- and a test asserting live divergence passes or fails on which files
+    # happen to share its shard. That is how this broke: adding a tier 2 file shifted the
+    # positional shards and put the assertion after something that moves the catalog seed.
+    _AT_SESSION_START.clear()
+    _AT_SESSION_START.extend(_divergence(settings))
 
 
 @pytest.fixture(scope="session")
@@ -235,8 +578,17 @@ class ForwardedKubernetes:
         #: Every pod Apchi asked for, so a test can prove one was really created.
         self.created_pods: list[str] = []
 
+    async def read_config_map(self, name: str) -> dict[str, str]:
+        return await self._real.read_config_map(name)
+
+    async def write_config_map(self, name: str, data: dict[str, str]) -> None:
+        await self._real.write_config_map(name, data)
+
     async def read_secret(self, name: str) -> dict[str, str]:
         return await self._real.read_secret(name)
+
+    async def read_secret_if_present(self, name: str) -> dict[str, str] | None:
+        return await self._real.read_secret_if_present(name)
 
     async def write_secret(self, name: str, data: dict[str, str]) -> None:
         await self._real.write_secret(name, data)
@@ -304,10 +656,10 @@ class ForwardedKubernetes:
     ) -> None:
         await self._real.mount_secret_file(deployment, container, volume, secret, path, key)
 
-    async def unmount_secret_file(
-        self, deployment: str, container: str, volume: str, path: str
+    async def unmount_secret_files(
+        self, deployment: str, container: str, volume: str, paths: Sequence[str], drop_volume: bool
     ) -> None:
-        await self._real.unmount_secret_file(deployment, container, volume, path)
+        await self._real.unmount_secret_files(deployment, container, volume, paths, drop_volume)
 
     async def pod_state(self, name: str) -> PodState:
         state = await self._real.pod_state(name)
@@ -356,8 +708,8 @@ class ForwardedKubernetes:
 async def cluster_state(
     real_kubernetes: RealKubernetes, forward: PortForward, settings: Settings
 ) -> AsyncIterator[None]:
-    """Puts the shared cluster back after each test: both Secrets Apchi writes, and any
-    catalog left behind.
+    """Puts the shared cluster back after each test: the Secrets Apchi writes, the Admin
+    values it reads, and any catalog left behind.
 
     One fixture owns the whole reset because the order matters. The access-control
     Secret has to go back *before* stray catalogs are dropped: Apply delivers the rules
@@ -365,7 +717,29 @@ async def cluster_state(
     test that runs Apchi under a different identity to force a failure also revokes the
     real one's `owner` -- and the cleanup would then be denied its own DROP CATALOG.
     """
-    secrets = (CATALOG_SEED_SECRET, ACCESS_CONTROL_SECRET, EVENT_LISTENER_SECRET)
+    # Admin values outlive an Apply by design (invariant 2), which makes them exactly the
+    # kind of thing one test can leave behind for every test after it. A posture left closed
+    # would deny identities in unrelated tests, and the failure would look like anything but
+    # its cause.
+    mongo = Mongo(settings)
+    admin = AdminStore(mongo.database, AuditStore(mongo.database))
+    admin_before = await admin.load()
+
+    # The high-water mark belongs with the MongoDB it describes, and every test here gets a
+    # fresh database. Leaving the mark behind would hand the next test an Apchi that has
+    # "lost" every Snapshot the previous one committed -- health reporting a disaster and
+    # Adoption refusing outright (§18). A fresh database is a new install, so it starts
+    # with no mark, which is what a new install has.
+    kubectl("delete", "configmap", settings.high_water_config_map, "--ignore-not-found")
+
+    secrets = (
+        CATALOG_SEED_SECRET,
+        ACCESS_CONTROL_SECRET,
+        EVENT_LISTENER_SECRET,
+        USER_MAPPING_SECRET,
+        RESOURCE_GROUPS_SECRET,
+        CLIENT_CERTIFICATE_SECRET,
+    )
     originals = {name: await real_kubernetes.read_secret(name) for name in secrets}
 
     def cluster() -> Trino:
@@ -375,10 +749,16 @@ async def cluster_state(
     try:
         yield
     finally:
-        changed_rules = (
-            await real_kubernetes.read_secret(ACCESS_CONTROL_SECRET)
-            != originals[ACCESS_CONTROL_SECRET]
-        )
+        await admin.save(admin_before)
+        await mongo.close()
+        # Both are rule files the running coordinator will not pick up again on its own:
+        # the access-control rules only on their refresh timer, the user-mapping rules never
+        # -- UserMapping parses them when the authenticator is built. Either one changed
+        # means the pod has to go.
+        changed_rules = False
+        for name in (ACCESS_CONTROL_SECRET, USER_MAPPING_SECRET):
+            if await real_kubernetes.read_secret(name) != originals[name]:
+                changed_rules = True
         for name, content in originals.items():
             await real_kubernetes.write_secret(name, content)
         # Apchi mounts its own volume on the coordinator when a listener is configured.
@@ -389,16 +769,34 @@ async def cluster_state(
         # coordinator was being replaced, its port-forward attached to a pod on its way out,
         # and its very first Trino call was refused long before it reached a rollout of its
         # own.
-        if _listener_volume_present():
+        if volumes := _apchi_volumes_present():
+            patch = {
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "volumes": [{"name": volume, "$patch": "delete"} for volume in volumes],
+                            "containers": [
+                                {
+                                    "name": "trino",
+                                    "volumeMounts": [
+                                        {"mountPath": path, "$patch": "delete"}
+                                        for volume in volumes
+                                        for path in APCHI_MOUNTS.get(volume)
+                                        or mounted_paths(volume)
+                                    ],
+                                }
+                            ],
+                        }
+                    }
+                }
+            }
             kubectl(
                 "patch",
                 "deployment",
                 "trino-coordinator",
                 "--type=strategic",
                 "-p",
-                '{"spec":{"template":{"spec":{"volumes":[{"name":"apchi-event-listener",'
-                '"$patch":"delete"}],"containers":[{"name":"trino","volumeMounts":'
-                '[{"mountPath":"/etc/trino/event-listener.properties","$patch":"delete"}]}]}}}}',
+                json.dumps(patch),
             )
             kubectl("rollout", "status", COORDINATOR, "--timeout=600s")
             forward.restart()

@@ -1,0 +1,29 @@
+# The values `charts/trino` is rendered with to produce the manifests in trino-dev/.
+#
+# Beside that directory rather than in it: CI and the tier 2 fixture both apply the whole
+# directory with `kubectl apply -f`, which sweeps in every .yaml it finds and fails on one
+# that is not a manifest.
+#
+# Hand-written, and the only hand-written input to them: scripts/export_trino_dev.py turns
+# this plus the chart into 00-config.yaml, 10-coordinator.yaml and 20-worker.yaml, and CI
+# fails if the committed output differs. So this file is also the whole answer to "how does
+# the test fixture differ from a default install", which is worth being able to read.
+#
+# The release is named `trino`, which is what makes the Service `trino`, the Deployments
+# `trino-coordinator` and `trino-worker`, and the discovery URI http://trino:8080 -- the
+# names Apchi's own test settings are configured with.
+
+worker:
+  # One, not the chart's two. The suite runs on a laptop and on a CI runner, and each
+  # worker is another 2G JVM. One worker still proves what the two-worker case proves
+  # about Apchi -- a Rollout of the coordinator leaves workers alone (#58).
+  replicas: 1
+
+trino:
+  # Lowercase alphanumerics and underscores only; Trino rejects the rest.
+  environment: apchidev
+
+  # One second, not the chart's thirty. Tier 2 waits out this timer whenever it asserts
+  # that a permission change reached the Cluster, and at 30s the suite would spend most of
+  # its time asleep. Apchi only requires the property to be set, not what it is set to.
+  securityRefreshPeriod: 1s

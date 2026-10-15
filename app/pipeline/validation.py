@@ -16,7 +16,7 @@ import asyncio
 import logging
 import re
 import time
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -24,8 +24,15 @@ from typing import Any
 from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.config import Settings
+from app.pipeline.files import probe_files
+from app.pipeline.references import missing_certificates
 from app.sections import SectionName
-from app.sections.base import Cluster, Resources, SectionPlan, ValidationFailure
+from app.sections.base import (
+    Cluster,
+    Resources,
+    SectionPlan,
+    ValidationFailure,
+)
 from app.sections.registry import REGISTERED
 
 logger = logging.getLogger(__name__)
@@ -38,10 +45,10 @@ VALIDATION_ROLE = "trino-validation"
 VALIDATION_SELECTOR = f"{ROLE_LABEL}={VALIDATION_ROLE}"
 
 #: The official image's own config reads `catalog.management` from this variable, so
-#: dynamic catalogs need no config file of our own and no command override. The store
-#: stays the default in-memory one: the probe is discarded, so there is nothing worth
-#: persisting. The Cluster sets catalog.store=file because its catalogs must outlive
-#: its pod; this one's must not.
+#: dynamic catalogs need no command override, and no config file of our own until a
+#: Section wants one. The store stays the default in-memory one: the probe is discarded,
+#: so there is nothing worth persisting. The Cluster sets catalog.store=file because its
+#: catalogs must outlive its pod; this one's must not.
 _CATALOG_MANAGEMENT_ENV = "CATALOG_MANAGEMENT"
 
 #: The image ships example catalogs -- jmx, memory, tpch, tpcds. An empty volume over
@@ -56,9 +63,27 @@ _POLL_SECONDS = 2.0
 #: The volume carrying whatever files the Sections need inside the probe.
 _FILES_VOLUME = "section-files"
 
-#: How much of a failed probe's log to quote back. Enough to carry Trino's error, little
-#: enough not to put a wall of startup output in an API response.
-_LOG_LINES = 40
+#: The probe's own configuration, written only when a Section contributes a file. A file is
+#: validated only if something is configured to read it, and the properties that do the
+#: reading are ones the image does not set -- so the image's own config.properties has to be
+#: replaced rather than added to. These four are what `trinodb/trino` ships, verbatim, down
+#: to the environment reference the manifest sets; the Sections add their own on top.
+_PROBE_CONFIG = {
+    "coordinator": "true",
+    "node-scheduler.include-coordinator": "true",
+    "discovery.uri": "http://localhost:8080",
+    "catalog.management": f"${{ENV:{_CATALOG_MANAGEMENT_ENV}}}",
+}
+
+_CONFIG_PATH = "/etc/trino/config.properties"
+
+#: How much of a failed probe's log to read. Large because the interesting part is not at
+#: the end: a bootstrap failure prints its error block and then dumps every configuration
+#: property Trino knows, which on a coordinator is thousands of lines. Measured on a real
+#: probe -- the cause sat at line 705 of 4026, over three thousand lines from the end -- so
+#: a tail of any sane size finds the dump and misses the reason. What gets quoted back is
+#: still only the few lines that say what went wrong.
+_LOG_SCAN_LINES = 10_000
 
 LABELS = {ROLE_LABEL: VALIDATION_ROLE, "app.kubernetes.io/managed-by": "apchi"}
 
@@ -161,7 +186,7 @@ async def ephemeral_trino(
     settings: Settings,
     validation_id: str,
     files: dict[str, str] | None = None,
-    resource: str | None = None,
+    blame: Mapping[str, str] | None = None,
 ) -> AsyncIterator[Trino]:
     """An ephemeral coordinator, deleted however this block exits.
 
@@ -184,7 +209,7 @@ async def ephemeral_trino(
         "validation pod created", extra={"pod": name, "image": image, "files": len(files or {})}
     )
     try:
-        yield await _await_serving(kubernetes, name, timeout, resource)
+        yield await _await_serving(kubernetes, name, timeout, blame)
     finally:
         await kubernetes.delete_pod(name)
         if files:
@@ -195,15 +220,34 @@ async def ephemeral_trino(
 def _why(logs: str) -> str:
     """The lines of a failed probe's log that say what went wrong."""
     interesting = [
-        line.strip()
+        stripped
         for line in logs.splitlines()
-        if "ERROR" in line or "Caused by" in line or "Configuration is invalid" in line
+        if ("ERROR" in line or "Caused by" in line or "Configuration is invalid" in line)
+        # Guice points at its own wiki beside the real cause, which is a line of the quote
+        # spent telling an Operator to read about dependency injection.
+        and not (stripped := line.strip()).startswith("http")
     ]
     return " / ".join(interesting[-3:])
 
 
+def _blame(logs: str, blame: Mapping[str, str]) -> str | None:
+    """Which Section's resource to hang a refusal to start on.
+
+    Trino names the file it choked on -- `Invalid JSON file
+    '/etc/trino/user-mapping/user-mapping.json' for ...` -- so the log is the only honest
+    attribution once more than one Section puts a file in front of the probe. With a single
+    contributor there is nothing to weigh up, and with none the failure is the probe's own.
+    """
+    named = [resource for path, resource in blame.items() if path in logs]
+    if len(named) == 1:
+        return named[0]
+    if not named and len(blame) == 1:
+        return next(iter(blame.values()))
+    return None
+
+
 async def _await_serving(
-    kubernetes: KubernetesAdapter, name: str, timeout: float, resource: str | None = None
+    kubernetes: KubernetesAdapter, name: str, timeout: float, blame: Mapping[str, str] | None = None
 ) -> Trino:
     deadline = time.monotonic() + timeout
     while True:
@@ -212,13 +256,14 @@ async def _await_serving(
             # A probe that will not start is how a file-based Section fails Validation, and
             # its log is the only place the reason exists: Trino writes nothing to the
             # termination-log file Kubernetes would otherwise surface.
+            logs = await kubernetes.pod_logs(name, _LOG_SCAN_LINES)
             raise ValidationFailed(
                 [
                     ValidationFailure(
-                        resource=resource,
+                        resource=_blame(logs, blame or {}),
                         reason=(
                             f"The validation coordinator could not start: {state.problem}. "
-                            f"{_why(await kubernetes.pod_logs(name, _LOG_LINES))}"
+                            f"{_why(logs)}"
                         ).strip(),
                     )
                 ]
@@ -257,13 +302,16 @@ async def validate_candidate(
     References *between* Sections are checked here too, over the whole Candidate,
     because request-time validation deliberately stops at the resource in front of it --
     adding a permission before the catalog it names has to be allowed, since the
-    Candidate is coherent once both exist. With one Section registered and no Section
-    referencing another there is nothing of that kind to check yet.
+    Candidate is coherent once both exist. A Catalog naming a Client Certificate is the
+    first rule of that kind to span two Sections, and it is checked here rather than
+    inside either of them (§6).
     """
     failures: list[ValidationFailure] = []
     for section in REGISTERED:
         desired = sections.get(section.name, {})
         failures.extend(await section.check(cluster, desired, plans[section.name]))
+    # And the rules that belong to no single Section, because they are about two of them.
+    failures.extend(missing_certificates(sections))
     if failures:
         raise ValidationFailed(failures)
 
@@ -278,23 +326,52 @@ async def validate_candidate(
         return
 
     files: dict[str, str] = {}
+    properties = dict(_PROBE_CONFIG)
+    # Which resource to blame if the probe refuses to start: Trino names the file, and the
+    # file is the Section's, so the path is what ties a startup failure back to a resource.
+    blame: dict[str, str] = {}
     for section in probing:
-        files.update(section.probe_files(sections.get(section.name, {})))
+        staged = sections.get(section.name, {})
+        contributed = probe_files(section, cluster.settings, staged, cluster.admin)
+        files.update(contributed)
+        blame.update({path: sorted(staged)[0] for path in contributed if staged})
+        for spec in section.coordinator_files(cluster.settings):
+            # Both shapes, because a pointer is a pointer. Reading it only from
+            # `CoordinatorFile` meant that moving a Section to a directory mount silently
+            # stopped configuring the probe to read it -- and a probe holding a file nothing
+            # points at passes everything.
+            properties.update(spec.probe_config)
+    # The Admin's raw files (§14) are validated like everything else: they are the class of
+    # configuration most able to stop Trino booting, so the probe is where that should be
+    # found out rather than the Cluster.
+    #
+    # With one exclusion, and it is a real limit rather than an oversight. The probe's own
+    # `config.properties` is assembled here from each Section's `probe_config` -- the
+    # properties without which the probe would not read the files under test at all. A raw
+    # file at that path would replace them, and a probe configured by the thing it is
+    # probing is not a probe: it would start cleanly having validated nothing.
+    #
+    # So a raw `config.properties` reaches the Cluster but not the probe. If it is broken,
+    # the Cluster fails and Auto Rollback puts it back -- which is the contract §14 offers,
+    # arriving one stage later than for every other file.
+    raw = {
+        path: content for path, content in cluster.admin.raw_files.items() if path != _CONFIG_PATH
+    }
+    if raw:
+        logger.info("probing admin raw files", extra={"raw_files": sorted(raw)})
+    files.update(raw)
+    if _CONFIG_PATH in cluster.admin.raw_files:
+        logger.warning(
+            "an admin raw config.properties is not validated on the probe; the probe needs "
+            "that file itself, so the Cluster is where it is proved",
+            extra={"raw_file": _CONFIG_PATH},
+        )
 
-    # Named so that a probe which refuses to start can be blamed on something. With one
-    # file-based Section that is unambiguous; a second will need the attribution to come
-    # from whichever Section contributed the file Trino choked on.
-    culprit = next(
-        (
-            sorted(sections.get(section.name, {}))[0]
-            for section in probing
-            if section.probe_files(sections.get(section.name, {}))
-        ),
-        None,
-    )
+    if files:
+        files[_CONFIG_PATH] = "".join(f"{key}={value}\n" for key, value in properties.items())
 
     async with ephemeral_trino(
-        cluster.kubernetes, cluster.settings, validation_id, files, culprit
+        cluster.kubernetes, cluster.settings, validation_id, files, blame
     ) as probe:
         for section in probing:
             failures.extend(

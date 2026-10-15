@@ -6,18 +6,45 @@ invert the dependency, since the registry the pipeline reads imports this module
 """
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 from app.adapters.trino import Trino
 from app.api.errors import NameAlreadyTaken, NotFound, UnprocessablePayload
+from app.config import Settings
 from app.sections import SectionName
-from app.sections.base import Cluster, Resources, SectionPlan, ValidationFailure
+from app.sections.admin import AdminValues
+from app.sections.base import (
+    Cluster,
+    CoordinatorFile,
+    DiscoveredPaths,
+    Parsed,
+    ParseProblem,
+    Resources,
+    SectionPlan,
+    SmokeQuery,
+    Unaccounted,
+    ValidationFailure,
+    unreadable_each,
+)
 from app.sections.catalogs import SECTION, apply
+from app.sections.catalogs.certificates import WIRED, ssl_is_configured
 from app.sections.catalogs.connectors import PropertyProblem, is_curated, validate_properties
-from app.sections.catalogs.generator import render_secret
+from app.sections.catalogs.generator import (
+    Unreadable,
+    effective,
+    name_of,
+    parse_properties,
+    render_secret,
+)
 from app.sections.catalogs.model import Catalog, CatalogUpdate, CatalogWrite
 
 logger = logging.getLogger(__name__)
+
+#: Trino's own default for `catalog.config-dir`, relative to its working directory
+#: /data/trino, whose `etc` symlinks to /etc/trino. Where an un-adopted Cluster keeping its
+#: catalogs as a mounted ConfigMap usually has them.
+_DEFAULT_STORE_DIR = "/etc/trino/catalog"
 
 
 def _as_catalog(name: str, stored: dict[str, Any]) -> Catalog:
@@ -25,6 +52,7 @@ def _as_catalog(name: str, stored: dict[str, Any]) -> Catalog:
         name=name,
         connector=stored["connector"],
         properties=stored.get("properties", {}),
+        certificate=stored.get("certificate"),
         supported=is_curated(stored["connector"]),
     )
 
@@ -49,11 +77,52 @@ def _validated(connector: str, properties: dict[str, Any]) -> dict[str, str]:
         ) from exc
 
 
+def _certificate_usable(connector: str, properties: dict[str, str], certificate: str) -> None:
+    """Refuse a certificate Apchi cannot actually wire, rather than accepting it silently.
+
+    A `certificate` accepted and not wired is the worst outcome available: a Catalog that
+    connects, without the certificate the Operator asked it to present.
+    """
+    if connector not in WIRED:
+        raise UnprocessablePayload(
+            f"Apchi does not know how the {connector!r} connector names a client "
+            f"certificate. Reference it by hand instead: ${{cert:{certificate}}} and "
+            f"${{key:{certificate}}} expand to the paths, in whichever property "
+            f"{connector!r} documents for them.",
+            details=[{"property": "certificate", "problem": f"{connector!r} is not wired"}],
+        )
+    if not ssl_is_configured(connector, properties):
+        raise UnprocessablePayload(
+            "A client certificate does nothing until the connection is told to use TLS. "
+            "Set sslmode on the connection URL -- Apchi will not choose between `require` "
+            "and `verify-full` for you.",
+            details=[{"property": "properties", "problem": "no sslmode on the connection URL"}],
+        )
+
+
+def validated(write: CatalogWrite) -> dict[str, Any]:
+    """The stored form of a Catalog, with everything about it judged.
+
+    Separate from `create_catalog` because Adoption needs the judging without the staging:
+    an Operator supplying the properties of a Catalog that already exists on the Cluster is
+    answering a question, not creating anything, so the name is not theirs to collide with
+    (#90). Sharing this is what makes "validated the way staging is" true rather than
+    approximately true.
+    """
+    properties = _validated(write.connector, write.properties)
+    if write.certificate:
+        _certificate_usable(write.connector, properties, write.certificate)
+    return {
+        "connector": write.connector,
+        "properties": properties,
+        **({"certificate": write.certificate} if write.certificate else {}),
+    }
+
+
 def create_catalog(stored: Resources, write: CatalogWrite) -> Catalog:
     if write.name in stored:
         raise NameAlreadyTaken(f"A Catalog named {write.name!r} already exists.")
-    properties = _validated(write.connector, write.properties)
-    stored[write.name] = {"connector": write.connector, "properties": properties}
+    stored[write.name] = validated(write)
     return _as_catalog(write.name, stored[write.name])
 
 
@@ -61,9 +130,34 @@ def update_catalog(stored: Resources, name: str, update: CatalogUpdate) -> Catal
     if name not in stored:
         raise NotFound(f"No Catalog named {name!r} in the Configuration Candidate.")
     current = stored[name]
-    connector = update.connector or current["connector"]
-    raw = current["properties"] if update.properties is None else update.properties
-    stored[name] = {"connector": connector, "properties": _validated(connector, raw)}
+    # `model_fields_set` rather than a None check, because None is two different answers:
+    # "leave it alone" when the field was omitted, and "clear it" when it was sent as null.
+    # Treating them alike made `certificate` set-once -- the only way to remove one was to
+    # drop the Catalog and create it again, which in Trino is a DROP CATALOG (#155).
+    sent = update.model_fields_set
+    connector = update.connector if "connector" in sent else current["connector"]
+    raw = update.properties if "properties" in sent else current["properties"]
+    certificate = update.certificate if "certificate" in sent else current.get("certificate")
+    if connector is None:
+        raise UnprocessablePayload(
+            "A Catalog cannot have its connector removed -- a Catalog without one is not a "
+            "Catalog. Send a connector, or omit the field to keep the current one.",
+            details=[{"property": "connector", "problem": "cannot be cleared"}],
+        )
+    if raw is None:
+        raise UnprocessablePayload(
+            "A Catalog cannot have its properties removed. Send the properties you want, "
+            "or omit the field to keep the current ones.",
+            details=[{"property": "properties", "problem": "cannot be cleared"}],
+        )
+    properties = _validated(connector, raw)
+    if certificate:
+        _certificate_usable(connector, properties, certificate)
+    stored[name] = {
+        "connector": connector,
+        "properties": properties,
+        **({"certificate": certificate} if certificate else {}),
+    }
     return _as_catalog(name, stored[name])
 
 
@@ -85,6 +179,74 @@ class CatalogsSection:
     #: Trino adopts a catalog through CREATE CATALOG against the running coordinator.
     requires_rollout = False
 
+    def coordinator_files(self, settings: Settings) -> tuple[CoordinatorFile, ...]:
+        """None. Catalogs reach Trino as statements, not as a file the coordinator reads --
+        the Secret they do have is a seed the Admin's initContainer copies, not a mount
+        Apchi owns."""
+        return ()
+
+    def render_files(
+        self, desired: Resources, settings: Settings, admin: AdminValues
+    ) -> dict[str, str]:
+        return {}
+
+    def discover_paths(self, settings: Settings, properties: Mapping[str, str]) -> DiscoveredPaths:
+        """The store directory, wherever Trino is pointed at it.
+
+        A directory rather than files, because the catalogs *are* its contents and only the
+        volume knows what they are. `catalog.config-dir` is the authority; Trino's own
+        default when `catalog.store=file` is `etc/catalog`, which is where an un-adopted
+        Cluster keeping its catalogs as a mounted ConfigMap usually has them.
+
+        Often unreadable, and that is expected rather than a failure: on a Cluster Apchi
+        already configured this is an `emptyDir`, which has no content Apchi can read
+        through the API. `system.metadata.catalogs` is what covers that case, and the
+        reconciliation in the pipeline is what puts the two together.
+        """
+        directory = properties.get("catalog.config-dir") or _DEFAULT_STORE_DIR
+        return DiscoveredPaths(
+            directories={settings.catalog_store_dir: directory},
+            why=(
+                None
+                if "catalog.config-dir" in properties
+                else (
+                    f"no catalog.config-dir property was found, so Trino's own default "
+                    f"{_DEFAULT_STORE_DIR} was read rather than a path the Cluster named"
+                )
+            ),
+        )
+
+    def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
+        """Each `<name>.properties` in the store directory, back into a staged Catalog.
+
+        A certificate reference does not survive, and cannot: `effective` wires a
+        certificate into the connector's own properties and expands `${cert:name}` into a
+        path before anything is written, so the file holds a path and no record of the name
+        it came from. A Catalog adopted this way keeps working -- the path is right -- but
+        Apchi will not know the certificate is in use until an Operator says so. Reported by
+        the round-trip check rather than guessed at from the path.
+        """
+        resources: Resources = {}
+        unaccounted: list[Unaccounted] = []
+        for path in sorted(files):
+            name = name_of(path, settings.catalog_store_dir)
+            if name is None:
+                unaccounted.append(
+                    Unaccounted(path=path, what="a file in the catalog store Apchi does not own")
+                )
+                continue
+            try:
+                connector, properties, lost = parse_properties(path, files[path])
+            except Unreadable as exc:
+                raise ParseProblem(exc.path, exc.reason) from exc
+            resources[name] = {"connector": connector, "properties": properties}
+            unaccounted.extend(Unaccounted(path=path, what=what) for what in lost)
+        return Parsed(resources=resources, unaccounted=tuple(unaccounted))
+
+    def read_back(self, resources: Resources) -> list[ValidationFailure]:
+        """Each stored catalog back through the model an Operator's POST produced."""
+        return unreadable_each(SECTION, resources, lambda name: _as_catalog(name, resources[name]))
+
     def plan(self, desired: Resources, current: Resources) -> apply.CatalogPlan:
         return apply.plan(desired, current)
 
@@ -102,11 +264,18 @@ class CatalogsSection:
         start, so the Secret write needs no wait before the DDL.
         """
         assert isinstance(plan, apply.CatalogPlan)
-        await cluster.kubernetes.write_secret(
-            cluster.settings.catalog_secret_name, render_secret({SECTION: desired})
+        durable_copy = render_secret({SECTION: desired})
+        # Read before the write, for the same reason `restore` does: afterwards there is no
+        # way to tell a catalog this Apply is about to create from one Apchi already held.
+        settled = apply.settled(
+            plan,
+            await cluster.trino.catalogs(),
+            await cluster.kubernetes.read_secret(cluster.settings.catalog_secret_name),
+            durable_copy,
         )
+        await cluster.kubernetes.write_secret(cluster.settings.catalog_secret_name, durable_copy)
         logger.info("patched the catalog Secret")
-        await apply.execute(cluster.trino, desired, plan)
+        await apply.execute(cluster.trino, desired, settled)
 
     async def restore(self, cluster: Cluster, snapshot: Resources) -> bool:
         """Rewrite the Secret and issue the compensating DDL.
@@ -140,15 +309,17 @@ class CatalogsSection:
         assert isinstance(plan, apply.CatalogPlan)
         if not plan.created:
             return []
-        return apply.collision_failures(plan.created, await cluster.trino.catalogs())
+        live = await cluster.trino.catalogs()
+        settled = apply.settled(
+            plan,
+            live,
+            await cluster.kubernetes.read_secret(cluster.settings.catalog_secret_name),
+            render_secret({SECTION: desired}),
+        )
+        return apply.collision_failures(settled.created, live)
 
     def needs_probe(self, desired: Resources) -> bool:
         return bool(desired)
-
-    def probe_files(self, desired: Resources) -> dict[str, str]:
-        """Nothing. Catalogs are proved by issuing statements against the probe, not by
-        starting it with a file in place."""
-        return {}
 
     async def check_against_probe(
         self, probe: Trino, desired: Resources
@@ -164,7 +335,11 @@ class CatalogsSection:
         for name in sorted(desired):
             stored = desired[name]
             try:
-                await probe.create_catalog(name, stored["connector"], stored.get("properties", {}))
+                # The same properties the Cluster will get, certificate paths and all. The
+                # files are not in the probe and do not need to be: CREATE CATALOG does not
+                # open a connection, so a path to a file that is not there is accepted here
+                # exactly as it is on the Cluster -- verified against a real coordinator.
+                await probe.create_catalog(name, stored["connector"], effective(stored))
             except TrinoQueryError as exc:
                 failures.append(
                     ValidationFailure(section=SECTION, resource=name, reason=str(exc.message))
@@ -174,7 +349,7 @@ class CatalogsSection:
                 failures.append(ValidationFailure(section=SECTION, resource=name, reason=str(exc)))
         return failures
 
-    async def verify(self, cluster: Cluster, desired: Resources) -> list[str]:
+    async def verify(self, cluster: Cluster, desired: Resources, smoke: SmokeQuery) -> list[str]:
         """What distinguishes "the coordinator came back up" from "the coordinator came
         back up running the configuration we just applied"."""
         missing = sorted(set(desired) - await cluster.trino.catalogs())

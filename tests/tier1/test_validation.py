@@ -217,7 +217,7 @@ async def test_the_validate_action_does_not_apply(
     )
     assert "scratch" not in await cluster.catalogs()
     assert SECRET not in fake_kubernetes.secrets
-    assert (await applying_client.get("/api/v1/snapshots")).json() == []
+    assert (await applying_client.get("/api/v1/snapshots")).json()["items"] == []
 
 
 async def test_validating_does_not_freeze_the_candidate(applying_client: AsyncClient) -> None:
@@ -235,7 +235,10 @@ async def test_validations_are_listed_newest_first(applying_client: AsyncClient)
     first = await _validation(applying_client)
     second = await _validation(applying_client)
 
-    listed = [record["id"] for record in (await applying_client.get("/api/v1/validations")).json()]
+    listed = [
+        record["id"]
+        for record in (await applying_client.get("/api/v1/validations")).json()["items"]
+    ]
 
     assert listed[:2] == [second["id"], first["id"]]
 

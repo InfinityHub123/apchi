@@ -7,7 +7,10 @@ async def test_health_reports_ok_when_mongo_is_reachable(client: AsyncClient) ->
     response = await client.get("/api/v1/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "mongo": "up"}
+    assert response.json() == {
+        "status": "ok",
+        "mongo": "up",
+    }
 
 
 async def test_health_is_degraded_when_mongo_is_unreachable(client: AsyncClient) -> None:
@@ -25,7 +28,10 @@ async def test_health_is_degraded_when_mongo_is_unreachable(client: AsyncClient)
         response = await offline.get("/api/v1/health")
 
     assert response.status_code == 503
-    assert response.json() == {"status": "degraded", "mongo": "down"}
+    assert response.json() == {
+        "status": "degraded",
+        "mongo": "down",
+    }
 
 
 async def test_openapi_is_served(client: AsyncClient) -> None:

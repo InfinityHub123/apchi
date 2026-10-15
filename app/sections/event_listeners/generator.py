@@ -34,3 +34,53 @@ def render_secret(listeners: Resources) -> dict[str, str]:
         return {}
     name = sorted(listeners)[0]
     return {FILE_KEY: render_properties(listeners[name])}
+
+
+class Unreadable(Exception):
+    """A file this module cannot read. Translated by the Section, so the generator keeps
+    knowing nothing about the pipeline."""
+
+    def __init__(self, path: str, reason: str) -> None:
+        self.path = path
+        self.reason = reason
+        super().__init__(f"{path}: {reason}")
+
+
+def parse_properties(path: str, content: str) -> tuple[str, dict[str, str], list[tuple[str, Any]]]:
+    """The inverse of `render_properties`: the listener's type and its properties.
+
+    **The name does not survive.** An Event Listener is stored under a name an Operator
+    chose, and none of it reaches the file -- Trino's format has a type and properties and
+    nowhere to put a name. So a parse can only name the listener after its type, and a
+    round trip through the file renames a listener called `audit` to one called `http`.
+
+    That is a real loss and not a normalisation, which is why it is said here rather than
+    hidden: the only alternative is inventing a name, and a listener silently renamed is
+    better than a listener whose name Apchi made up and an Operator cannot find.
+    """
+    properties: dict[str, str] = {}
+    unaccounted: list[tuple[str, Any]] = []
+    listener_type: str | None = None
+
+    for number, raw in enumerate(content.splitlines(), start=1):
+        line = raw.strip()
+        # Trino's properties loader ignores blanks and # comments, so neither is a problem
+        # worth reporting -- but neither is something Apchi can write back, so a comment is
+        # lost by a round trip and that is what `unaccounted` is for.
+        if not line:
+            continue
+        if line.startswith("#"):
+            unaccounted.append((f"a comment on line {number}", line))
+            continue
+        key, separator, value = line.partition("=")
+        if not separator:
+            raise Unreadable(path, f"line {number} is not key=value: {line!r}")
+        key, value = key.strip(), value.strip()
+        if key == "event-listener.name":
+            listener_type = value
+            continue
+        properties[key] = value
+
+    if listener_type is None:
+        raise Unreadable(path, "there is no event-listener.name, so nothing says what plugin")
+    return listener_type, properties, unaccounted

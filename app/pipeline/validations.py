@@ -21,6 +21,15 @@ from typing import Any
 from pydantic import BaseModel, Field
 from pymongo.asynchronous.database import AsyncDatabase
 
+from app.api.pages import (
+    DEFAULT_LIMIT,
+    BadCursor,
+    Page,
+    after,
+    bounded,
+    decode_cursor,
+    encode_cursor,
+)
 from app.logging import apply_id_var
 from app.pipeline.applies import EngineFactory
 from app.pipeline.validation import ValidationFailed
@@ -70,9 +79,33 @@ class ValidationStore:
         document = await self._collection.find_one({"_id": validation_id})
         return None if document is None else self._as_record(document)
 
-    async def list(self, limit: int = 50) -> list[ValidationRecord]:
-        cursor = self._collection.find().sort("started_at", -1).limit(limit)
-        return [self._as_record(document) async for document in cursor]
+    async def page(
+        self, limit: int = DEFAULT_LIMIT, before: str | None = None
+    ) -> Page[ValidationRecord]:
+        """Newest first, by when it started.
+
+        `started_at` is not unique -- two can begin in the same instant -- so the cursor
+        carries the id beside it and the boundary stays exact.
+        """
+        limit = bounded(limit)
+        query: dict[str, Any] = {}
+        if before is not None:
+            at, identifier = _started_in(before)
+            query.update(after("started_at", at, identifier))
+        cursor = (
+            self._collection.find(query).sort([("started_at", -1), ("_id", -1)]).limit(limit + 1)
+        )
+        documents = [document async for document in cursor]
+        items = [self._as_record(document) for document in documents[:limit]]
+        more = len(documents) > limit
+        return Page(
+            items=items,
+            next=(
+                encode_cursor(items[-1].started_at.isoformat(), items[-1].id)
+                if more and items
+                else None
+            ),
+        )
 
     async def finish(
         self, validation_id: str, outcome: Outcome, failures: Sequence[ValidationFailure]
@@ -137,3 +170,12 @@ class ValidationRunner:
     async def shutdown(self) -> None:
         for task in list(self._tasks):
             task.cancel()
+
+
+def _started_in(cursor: str) -> tuple[datetime, str]:
+    """The instant and the id a cursor names."""
+    at, identifier = decode_cursor(cursor, expected=2)
+    try:
+        return datetime.fromisoformat(at), identifier
+    except ValueError as bad:
+        raise BadCursor(cursor) from bad

@@ -19,7 +19,7 @@ from app.config import Settings
 from app.main import create_app
 from app.pipeline.applies import TERMINAL
 from app.pipeline.auto_rollback import INCIDENT_MESSAGE
-from app.sections.event_listeners.generator import FILE_KEY
+from app.sections.event_listeners.generator import FILE_KEY, MOUNT_PATH
 from tests.conftest import FakeKubernetes
 
 LISTENER_SECRET = "trino-event-listener"
@@ -145,7 +145,7 @@ async def test_the_rollback_creates_no_snapshot(
 
     await _apply(snapshot_one)
 
-    snapshots = (await snapshot_one.get("/api/v1/snapshots")).json()
+    snapshots = (await snapshot_one.get("/api/v1/snapshots")).json()["items"]
     assert [snapshot["number"] for snapshot in snapshots] == [1]
 
 
@@ -175,7 +175,7 @@ async def test_removing_a_listener_is_undone_by_putting_it_back(
     record = await _apply(snapshot_one)
 
     assert record["rollback"] == "succeeded", record.get("failure_reason")
-    assert VOLUME in fake_kubernetes.mounts
+    assert MOUNT_PATH in fake_kubernetes.mounts
     assert "http://first:8080/e" in fake_kubernetes.secrets[LISTENER_SECRET][FILE_KEY]
 
 

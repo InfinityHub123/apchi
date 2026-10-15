@@ -7,10 +7,11 @@ is ever substituted. MongoDB and Trino are real in both tiers.
 import re
 import socket
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any
 
 import pytest
+from docker.types import Ulimit
 from httpx import ASGITransport, AsyncClient
 from testcontainers.community.mongodb import MongoDbContainer
 from testcontainers.core.container import DockerContainer
@@ -20,6 +21,11 @@ from app.adapters.kubernetes import PodState, RolloutState
 from app.adapters.trino import Trino
 from app.config import Environment, Settings
 from app.main import create_app
+from app.sections.certificate_mapping.generator import FILE_KEY as MAPPING_KEY
+from app.sections.certificate_mapping.generator import MOUNT_DIR as MAPPING_DIR
+from app.sections.certificate_mapping.generator import render_rules
+from app.sections.permissions.generator import RULES_KEY
+from app.sections.permissions.generator import render_rules as render_access_control
 
 # Pinned to match deploy/trino-dev and the supported range in section 8, so a
 # Trino upgrade breaks CI rather than production.
@@ -83,6 +89,31 @@ def _trino_container() -> DockerContainer:
     )
 
 
+_SETTINGS = Settings()
+MAPPING_SECRET = _SETTINGS.certificate_mapping_secret_name
+RULES_SECRET = _SETTINGS.access_control_secret_name
+
+
+def bootstrap_secrets() -> dict[str, dict[str, str]]:
+    """What a Cluster holds before Apchi has ever applied to it.
+
+    Not empty, and for a reason that applies to both files here: the coordinator is
+    configured to read a user-mapping file and an access-control rules file, and refuses to
+    start when either is missing -- which is exactly why deploy/trino-dev ships the generated
+    default of each. A fake that started empty would make the first Apply look like a change
+    and restart a coordinator for nothing.
+
+    The rules file joined this when Adoption started reading the Cluster (#101). Discovery
+    reported, correctly, that Trino was configured to read a file that was not there -- a
+    Cluster that could not come back from its next restart. The fake was wrong rather than
+    the report, in exactly the way this docstring already argued it would be.
+    """
+    return {
+        MAPPING_SECRET: {MAPPING_KEY: render_rules({}, _SETTINGS.trino_user)},
+        RULES_SECRET: {RULES_KEY: render_access_control(_SETTINGS.trino_user)},
+    }
+
+
 def healthy_pod_spec() -> dict[str, Any]:
     """A coordinator spec that meets §16's preconditions.
 
@@ -109,7 +140,13 @@ def healthy_pod_spec() -> dict[str, Any]:
                         "mountPath": "/etc/trino/config.properties",
                         "subPath": "coordinator-config.properties",
                     },
+                    {
+                        "name": "config",
+                        "mountPath": "/etc/trino/access-control.properties",
+                        "subPath": "access-control.properties",
+                    },
                     {"name": "access-control", "mountPath": "/etc/trino/access-control"},
+                    {"name": "apchi-user-mapping", "mountPath": MAPPING_DIR},
                     {"name": "catalog-store", "mountPath": "/data/trino/catalogs"},
                 ],
             }
@@ -117,6 +154,7 @@ def healthy_pod_spec() -> dict[str, Any]:
         "volumes": [
             {"name": "config", "configMap": {"name": "trino-config"}},
             {"name": "access-control", "secret": {"secretName": "trino-access-control"}},
+            {"name": "apchi-user-mapping", "secret": {"secretName": MAPPING_SECRET}},
             {"name": "catalog-seed", "secret": {"secretName": "trino-catalog-seed"}},
             {"name": "catalog-store", "emptyDir": {}},
         ],
@@ -136,7 +174,18 @@ class FakeKubernetes:
     """
 
     def __init__(self, validation: DockerContainer | None = None) -> None:
-        self.secrets: dict[str, dict[str, str]] = {}
+        self.secrets: dict[str, dict[str, str]] = bootstrap_secrets()
+        #: The Admin's ConfigMaps, seeded the way deploy/trino-dev seeds them. Apchi writes
+        #: none; it reads this one to check that Trino was told to re-read the rules.
+        self.config_maps: dict[str, dict[str, str]] = {
+            "trino-config": {
+                "access-control.properties": (
+                    "access-control.name=file\n"
+                    "security.config-file=/etc/trino/access-control/rules.json\n"
+                    "security.refresh-period=1s\n"
+                )
+            }
+        }
         self.replicas: dict[str, int] = {}
         self.image = TRINO_IMAGE
         #: What the coordinator Deployment looks like. Defaults to a spec that satisfies
@@ -169,7 +218,8 @@ class FakeKubernetes:
         #: How a rollback's *own* rollout is made to fail while the Apply's succeeded --
         #: a flag that stalls them all could never show the difference.
         self.stall_rollout_from: int | None = None
-        #: The file mounts Apchi owns on the coordinator, keyed by volume name.
+        #: The file mounts Apchi owns on the coordinator, keyed by the path they are at --
+        #: as the pod template keys them, and because one volume may carry several files.
         self.mounts: dict[str, dict[str, str]] = {}
         #: Labels on Secrets Apchi created, so a test can prove the sweep can find them.
         self.secret_labels: dict[str, dict[str, str]] = {}
@@ -181,6 +231,23 @@ class FakeKubernetes:
 
     async def read_secret(self, name: str) -> dict[str, str]:
         return dict(self.secrets.get(name, {}))
+
+    async def read_secret_if_present(self, name: str) -> dict[str, str] | None:
+        """Absence distinguishable from emptiness, as the real adapter has it.
+
+        The fake folding the two together is what let the seed skip creating a Secret for a
+        Section with nothing in it -- every tier 1 test passed and the cutover then could not
+        mount it.
+        """
+        if name not in self.secrets:
+            return None
+        return dict(self.secrets[name])
+
+    async def write_config_map(self, name: str, data: dict[str, str]) -> None:
+        self.config_maps[name] = dict(data)
+
+    async def read_config_map(self, name: str) -> dict[str, str]:
+        return dict(self.config_maps.get(name, {}))
 
     async def write_secret(self, name: str, data: dict[str, str]) -> None:
         self.secrets[name] = dict(data)
@@ -240,12 +307,48 @@ class FakeKubernetes:
     async def mount_secret_file(
         self, deployment: str, container: str, volume: str, secret: str, path: str, key: str
     ) -> None:
-        self.mounts[volume] = {"secret": secret, "path": path, "key": key}
+        """Record the mount, and put it on the pod template the way the API server would.
 
-    async def unmount_secret_file(
-        self, deployment: str, container: str, volume: str, path: str
+        Both halves are needed. `mounts` is what a test asserts against; `pod_spec` is what
+        Apchi itself reads -- the preconditions, and every Section's `discover_paths`. The
+        first version of this kept only `mounts`, so a Section Apchi had just mounted was
+        invisible to Apchi: a discovery run after an Apply reported no Resource Groups and a
+        seed then wrote that emptiness into the Secret. Nothing was wrong with Apchi. The
+        fake was describing a Cluster that does not exist.
+        """
+        self.mounts[path] = {"volume": volume, "secret": secret, "key": key}
+        volumes = self.pod_spec.setdefault("volumes", [])
+        if not any(existing["name"] == volume for existing in volumes):
+            volumes.append({"name": volume, "secret": {"secretName": secret}})
+        container_spec = next(c for c in self.pod_spec["containers"] if c["name"] == container)
+        mounts = container_spec.setdefault("volumeMounts", [])
+        if not any(mount["mountPath"] == path for mount in mounts):
+            mounts.append({"name": volume, "mountPath": path, "subPath": key, "readOnly": True})
+
+    async def unmount_secret_files(
+        self, deployment: str, container: str, volume: str, paths: Sequence[str], drop_volume: bool
     ) -> None:
-        self.mounts.pop(volume, None)
+        """The API server rejects a volume removed while a mount still names it, so the fake
+        refuses it too: a test double that accepts what production rejects is how a bug
+        reaches a real cluster."""
+        for path in paths:
+            self.mounts.pop(path, None)
+        remaining = [p for p, mount in self.mounts.items() if mount["volume"] == volume]
+        assert not (drop_volume and remaining), (
+            f"volume {volume!r} dropped while {remaining} still mount it"
+        )
+        for container_spec in self.pod_spec["containers"]:
+            container_spec["volumeMounts"] = [
+                mount
+                for mount in container_spec.get("volumeMounts", [])
+                if mount["mountPath"] not in set(paths)
+            ]
+        if drop_volume:
+            self.pod_spec["volumes"] = [
+                existing
+                for existing in self.pod_spec.get("volumes", [])
+                if existing["name"] != volume
+            ]
 
     def attach_cluster(self, container: DockerContainer) -> None:
         """The container standing in for the Cluster, so a Rollout can really restart it."""
@@ -329,7 +432,25 @@ class FakeKubernetes:
 
 @pytest.fixture(scope="session")
 def mongo_container() -> Iterator[MongoDbContainer]:
-    with MongoDbContainer() as container:
+    """The MongoDB both tiers run against, with the open-file limit MongoDB asks for.
+
+    **The `nofile` limit is the whole of #69.** Docker's default soft limit is 1024, and
+    MongoDB's production notes ask for 64000. At 1024, mongod stops accepting connections and
+    says so in its own log --
+
+        "Error accepting new connection on local endpoint", error: "Too many open files"
+
+    -- at which point every test blocks on a database that is up, idle, and unreachable, with
+    no assertion ever failing. That is why the suite looked like it degraded: it was running
+    out of descriptors, not out of memory, time or connections.
+
+    The giveaway was visible all along in `connections.available`, which mongod derives from
+    the same budget: 401 with the default limit against 25595 with this one. Sockets were only
+    part of what spent them -- WiredTiger holds file handles per collection and per index, so
+    the database-per-test that nothing dropped was spending them too.
+    """
+    limit = Ulimit(name="nofile", soft=64000, hard=64000)
+    with MongoDbContainer().with_kwargs(ulimits=[limit]) as container:
         yield container
 
 

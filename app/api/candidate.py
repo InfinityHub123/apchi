@@ -1,25 +1,42 @@
 """Review and Reset: seeing what is staged, and throwing it away."""
 
+import logging
 from typing import Any, Literal
 
 from fastapi import APIRouter, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
-from app.api.deps import CandidateStoreDep, OperatorMutationAllowed, SnapshotStoreDep
-from app.pipeline.recovery import RevertEffect, full_rollback
+from app.api.deps import (
+    CandidateStoreDep,
+    ClusterDep,
+    OperatorMutationAllowed,
+    SnapshotStoreDep,
+)
+from app.pipeline.configuration import Configuration, Import, accepted, of_candidate
+from app.pipeline.impact import ApplyCost, cost_of
+from app.pipeline.recovery import RevertEffect, RevertRequest, full_rollback
 from app.sections import SectionName
-from app.sections.registry import SECTIONS
+from app.sections.registry import REGISTERED, SECTIONS
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["candidate"])
 
 ChangeKind = Literal["added", "changed", "removed"]
 
 
+#: What one resource looks like in a diff. A Section stores a resource as whatever shape
+#: that Section needs, and the Resource Groups Section stores its whole ordered selector
+#: list as one resource -- order is meaning there, so the list cannot be split into one
+#: resource per selector. A diff entry therefore has to carry a list as readily as an object.
+ResourceBody = dict[str, Any] | list[Any]
+
+
 class ResourceChange(BaseModel):
     resource: str
     change: ChangeKind
-    before: dict[str, Any] | None = None
-    after: dict[str, Any] | None = None
+    before: ResourceBody | None = None
+    after: ResourceBody | None = None
 
 
 class SectionDiff(BaseModel):
@@ -39,6 +56,9 @@ class Review(BaseModel):
     )
     has_changes: bool
     sections: list[SectionDiff]
+    cost: ApplyCost = Field(
+        description="What applying the Candidate as it stands would cost the Cluster."
+    )
 
 
 def _diff(before: dict[str, Any], after: dict[str, Any]) -> list[ResourceChange]:
@@ -57,7 +77,9 @@ def _diff(before: dict[str, Any], after: dict[str, Any]) -> list[ResourceChange]
 
 
 @router.get("/review", response_model=Review, summary="What an Apply would change")
-async def review(store: CandidateStoreDep, snapshots: SnapshotStoreDep) -> Review:
+async def review(
+    store: CandidateStoreDep, snapshots: SnapshotStoreDep, cluster: ClusterDep
+) -> Review:
     candidate = await store.load()
     # Diffed against the Snapshot the Candidate was derived from, so Review answers
     # "what would this Apply change" rather than "what is staged". Before the first
@@ -68,10 +90,18 @@ async def review(store: CandidateStoreDep, snapshots: SnapshotStoreDep) -> Revie
         SectionDiff(section=name, changes=_diff(baseline[name], candidate.sections.get(name, {})))
         for name in SECTIONS
     ]
+    # Planned with the Sections' own planners rather than read off the diff above: the
+    # restart decision has to be the one Apply will make, not a second implementation of it.
+    plans = {
+        section.name: section.plan(candidate.sections.get(section.name, {}), baseline[section.name])
+        for section in REGISTERED
+    }
+
     return Review(
         base_snapshot=candidate.base_snapshot,
         has_changes=any(section.changes for section in sections),
         sections=sections,
+        cost=await cost_of(plans, candidate.sections, cluster),
     )
 
 
@@ -90,12 +120,6 @@ async def reset(store: CandidateStoreDep) -> None:
     await store.reset(base_snapshot=current.base_snapshot)
 
 
-class RollbackRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    snapshot: int
-
-
 @router.post(
     "/candidate/rollback",
     response_model=RevertEffect,
@@ -103,11 +127,69 @@ class RollbackRequest(BaseModel):
     dependencies=[OperatorMutationAllowed],
 )
 async def rollback(
-    request: RollbackRequest, store: CandidateStoreDep, snapshots: SnapshotStoreDep
+    request: RevertRequest,
+    store: CandidateStoreDep,
+    snapshots: SnapshotStoreDep,
+    cluster: ClusterDep,
 ) -> RevertEffect:
     """Full Rollback: for a serious mistake, and never implicit.
 
     Like a Section Revert this only stages. The Snapshot being restored from is not
     modified -- applying this produces a new one, so history is never rewritten.
     """
-    return await full_rollback(store, snapshots, request.snapshot)
+    return await full_rollback(store, snapshots, cluster, request.snapshot)
+
+
+@router.get(
+    "/candidate/export",
+    response_model=Configuration,
+    summary="What is staged, as a portable configuration",
+)
+async def export_candidate(store: CandidateStoreDep) -> Configuration:
+    """Staged work, which is in no Snapshot.
+
+    Exported as well as Snapshots because this is the case "I was working on this and want
+    it elsewhere" actually needs: an edit that has not been applied has never been
+    committed, so no Snapshot holds it.
+
+    **The response holds real credentials**, for the same reason a Snapshot export does.
+    """
+    candidate = await store.load()
+    return of_candidate(candidate.base_snapshot, candidate.sections)
+
+
+@router.put(
+    "/candidate",
+    response_model=Review,
+    summary="Replace everything staged with an imported configuration",
+    dependencies=[OperatorMutationAllowed],
+)
+async def import_candidate(
+    document: Import,
+    store: CandidateStoreDep,
+    snapshots: SnapshotStoreDep,
+    cluster: ClusterDep,
+) -> Review:
+    """PUT because it replaces the whole resource, which is what an import is.
+
+    An import is not a Reset. `POST /candidate/reset` re-derives from a Snapshot and so
+    always leaves an empty diff; this replaces from a file and is expected to leave a large
+    one. Both discard staged edits, so both take the same gate.
+
+    Rejected whole, naming every problem, before anything is stored: the Candidate is
+    shared, so one invalid resource in it would block everyone's Apply and not just the
+    importer's (ADR-0002).
+
+    Nothing reaches the Cluster. The response is the Review of what an Apply would now
+    change -- diffed against this Cluster's latest Snapshot, because that is the change
+    anyone here is about to make.
+    """
+    candidate = await store.replace(accepted(document))
+    logger.info(
+        "configuration imported",
+        extra={
+            "base_snapshot": candidate.base_snapshot,
+            "sections": {name: len(candidate.sections[name]) for name in SECTIONS},
+        },
+    )
+    return await review(store, snapshots, cluster)

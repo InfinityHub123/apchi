@@ -1,0 +1,45 @@
+Apchi is installed as {{ include "apchi.fullname" . }} in namespace {{ .Release.Namespace }}.
+
+It configures the Trino at {{ .Values.trino.host }}:{{ .Values.trino.port }}, through the
+Deployments {{ .Values.trino.coordinatorDeployment }} and {{ .Values.trino.workerDeployment }}.
+
+{{- if .Values.bootstrap.create }}
+This release also created the six Secrets Apchi writes configuration into, which the Trino
+deployment mounts. Install Trino after Apchi: it reads two of them while loading and refuses
+to boot when either is missing.
+{{- end }}
+
+Reach the API:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "apchi.fullname" . }} 8000:{{ .Values.service.port }}
+  curl -s localhost:8000/api/v1/health
+
+Then localhost:8000/docs is the interactive API reference, and docs/getting-started.md
+takes one catalog through review, validation, apply and rollback.
+
+{{- if not .Values.bootstrap.create }}
+
+NOTE: bootstrap.create is off, so this release created none of the Secrets Apchi writes
+into. Trino will not start until the access-control rules and the user-mapping file exist.
+{{- end }}
+{{- if .Values.bootstrap.catalogs }}
+
+NOTE: bootstrap.catalogs seeded {{ len .Values.bootstrap.catalogs }} catalog(s). Apchi does
+not know about them, and Apchi's first Apply rewrites the seed -- so they will disappear at
+the following coordinator restart. Stage them in Apchi to keep them.
+{{- end }}
+{{- if .Values.mongodb.deploy }}
+
+NOTE: mongodb.deploy is on, so this release includes a single-replica MongoDB on an
+emptyDir. It loses every Snapshot when its pod restarts. Set mongodb.uri to a real
+MongoDB for anything you intend to keep.
+{{- end }}
+{{- if not .Values.rbac.create }}
+
+NOTE: rbac.create is off, so nothing granted this release access to Secrets, pods or the
+coordinator Deployment. Bind an equivalent Role to {{ include "apchi.serviceAccountName" . }}
+or every Apply will fail on the API server.
+{{- end }}
+
+Apchi has no authentication yet: every endpoint is open, the Admin ones included. Keep it
+reachable only by platform staff.

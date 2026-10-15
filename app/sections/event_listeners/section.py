@@ -6,15 +6,36 @@ is no reload path, so Trino adopts a listener change only by restarting. See sec
 """
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from app.adapters.trino import Trino
 from app.api.errors import Conflict, NameAlreadyTaken, NotFound, UnprocessablePayload
+from app.config import Settings
 from app.sections import SectionName
-from app.sections.base import Cluster, Resources, SectionPlan, ValidationFailure
+from app.sections.admin import AdminValues
+from app.sections.base import (
+    Cluster,
+    CoordinatorFile,
+    DiscoveredPaths,
+    Parsed,
+    ParseProblem,
+    Resources,
+    SectionPlan,
+    SmokeQuery,
+    Unaccounted,
+    ValidationFailure,
+    unreadable_each,
+)
 from app.sections.event_listeners import SECTION
-from app.sections.event_listeners.generator import FILE_KEY, MOUNT_PATH, render_secret
+from app.sections.event_listeners.generator import (
+    FILE_KEY,
+    MOUNT_PATH,
+    Unreadable,
+    parse_properties,
+    render_secret,
+)
 from app.sections.event_listeners.model import (
     EventListener,
     EventListenerUpdate,
@@ -84,8 +105,25 @@ def update_event_listener(
     if name not in stored:
         raise NotFound(f"No Event Listener named {name!r} in the Configuration Candidate.")
     current = stored[name]
-    listener_type = update.type or current["type"]
-    raw = current["properties"] if update.properties is None else update.properties
+    # Omitted and null are different answers, read from `model_fields_set` -- the same rule
+    # the Catalogs Section follows, because §19 asks for PATCH semantics that are consistent
+    # across every endpoint and not merely correct on each (#155). Neither field here is
+    # clearable, so null is refused rather than silently treated as "leave it alone".
+    sent = update.model_fields_set
+    listener_type = update.type if "type" in sent else current["type"]
+    raw = update.properties if "properties" in sent else current["properties"]
+    if listener_type is None:
+        raise UnprocessablePayload(
+            "An Event Listener cannot have its type removed. Send a type, or omit the field "
+            "to keep the current one.",
+            details=[{"property": "type", "problem": "cannot be cleared"}],
+        )
+    if raw is None:
+        raise UnprocessablePayload(
+            "An Event Listener cannot have its properties removed. Send the properties you "
+            "want, or omit the field to keep the current ones.",
+            details=[{"property": "properties", "problem": "cannot be cleared"}],
+        )
     stored[name] = {"type": listener_type, "properties": _validated(listener_type, raw)}
     return _as_listener(name, stored[name])
 
@@ -130,6 +168,43 @@ class EventListenersSection:
     #: Trino loads event listeners exactly once per process lifetime.
     requires_rollout = True
 
+    def discover_paths(self, settings: Settings, properties: Mapping[str, str]) -> DiscoveredPaths:
+        """One fixed path, and nothing in Trino's configuration points at it.
+
+        Trino reads `etc/event-listener.properties` if it is there and ignores its absence,
+        so there is no property naming it and nowhere else it could be. The alternative
+        spelling -- `event-listener.config-files` -- makes Trino refuse to start when a file
+        it names is missing, which would make Event Listeners mandatory, so Apchi does not
+        use it. If an Admin does, their listeners are configured somewhere this cannot see,
+        and the discovery says so by finding nothing here.
+        """
+        return DiscoveredPaths(files={MOUNT_PATH: MOUNT_PATH})
+
+    def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
+        """An absent file means no listener, which is this Section's whole way of saying so.
+
+        The listener is named after its type, because the file carries no name -- see
+        `parse_properties`. An Operator adopting a Cluster can rename it afterwards; what
+        matters is that the configuration is not lost.
+        """
+        content = files.get(MOUNT_PATH)
+        if content is None:
+            return Parsed()
+        try:
+            listener_type, properties, unaccounted = parse_properties(MOUNT_PATH, content)
+        except Unreadable as exc:
+            raise ParseProblem(exc.path, exc.reason) from exc
+        return Parsed(
+            resources={listener_type: {"type": listener_type, "properties": properties}},
+            unaccounted=tuple(
+                Unaccounted(path=MOUNT_PATH, what=what, content=found)
+                for what, found in unaccounted
+            ),
+        )
+
+    def read_back(self, resources: Resources) -> list[ValidationFailure]:
+        return unreadable_each(SECTION, resources, lambda name: _as_listener(name, resources[name]))
+
     def plan(self, desired: Resources, current: Resources) -> ListenerPlan:
         return ListenerPlan(
             added=[name for name in sorted(desired) if name not in current],
@@ -141,57 +216,44 @@ class EventListenersSection:
             removed=sorted(set(current) - set(desired)),
         )
 
-    async def apply(self, cluster: Cluster, desired: Resources, plan: SectionPlan) -> None:
-        """Write the file, then make sure it is mounted -- or unmounted.
+    def coordinator_files(self, settings: Settings) -> tuple[CoordinatorFile, ...]:
+        """Where Trino reads the listener configuration, and the Secret Apchi puts it in.
 
-        The mount is the part that carries the meaning. Trino reads
-        `etc/event-listener.properties` if it is there and ignores its absence, but it
-        refuses to start if a file it was told to read is missing, and Kubernetes turns a
-        subPath mount of an absent Secret key into a *directory*, which Trino chokes on
-        with "Is a directory". So "no Event Listener" has to be expressed by there being no
-        mount at all, which means Apchi owns this one volume on the coordinator's pod
-        template. Everything else there belongs to the Admin.
-
-        Nothing is adopted here. The Rollout is what makes it live, and the pipeline runs
-        it because this Section declares `requires_rollout`.
+        The path is Trino's default, not a choice. `event-listener.config-files` would let
+        it live anywhere, but it makes Trino refuse to start when the file it names is
+        missing -- and a Section that cannot be empty is not optional.
         """
-        await cluster.kubernetes.write_secret(
-            cluster.settings.event_listener_secret_name, render_secret(desired)
+        return (
+            CoordinatorFile(
+                secret=settings.event_listener_secret_name,
+                volume=settings.event_listener_volume_name,
+                path=MOUNT_PATH,
+            ),
         )
-        await self._mount(cluster, present=bool(desired))
-        logger.info("delivered the event listener configuration", extra={"listeners": len(desired)})
+
+    def render_files(
+        self, desired: Resources, settings: Settings, admin: AdminValues
+    ) -> dict[str, str]:
+        content = render_secret(desired).get(FILE_KEY)
+        return {MOUNT_PATH: content} if content else {}
+
+    async def apply(self, cluster: Cluster, desired: Resources, plan: SectionPlan) -> None:
+        """Nothing beyond the file, which the pipeline has already delivered.
+
+        The Rollout is what makes it live, and the pipeline runs it because this Section
+        declares `requires_rollout`.
+        """
 
     async def restore(self, cluster: Cluster, snapshot: Resources) -> bool:
-        """Rewriting the file is the whole undo.
+        """Rewriting the file is the whole undo, and the pipeline has done that too.
 
         Unlike Catalogs there is no compensating statement to work out: the file engines
-        are declarative, so the previous content is simply written again. The restart that
-        makes it live is the pipeline's, and it happens within Auto Rollback's single
-        bounded attempt.
+        are declarative, so the previous content is simply written again. Whether that
+        changed anything -- and so whether the rollback must restart Trino -- is answered
+        from the durable copy by the pipeline, because recovery after an Apchi restart has
+        no plan to consult.
         """
-        current = await cluster.kubernetes.read_secret(cluster.settings.event_listener_secret_name)
-        changed = current != render_secret(snapshot)
-        await self.apply(cluster, snapshot, self.plan(snapshot, {}))
-        return changed
-
-    async def _mount(self, cluster: Cluster, present: bool) -> None:
-        settings = cluster.settings
-        if present:
-            await cluster.kubernetes.mount_secret_file(
-                settings.coordinator_deployment_name,
-                settings.trino_container_name,
-                settings.event_listener_volume_name,
-                settings.event_listener_secret_name,
-                MOUNT_PATH,
-                FILE_KEY,
-            )
-        else:
-            await cluster.kubernetes.unmount_secret_file(
-                settings.coordinator_deployment_name,
-                settings.trino_container_name,
-                settings.event_listener_volume_name,
-                MOUNT_PATH,
-            )
+        return False
 
     async def check(
         self, cluster: Cluster, desired: Resources, plan: SectionPlan
@@ -201,24 +263,12 @@ class EventListenersSection:
     def needs_probe(self, desired: Resources) -> bool:
         return bool(desired)
 
-    def probe_files(self, desired: Resources) -> dict[str, str]:
-        """The listener file, so the probe starts with it in place.
-
-        Starting *is* the check. A Kafka listener whose brokers are unreachable makes Trino
-        refuse to start, because `terminate-on-initialization-failure` defaults to true --
-        so the probe turns what would have been a coordinator that never came back into a
-        Validation failure that costs the Operator nothing.
-        """
-        if not desired:
-            return {}
-        return {MOUNT_PATH: render_secret(desired)[FILE_KEY]}
-
     async def check_against_probe(
         self, probe: Trino, desired: Resources
     ) -> list[ValidationFailure]:
         return []
 
-    async def verify(self, cluster: Cluster, desired: Resources) -> list[str]:
+    async def verify(self, cluster: Cluster, desired: Resources, smoke: SmokeQuery) -> list[str]:
         """Nothing to assert.
 
         An event listener's output goes to an external sink rather than back to Apchi, so

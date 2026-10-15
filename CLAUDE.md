@@ -32,6 +32,8 @@ app/
   sections/   catalogs, client_certificates, certificate_mapping, permissions,
               resource_groups, event_listeners
   adapters/   kubernetes, trino, mongo
+  auth/       identity, passwords, users, sessions, tokens, oidc, logins
+  audit/      §20's events: who changed what, and when
   api/        routers
 ```
 
@@ -58,6 +60,20 @@ Reach for these rather than the ones most tutorials suggest:
   `/v1/query`, which are not part of Trino's documented API. Cluster membership comes from the
   `system.runtime.nodes` system table, not `/v1/node` — that endpoint 404s on Trino 483.
 - **Trino in tests** — `testcontainers.community.trino`.
+
+## Tests
+
+Two tiers. Tier 1 drives the HTTP API against real MongoDB and real Trino with Kubernetes
+faked; tier 2 runs against a real cluster and is marked `tier2`.
+
+`pytest tests/tier1` runs the whole suite in one process, in about two and a half minutes.
+
+It used to hang -- 5519s and 18 timeouts, with no assertion ever failing -- which is what
+`scripts/tier1.sh` existed to work around. The cause was the test MongoDB's **open-file
+limit**: Docker defaults the soft `nofile` limit to 1024 and MongoDB asks for 64000, so mongod
+stopped accepting connections and said so in its own log. The container now sets the limit and
+the workaround is gone (#69). If the suite ever hangs on a database that is up and idle, read
+`docker logs` on the MongoDB container before anything else.
 
 ## Types
 

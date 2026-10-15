@@ -73,7 +73,9 @@ async def test_applies_are_listed_newest_first(applying_client: AsyncClient) -> 
     second = (await applying_client.post("/api/v1/applies")).json()["id"]
     await _settled(applying_client, second)
 
-    listed = [record["id"] for record in (await applying_client.get("/api/v1/applies")).json()]
+    listed = [
+        record["id"] for record in (await applying_client.get("/api/v1/applies")).json()["items"]
+    ]
 
     assert listed[:2] == [second, first]
 

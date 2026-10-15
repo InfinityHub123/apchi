@@ -17,7 +17,17 @@ class Health(BaseModel):
 
 @router.get("/health", response_model=Health, summary="Apchi's own liveness")
 async def health(request: Request, response: Response) -> Health:
+    """Reports 503 while MongoDB is unreachable.
+
+    This endpoint is the chart's readiness *and* liveness probe, so a 503 here is how
+    Kubernetes is told to stop sending traffic and then to kill the pod. Nothing else
+    belongs in it for that reason: a condition reported here that an Operator has to log in
+    and fix would crashloop the pod they need to reach.
+    """
     reachable = await request.app.state.mongo.ping()
     if not reachable:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    return Health(status="ok" if reachable else "degraded", mongo="up" if reachable else "down")
+    return Health(
+        status="ok" if reachable else "degraded",
+        mongo="up" if reachable else "down",
+    )
