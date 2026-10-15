@@ -139,8 +139,6 @@ spec:
               value: {{ .Values.secrets.resourceGroups | quote }}
             - name: APCHI_EVENT_LISTENER_VOLUME_NAME
               value: {{ .Values.volumes.eventListener | quote }}
-            - name: APCHI_CERTIFICATE_MAPPING_VOLUME_NAME
-              value: {{ .Values.volumes.certificateMapping | quote }}
             - name: APCHI_RESOURCE_GROUPS_VOLUME_NAME
               value: {{ .Values.volumes.resourceGroups | quote }}
             - name: APCHI_ROLLOUT_TIMEOUT_SECONDS

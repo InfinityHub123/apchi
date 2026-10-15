@@ -196,9 +196,12 @@ secrets:
 
 # The volumes Apchi owns on the coordinator's pod template. Everything else there
 # belongs to the Admin, and Apchi never touches it.
+#
+# The user-mapping Secret is not here: the Admin mounts it as a directory and Apchi only
+# fills it (#93). `charts/trino` still names a volume for it, because something has to
+# mount it -- but Apchi does not need to know that name.
 volumes:
   eventListener: apchi-event-listener
-  certificateMapping: apchi-user-mapping
   resourceGroups: apchi-resource-groups
 
 timeouts:
