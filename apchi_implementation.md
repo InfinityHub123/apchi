@@ -1210,6 +1210,13 @@ there, which it refuses to start on. This is the one Section where "no configura
 is the absence of the mounts, and it is only safe *because* Apchi owns the switch as well as
 the content.
 
+**Unless the deployment owns the pointer** (§16). A deployment that mounts the whole of
+`/etc/trino` cannot accept either single-file mount, so there the Admin provides
+`resource-groups.properties` and Apchi writes only the rules, into
+`/etc/trino/resource-groups/` — the path the official `trino/trino` chart already uses. Apchi
+no longer owns the switch then, so it can no longer turn the Section off: emptying it is
+refused rather than producing a coordinator that will not restart.
+
 **What Validation catches that a request cannot.** Two rules span the whole Candidate rather
 than one resource, so they are checked at Validate: a selector naming a group that does not
 exist, and a selector naming a group that has subgroups. The first Trino catches too, at the
@@ -1292,8 +1299,11 @@ file Apchi owns.
 `compareAndSet` that permits exactly one call per process lifetime. There is no reload path.
 Confirmed against the 483 source, not taken from this document.
 
-**Apchi owns one volume on the coordinator's pod template**, and this is the one place it does.
-Event Listeners must be optional, and neither delivery mechanism can express that on its own:
+**Apchi owns a volume on the coordinator's pod template for this Section**, which it adds and
+removes itself. It is not the only one — Resource Groups has the same arrangement for the same
+reason, and §14's raw files have a third — but this is the Section the argument is clearest
+for, because Event Listeners must be optional and neither delivery mechanism can express that
+on its own:
 
 - `event-listener.config-files` makes Trino **refuse to start** when the file it names is missing
   — verified: *"Invalid configuration property with prefix '': file does not exist"*.
@@ -1312,6 +1322,14 @@ updates, so Apchi would write a file and Trino would never see the change. That 
 Section adopted *only* by a new pod, which Apchi itself creates. The rule to state is therefore
 sharper than the one originally written: no Section adopted **without** a restart may be
 `subPath`-mounted.
+
+Safe is not the same as portable, and that is the limit this arrangement has. A deployment that
+mounts the whole of `/etc/trino` as one volume cannot accept a single-file mount inside it at
+all, so on such a deployment this Section has to take the other horn of the dilemma above: the
+Admin sets `event-listener.config-files`, Apchi writes into `/etc/trino/event-listener/`, and
+Event Listeners stop being optional. Emptying the Section is then refused, because there is no
+listener that does nothing to render in place of none — `http`, `mysql` and `kafka` each need a
+real sink. Which horn applies is the deployment's shape and so the Admin's to declare (§16).
 
 During editing the UI should say: *Event Listener changed — does not apply immediately, will
 apply during Apply, and will restart the cluster.*
@@ -1519,16 +1537,56 @@ so Apchi can add and remove single-file mounts inside it. Everything works here.
 `/etc/trino`. No single file can be placed inside it, so anything Apchi delivers there has to
 be a nested directory — which the kubelet layers happily.
 
-The target is that every Section delivers a **directory**, mounted by the Admin: Apchi fills
-the Secret and never touches the pod template. Permissions, Client Certificates and
-Certificate Mapping are there. Resource Groups and Event Listeners are not, because Trino pins
-`resource-groups.properties` and `event-listener.properties` to its configuration directory and
-no property relocates either — so on a whole-directory deployment the Admin provides them as
-pointers, exactly as they already provide `access-control.properties` (§13.4).
+All six Sections work on both shapes. Permissions, Client Certificates and Certificate
+Mapping always deliver a directory the Admin mounts. Resource Groups and Event Listeners
+deliver single files Apchi mounts **by default**, and a directory when the deployment provides
+the pointer:
+
+| What the deployment provides | Where Apchi then writes |
+|---|---|
+| `resource-groups.properties`, naming the rules | `/etc/trino/resource-groups/resource-groups.json` |
+| `event-listener.config-files`, naming the file | `/etc/trino/event-listener/event-listener.properties` |
+
+Both are off by default, and the shape that needs them is the one Apchi cannot detect without
+guessing — a deployment it cannot read tells it nothing, and defaulting to the mode that
+refuses to empty a Section would be the wrong way to be wrong. The same division is already in
+force for `access-control.properties` (§13.4).
 
 That is a deployment concern and **not** a change of Section ownership: Operators still own all
 six Sections (§3). A pointer names where a file lives and never varies with the Candidate; what
 is in the file stays the Operator's.
+
+**The sixth precondition: a pointer the deployment claims to provide is really there, and
+really names the directory Apchi fills.** An Admin who turns the mode on and forgets the
+property gets a Section that writes files nobody reads — the Apply succeeds, the Secret is
+correct, and the Cluster behaves as if the Section were empty.
+
+**What it costs: those two Sections can no longer be emptied in that mode.** The pointer is
+always present, so the file it names has to be, and Trino refuses to start when a file it was
+told to read is missing. Emptying is therefore refused — at request time, because the Candidate
+is shared and an empty Section caught only by Validation blocks everyone's Apply
+([ADR-0002](./docs/adr/0002-configuration-candidate.md)), and again during Validation for the
+paths that do not go through a delete: a Section Revert, and a whole-document import.
+
+Nothing harmless is rendered in place of empty, and the reason differs per Section. An empty
+resource groups document makes Trino reject every query matching no selector — verified against
+a running coordinator: *"No matching resource group found with the configured selection
+rules"*. A no-op would therefore mean a catch-all root group, and `hardConcurrencyLimit` and
+`maxQueued` are required integers with no "unlimited", so Apchi would be inventing a
+concurrency policy on the Operator's behalf. Event Listeners have no no-op at all: `http`,
+`mysql` and `kafka` each need a real sink.
+
+**The same constraint applies at install, not only later.** Trino validates every path property
+at startup, so on such a deployment the Secrets those pointers name must already hold a file
+before the coordinator first starts — and Apchi writes them on its first Apply, which is after.
+Verified: an empty event listener Secret stops the coordinator booting with *"file does not
+exist: /etc/trino/event-listener/event-listener.properties"*. The Admin seeds them, the way
+`deploy/trino-dev` already ships a generated default of the access-control and user-mapping
+files for the same reason. `docs/official-trino-chart.md` lists which.
+
+One further consequence of that chart's shape: `additionalConfigProperties` reaches the worker
+ConfigMap as well as the coordinator's, and Trino validates path properties on every node — so
+the Secrets have to be mounted on both roles, not only on the coordinator.
 
 The one capability this does not reach is **Admin raw files** (§14). Their path is the Admin's
 to choose, which makes them single-file mounts by nature, so on a whole-directory deployment
@@ -2143,11 +2201,18 @@ Additional constraints:
 
 # 27. Open items
 
-- ~~**Admin arbitrary configuration**~~ — **settled** (§14, "Raw files, not curated
+- ~~**Admin arbitrary configuration**~~ — **settled and built** (§14, "Raw files, not curated
   properties"): an Admin writes a path and its content, all raw content is treated as secret,
   Apchi-owned paths are refused by name, and rollback keeps the Admin document's pre-image for
-  the duration of an Apply. Not built; the preserved mapping patterns of §13.3 remain the only
-  user of the Admin Apply.
+  the duration of an Apply. Delivery, Validation on the probe and Auto Rollback all work; the
+  one file the probe cannot validate is `config.properties`, because the probe assembles its
+  own, so a broken one is caught by the Cluster and taken back rather than refused earlier.
+
+  One limit, and it is structural rather than unfinished: a raw file's path is the Admin's to
+  choose, which makes it a single-file mount by nature. On a deployment that mounts the whole
+  of `/etc/trino` as one volume every raw path is therefore refused, `config.properties`
+  included — that file belongs to the chart's own ConfigMap. §14's promise holds on a
+  file-by-file deployment and not on a whole-directory one (§16).
 - **Maintenance Mode mechanics** — behaviour when an Apply is already in flight. The endpoint
   and the persistence model are settled (§14).
 - **Certificate mapping migration** — the mechanism is built: a Cluster arriving with patterns
@@ -2160,11 +2225,19 @@ Additional constraints:
   `mysql` and `openlineage` pass through until someone needs them curated. Resource Groups
   are settled and fully typed (§13.5).
 - ~~**Who owns `event-listener.config-files`**~~ — **settled** (§13.6): it stays Admin
-  territory, and the Operator limit of one Event Listener stays too. An Admin who sets it gets
-  the listeners they configured; Apchi keeps managing the one file it mounts and the Section
-  keeps refusing a second. A Cluster may therefore run listeners Apchi cannot see, which is
-  accepted on §17's grounds — Apchi does not detect drift, and this is drift an Admin created
-  deliberately.
+  territory, and the Operator limit of one Event Listener stays too.
+
+  The original answer was that Apchi ignores the property — it keeps mounting the one file at
+  Trino's own path, and an Admin who sets the property gets whatever they configured, with the
+  Cluster possibly running listeners Apchi cannot see. That is accepted on §17's grounds: Apchi
+  does not detect drift, and this is drift an Admin created deliberately.
+
+  It is no longer the whole answer. On a deployment that mounts the whole of `/etc/trino`,
+  Apchi cannot mount that file at all, so the property becomes the *only* route and the Admin
+  sets it deliberately for Apchi's benefit — naming a file in the directory Apchi fills. Apchi
+  is told so by a setting, follows the property during discovery rather than ignoring it, and a
+  precondition checks it really names that directory. Ownership is unchanged; what changed is
+  that Apchi now reads it on the deployments where it has to (§16).
 
 - ~~**Apchi's own disaster recovery**~~ — **out of scope.** §18 already puts operating that
   MongoDB with the platform, and the same answer applies to losing it: Apchi is not in charge

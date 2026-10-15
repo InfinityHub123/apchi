@@ -12,6 +12,7 @@ from app.api.deps import (
     CandidateStoreDep,
     ClusterDep,
     OperatorMutationAllowed,
+    SettingsDep,
     SnapshotStoreDep,
 )
 from app.pipeline.recovery import RevertEffect, RevertRequest, section_revert
@@ -125,11 +126,18 @@ async def edit_resource_group(
     summary="Remove a resource group",
     dependencies=[OperatorMutationAllowed],
 )
-async def delete_resource_group(path: str, store: CandidateStoreDep) -> None:
+async def delete_resource_group(path: str, store: CandidateStoreDep, settings: SettingsDep) -> None:
     """Refused while it still has subgroups: deleting a parent would take its whole subtree
-    with it, and an Operator should do that deliberately."""
+    with it, and an Operator should do that deliberately.
+
+    Also refused when it would empty the Section and this Cluster's deployment provides the
+    properties file -- that pointer always names a rules file, and Trino will not start
+    without the file it names (#125).
+    """
     candidate = await store.load()
-    section.delete_group(candidate.resources(GROUPS), path)
+    groups = candidate.resources(GROUPS)
+    section.delete_group(groups, path)
+    section.refuse_if_emptying(groups, settings)
     await store.save(candidate)
 
 

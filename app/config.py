@@ -141,9 +141,8 @@ class Settings(BaseSettings):
     event_listener_volume_name: str = "apchi-event-listener"
     #: Holds the generated user-mapping file. Always present once Apchi has applied: the
     #: authenticator reading it refuses to start when it is missing, so "no pattern" is a
-    #: file that changes nothing rather than no file.
-    #: The Admin mounts this one at a directory, so there is no volume name here: Apchi
-    #: never adds or removes the mount (#93).
+    #: file that changes nothing rather than no file. The Admin mounts it as a directory, so
+    #: there is no volume name here -- Apchi never adds or removes the mount (#93).
     certificate_mapping_secret_name: str = "trino-user-mapping"
 
     #: Holds every Client Certificate, two files each. Mounted once at a fixed directory on
@@ -161,6 +160,27 @@ class Settings(BaseSettings):
     #: that tells Trino to read them. One Secret, so they arrive and leave together.
     resource_groups_secret_name: str = "trino-resource-groups"
     resource_groups_volume_name: str = "apchi-resource-groups"
+
+    # --- which deployment shape this Cluster has (#125, §16) -------------------------------
+    #
+    # Trino pins two files to its configuration directory, and no property relocates either:
+    # `resource-groups.properties` is read as `etc/resource-groups.properties`, and the
+    # alternative to `etc/event-listener.properties` is `event-listener.config-files`, which
+    # lives in `config.properties`. Apchi mounts both as single files, which a deployment that
+    # mounts the whole of `/etc/trino` as one volume cannot accept.
+    #
+    # On such a deployment the Admin provides the pointer and Apchi fills the directory it
+    # names -- the division already in force for `access-control.properties` (§13.4). These
+    # are off by default, because the shape that needs them is the one Apchi cannot detect
+    # without guessing: a deployment Apchi cannot read tells it nothing, and defaulting to the
+    # mode that refuses to empty a Section would be the wrong way to be wrong.
+
+    #: The deployment provides `/etc/trino/resource-groups.properties`, pointing
+    #: `resource-groups.config-file` at the directory Apchi fills.
+    resource_groups_properties_from_deployment: bool = False
+    #: The deployment sets `event-listener.config-files`, naming a file in the directory
+    #: Apchi fills.
+    event_listener_config_files_from_deployment: bool = False
 
     #: How long a rollout may take before the Apply fails. A coordinator that never comes
     #: back must not hang the pipeline.

@@ -204,6 +204,33 @@ volumes:
   eventListener: apchi-event-listener
   resourceGroups: apchi-resource-groups
 
+# Which deployment shape the Trino coordinator has (#125).
+#
+# Trino pins `resource-groups.properties` to its configuration directory, and the alternative
+# to `etc/event-listener.properties` is `event-listener.config-files` in `config.properties`.
+# Apchi mounts both as single files, which a deployment that mounts the whole of /etc/trino as
+# one volume cannot accept -- the official trino/trino chart is one of those.
+#
+# Turn these on there, and have the deployment provide the pointers:
+#
+#   resourceGroups:
+#     type: properties
+#     properties: |
+#       resource-groups.configuration-manager=file
+#       resource-groups.config-file=/etc/trino/resource-groups/resource-groups.json
+#   additionalConfigProperties:
+#     - event-listener.config-files=/etc/trino/event-listener/event-listener.properties
+#
+# A precondition checks each pointer is really there and really names the directory Apchi
+# fills, because forgetting one gives a Section that writes files nobody reads.
+#
+# The cost: the pointer is always present, so the file it names must be too -- Trino refuses
+# to start without it. Emptying such a Section is refused rather than breaking the Cluster on
+# its next restart. `charts/trino` needs neither of these; it mounts /etc/trino file by file.
+deployment:
+  providesResourceGroupsProperties: false
+  setsEventListenerConfigFiles: false
+
 timeouts:
   # How long a Rollout may take before the Apply fails. A coordinator that never comes
   # back must not hang the pipeline.

@@ -15,7 +15,9 @@ from app.sections import SectionName
 from app.sections.admin import AdminValues
 from app.sections.base import (
     Cluster,
+    CoordinatorDirectory,
     CoordinatorFile,
+    Delivery,
     DiscoveredPaths,
     Parsed,
     ParseProblem,
@@ -29,14 +31,19 @@ from app.sections.base import (
 )
 from app.sections.resource_groups import SECTION, SELECTORS, SEPARATOR, SETTINGS
 from app.sections.resource_groups.generator import (
+    MANAGER_FILE_IN_DIR,
     MANAGER_PATH,
+    RULES_DIR,
+    RULES_IN_DIR,
     RULES_PATH,
     Unreadable,
     children_of,
     groups_of,
+    is_empty,
     parent_of,
     parse_rules,
     render,
+    render_rules_only,
     selectors_of,
     settings_of,
     store_selectors,
@@ -107,6 +114,31 @@ def delete_group(stored: Resources, path: str) -> None:
     del stored[path]
 
 
+#: Why emptying this Section is refused when the deployment owns the pointer, in one place
+#: so the request-time refusal and the Apply-time one cannot drift apart.
+CANNOT_EMPTY = (
+    f"This Cluster's deployment provides {MANAGER_PATH}, which always names a resource "
+    "groups file, and Trino refuses to start when a file it was told to read is missing. "
+    "Removing the last resource group would leave a coordinator that cannot come back. "
+    f"Remove resource-groups.config-file from {MANAGER_PATH} first, or keep at least one "
+    "group."
+)
+
+
+def refuse_if_emptying(stored: Resources, settings: Settings) -> None:
+    """Refuse a change that would leave this Section with nothing, in that mode only.
+
+    At request time rather than only at Apply, because the Candidate is shared: an empty
+    Section that only Validation catches blocks everyone's Apply until somebody works out
+    whose edit did it (ADR-0002). `check` enforces the same rule for the paths that do not
+    come through here -- a Section Revert, and a whole-document import.
+    """
+    if not settings.resource_groups_properties_from_deployment:
+        return
+    if is_empty(stored):
+        raise Conflict(CANNOT_EMPTY)
+
+
 def get_settings(stored: Resources) -> ResourceGroupSettings:
     return settings_of(stored)
 
@@ -160,13 +192,28 @@ class ResourceGroupsSection:
     #: The manager is built once, when the coordinator starts.
     requires_rollout = True
 
-    def coordinator_files(self, settings: Settings) -> tuple[CoordinatorFile, ...]:
-        """Two: the rules, and the properties file that makes Trino read them.
+    def coordinator_files(self, settings: Settings) -> tuple[Delivery, ...]:
+        """Two files Apchi mounts, or one directory the Admin does (#125).
 
-        Both in one Secret and one volume, so an empty Section takes them away together.
-        Nothing goes in the probe's `config.properties`: unlike the user-mapping file, what
-        turns this on is a file of its own.
+        **Apchi mounts both** by default: the rules, and the properties file that makes Trino
+        read them, in one Secret and one volume so an empty Section takes them away together.
+        Nothing goes in the probe's `config.properties` -- unlike the user-mapping file, what
+        turns this on is a file of its own, which is why `probe_files` carries it.
+
+        **The deployment provides the properties file** when it mounts the whole of
+        `/etc/trino` and so cannot accept a single file inside it. Apchi then fills only the
+        directory that file points at. The pinned path leaves `owned_paths` with it, so §16's
+        single-file precondition has nothing left to refuse here -- without that check being
+        weakened for anyone else.
         """
+        if settings.resource_groups_properties_from_deployment:
+            return (
+                CoordinatorDirectory(
+                    secret=settings.resource_groups_secret_name,
+                    path=RULES_DIR,
+                    probe_files={MANAGER_PATH: MANAGER_FILE_IN_DIR},
+                ),
+            )
         return tuple(
             CoordinatorFile(
                 secret=settings.resource_groups_secret_name,
@@ -179,6 +226,8 @@ class ResourceGroupsSection:
     def render_files(
         self, desired: Resources, settings: Settings, admin: AdminValues
     ) -> dict[str, str]:
+        if settings.resource_groups_properties_from_deployment:
+            return render_rules_only(desired)
         return render(desired)
 
     def discover_paths(self, settings: Settings, properties: Mapping[str, str]) -> DiscoveredPaths:
@@ -189,16 +238,29 @@ class ResourceGroupsSection:
         whatever `config-file` points at, so a properties file naming something other than
         the rules Apchi found means the rules Apchi found are not the rules in force.
         """
+        ours = self._rules_path(settings)
         named = properties.get("resource-groups.config-file")
         if named:
-            return DiscoveredPaths(files={RULES_PATH: named, MANAGER_PATH: MANAGER_PATH})
+            return DiscoveredPaths(files={ours: named, MANAGER_PATH: MANAGER_PATH})
         return DiscoveredPaths(
-            files={RULES_PATH: RULES_PATH, MANAGER_PATH: MANAGER_PATH},
+            files={ours: ours, MANAGER_PATH: MANAGER_PATH},
             why=(
                 "no resource-groups.config-file property was found, so this is where Apchi "
                 "would put the rules rather than where the Cluster says they are"
             ),
         )
+
+    @staticmethod
+    def _rules_path(settings: Settings) -> str:
+        """Where Apchi writes the rules, which depends on who owns the properties file.
+
+        Two paths rather than one because the properties file is pinned to `/etc/trino` and
+        the rules are not: when Apchi mounts both they sit beside each other, and when the
+        deployment owns the pointer the rules move into a directory it can name (#125).
+        """
+        if settings.resource_groups_properties_from_deployment:
+            return RULES_IN_DIR
+        return RULES_PATH
 
     def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
         """Both files absent means no Resource Groups, which is how this Section says so.
@@ -209,7 +271,8 @@ class ResourceGroupsSection:
         reading a file it does not own would be reading the Admin's configuration as if it
         were an Operator's.
         """
-        rules = files.get(RULES_PATH)
+        ours = self._rules_path(settings)
+        rules = files.get(ours)
         manager = files.get(MANAGER_PATH)
         if rules is None:
             if manager is None:
@@ -224,7 +287,7 @@ class ResourceGroupsSection:
                 )
             )
         try:
-            resources, unaccounted = parse_rules(RULES_PATH, rules)
+            resources, unaccounted = parse_rules(ours, rules)
         except Unreadable as exc:
             raise ParseProblem(exc.path, exc.reason) from exc
 
@@ -237,8 +300,7 @@ class ResourceGroupsSection:
         return Parsed(
             resources=resources,
             unaccounted=tuple(
-                Unaccounted(path=RULES_PATH, what=what, content=content)
-                for what, content in unaccounted
+                Unaccounted(path=ours, what=what, content=content) for what, content in unaccounted
             ),
         )
 
@@ -293,6 +355,15 @@ class ResourceGroupsSection:
         groups = groups_of(desired)
         paths = sorted(groups)
         failures: list[ValidationFailure] = []
+
+        # The net under `refuse_if_emptying`, for the ways a Section empties that do not go
+        # through a DELETE: a Section Revert to an empty Snapshot, and a whole-document
+        # import. Refused here rather than rendered as something harmless, because there is
+        # no harmless rendering -- an empty rules file makes Trino reject every query that
+        # matches no selector, and inventing a catch-all group would mean inventing a
+        # concurrency limit on the Operator's behalf (#125).
+        if cluster.settings.resource_groups_properties_from_deployment and is_empty(desired):
+            failures.append(ValidationFailure(section=SECTION, reason=CANNOT_EMPTY))
 
         # Trino refuses to start on this rather than ignoring it, so catching it here turns
         # a coordinator that will not come back into a Candidate that will not be applied.
