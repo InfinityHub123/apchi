@@ -150,6 +150,11 @@ response from a real run. About ten minutes.
 
 [`docs/concepts.md`](docs/concepts.md) explains the loop, the vocabulary and who owns what.
 
+[`docs/official-trino-chart.md`](docs/official-trino-chart.md) is the values to run Apchi
+against the official `trinodb/charts` Trino chart, which mounts `/etc/trino` as one volume
+rather than file by file. Worth reading before adopting an existing cluster, because that
+shape changes two things Apchi can do.
+
 With Apchi running, `/docs` serves the interactive API reference and `openapi.json` in this
 repository is the committed contract.
 

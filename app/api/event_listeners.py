@@ -12,6 +12,7 @@ from app.api.deps import (
     CandidateStoreDep,
     ClusterDep,
     OperatorMutationAllowed,
+    SettingsDep,
     SnapshotStoreDep,
 )
 from app.pipeline.recovery import RevertEffect, RevertRequest, section_revert
@@ -91,7 +92,12 @@ async def update_event_listener(
     summary="Remove a staged Event Listener",
     dependencies=[OperatorMutationAllowed],
 )
-async def delete_event_listener(name: str, store: CandidateStoreDep) -> None:
+async def delete_event_listener(name: str, store: CandidateStoreDep, settings: SettingsDep) -> None:
+    """Refused when it would empty the Section and this Cluster's deployment sets
+    `event-listener.config-files` -- that property names a file Trino will not start
+    without, and there is no listener that does nothing to render in its place (#125)."""
     candidate = await store.load()
-    section.delete_event_listener(candidate.resources(LISTENERS), name)
+    listeners = candidate.resources(LISTENERS)
+    section.delete_event_listener(listeners, name)
+    section.refuse_if_emptying(listeners, settings)
     await store.save(candidate)

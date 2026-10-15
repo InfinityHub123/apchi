@@ -12,10 +12,19 @@ from app.sections.base import Resources
 #: The key inside the Secret, and the filename Trino expects.
 FILE_KEY = "event-listener.properties"
 
-#: Where Trino looks. Fixed by the image's `etc` directory rather than configurable: the
-#: alternative, `event-listener.config-files`, makes Trino refuse to start when the file it
-#: names is missing, which would make Event Listeners mandatory.
+#: Where Trino looks on its own. Read if present and ignored if absent, which is what lets
+#: Apchi express "no listener" by removing the mount -- and why this is the default.
 MOUNT_PATH = f"/etc/trino/{FILE_KEY}"
+
+#: Where the file goes when the deployment sets `event-listener.config-files` (#125).
+#:
+#: A directory the Admin mounts, because the convention path above is a single file inside
+#: `/etc/trino` and a deployment that mounts that whole directory cannot accept one. The
+#: trade is forced and it is not free: `event-listener.config-files` makes Trino **refuse to
+#: start** when the file it names is missing, so on such a deployment this Section can no
+#: longer be emptied -- there is no listener that does nothing to render in its place.
+MOUNT_DIR = "/etc/trino/event-listener"
+PATH_IN_DIR = f"{MOUNT_DIR}/{FILE_KEY}"
 
 
 def render_properties(listener: dict[str, Any]) -> str:

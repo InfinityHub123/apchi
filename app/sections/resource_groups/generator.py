@@ -29,14 +29,31 @@ from app.sections.resource_groups.model import (
 RULES_KEY = "resource-groups.json"
 MANAGER_KEY = "resource-groups.properties"
 
+#: Where both files go when **Apchi** mounts them, which is the default. Two single-file
+#: mounts on one volume, so an empty Section takes them away together.
 RULES_PATH = f"/etc/trino/{RULES_KEY}"
 MANAGER_PATH = f"/etc/trino/{MANAGER_KEY}"
+
+#: Where the rules go when the **deployment** owns the properties file (#125). A directory
+#: the Admin mounts, because `/etc/trino/resource-groups.properties` is pinned by Trino and a
+#: deployment that mounts the whole config directory cannot take a single file inside it.
+#: This is the path the official `trino/trino` chart already uses for its own rules file, so
+#: an Admin on that chart changes nothing but which Secret the volume names.
+RULES_DIR = "/etc/trino/resource-groups"
+RULES_IN_DIR = f"{RULES_DIR}/{RULES_KEY}"
 
 #: Read as `etc/resource-groups.properties`, so it cannot be merged into config.properties:
 #: `resource-groups.configuration-manager` there fails startup with "Configuration property
 #: 'resource-groups.configuration-manager' was not used".
 MANAGER_FILE = (
     f"resource-groups.configuration-manager=file\nresource-groups.config-file={RULES_PATH}\n"
+)
+
+#: The same pointer, naming the directory instead. On the Cluster this file is the Admin's
+#: when they own it (#125); the probe is Apchi's, so Apchi supplies it there itself -- a probe
+#: holding rules Trino was not told to read would start cleanly having validated nothing.
+MANAGER_FILE_IN_DIR = (
+    f"resource-groups.configuration-manager=file\nresource-groups.config-file={RULES_IN_DIR}\n"
 )
 
 
@@ -128,6 +145,11 @@ def render_rules(desired: Resources) -> str:
     return json.dumps(document, indent=2) + "\n"
 
 
+def is_empty(desired: Resources) -> bool:
+    """Whether this Section has nothing to deliver."""
+    return not groups_of(desired) and not selectors_of(desired)
+
+
 def render(desired: Resources) -> dict[str, str]:
     """Both files, or neither.
 
@@ -135,9 +157,20 @@ def render(desired: Resources) -> dict[str, str]:
     behind would point Trino at a file that is no longer mounted, and Trino refuses to start
     when a file it was told to read is missing.
     """
-    if not groups_of(desired) and not selectors_of(desired):
+    if is_empty(desired):
         return {}
     return {RULES_PATH: render_rules(desired), MANAGER_PATH: MANAGER_FILE}
+
+
+def render_rules_only(desired: Resources) -> dict[str, str]:
+    """Just the rules, at the path the deployment's own properties file points at (#125).
+
+    No properties file, because the deployment provides it. And never empty: that pointer is
+    always there, so the file it names has to be too -- Trino refuses to start when a file it
+    was told to read is missing. Emptying the Section is refused at the API instead, which is
+    where an Operator can still do something about it.
+    """
+    return {RULES_IN_DIR: render_rules(desired)}
 
 
 class Unreadable(Exception):

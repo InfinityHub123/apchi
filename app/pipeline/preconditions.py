@@ -19,8 +19,11 @@ from app.adapters.kubernetes import KubernetesAdapter
 from app.config import Settings
 from app.pipeline.coordinator import Container, PodSpec, Volume, VolumeMount, content_at, provides
 from app.pipeline.files import admin_mounted_secrets, owned_paths
+from app.sections.event_listeners.generator import PATH_IN_DIR as EVENT_LISTENER_PATH_IN_DIR
 from app.sections.permissions.generator import PROPERTIES_PATH, REFRESH_PERIOD
 from app.sections.registry import REGISTERED
+from app.sections.resource_groups.generator import MANAGER_PATH as RESOURCE_GROUPS_MANAGER_PATH
+from app.sections.resource_groups.generator import RULES_IN_DIR as RESOURCE_GROUPS_RULES_IN_DIR
 
 __all__ = [
     "Container",
@@ -46,6 +49,9 @@ class PreconditionFailed(Exception):
 #: The directory `access-control.properties` sits in, for the message when nothing provides
 #: either it or the file.
 _PROPERTIES_DIR = str(PurePosixPath(PROPERTIES_PATH).parent)
+
+#: Where `event-listener.config-files` lives when a deployment sets it.
+_CONFIG_PROPERTIES = "/etc/trino/config.properties"
 
 
 def _covers(mount_path: str, directory: str) -> bool:
@@ -148,6 +154,12 @@ async def check(kubernetes: KubernetesAdapter, spec: PodSpec, settings: Settings
     #    official trino/trino chart, which mounts the whole of /etc/trino (§16).
     problems.extend(_directory_mounts_over_apchis_files(spec, volumes, apchi_owned))
 
+    # 7. A pointer the deployment claims to provide is really there, and really names the
+    #    directory Apchi fills. Without this an Admin who turns the mode on and forgets the
+    #    property gets a Section that writes files nobody reads: the Apply succeeds and the
+    #    Cluster behaves as if the Section were empty (#125).
+    problems.extend(await _pointer_problems(kubernetes, spec, settings))
+
     if problems:
         raise PreconditionFailed(problems)
     logger.debug("deployment preconditions hold")
@@ -237,6 +249,105 @@ async def _refresh_period_problems(
         "the access-control rules Apchi writes. Every permission Apchi applies would be "
         "written and ignored."
     ]
+
+
+async def _pointer_problems(
+    kubernetes: KubernetesAdapter, spec: PodSpec, settings: Settings
+) -> list[str]:
+    """Whether the pointers the deployment claims to provide are really there (#125).
+
+    An Admin who turns one of these on and forgets the property gets a Section that writes
+    files nobody reads: the Apply succeeds, the Secret is correct, and the Cluster behaves as
+    if the Section were empty. That is the failure shape §16 exists to catch, and it is worth
+    one read of the Admin's own configuration to refuse it instead.
+
+    Read from the Cluster rather than trusted, for the same reason precondition 4 reads
+    `access-control.properties`: the setting says what Apchi was told, and only the file says
+    what Trino will do.
+    """
+    problems: list[str] = []
+    if settings.resource_groups_properties_from_deployment:
+        problems.extend(
+            await _pointer_problem(
+                kubernetes,
+                spec,
+                holder=RESOURCE_GROUPS_MANAGER_PATH,
+                prop="resource-groups.config-file",
+                expected=RESOURCE_GROUPS_RULES_IN_DIR,
+                setting="resource_groups_properties_from_deployment",
+            )
+        )
+    if settings.event_listener_config_files_from_deployment:
+        problems.extend(
+            await _pointer_problem(
+                kubernetes,
+                spec,
+                holder=_CONFIG_PROPERTIES,
+                prop="event-listener.config-files",
+                expected=EVENT_LISTENER_PATH_IN_DIR,
+                setting="event_listener_config_files_from_deployment",
+            )
+        )
+    return problems
+
+
+async def _pointer_problem(
+    kubernetes: KubernetesAdapter,
+    spec: PodSpec,
+    *,
+    holder: str,
+    prop: str,
+    expected: str,
+    setting: str,
+) -> list[str]:
+    """One pointer: the file that should hold it, the property, and where it must point."""
+    for container in spec.containers:
+        if provides(container, holder) is None:
+            continue
+        content = await content_at(kubernetes, spec, holder, container.name)
+        if content is None:
+            # Either the volume covering this path does not hold the file, or Apchi cannot
+            # read the ConfigMap or Secret behind it. Both are reported together because the
+            # fix is the same -- put the file there -- and because telling them apart would
+            # mean distinguishing "key absent" from "read failed" one layer down, which is
+            # more machinery than the message is worth.
+            return [
+                f"Apchi is configured with {setting}, so the deployment must provide {prop} "
+                f"in {holder}. A volume covers that path but Apchi found no file there, so "
+                f"either it is not in that volume or Apchi cannot read it. Set "
+                f"{prop}={expected} in the file mounted at {holder}, or turn {setting} off "
+                f"and let Apchi mount the file itself."
+            ]
+        named = _property_in(content, prop)
+        if named is None:
+            return [
+                f"{holder} does not set {prop}, but Apchi is configured with {setting} and "
+                f"so writes nothing at the path Trino reads by default. Every "
+                f"{prop.split('.')[0]} Apchi applies would be written and ignored. Set "
+                f"{prop}={expected}, or turn {setting} off and let Apchi mount the file "
+                f"itself."
+            ]
+        if named != expected:
+            return [
+                f"{holder} sets {prop}={named}, which is not {expected} -- the directory "
+                f"Apchi fills. Trino would read a file Apchi never writes, so the Section "
+                f"would look applied and have no effect."
+            ]
+        return []
+    return [
+        f"Nothing provides {holder}, but Apchi is configured with {setting} and depends on "
+        f"the deployment setting {prop} there. Mount it, or turn {setting} off."
+    ]
+
+
+def _property_in(content: str, prop: str) -> str | None:
+    """A Java properties value, or None. Last wins, as Trino's own loader does."""
+    found = None
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(f"{prop}="):
+            found = stripped.split("=", 1)[1].strip()
+    return found
 
 
 def pod_spec(raw: dict[str, Any]) -> PodSpec:

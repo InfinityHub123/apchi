@@ -6621,6 +6621,7 @@
     },
     "/api/v1/event-listeners/{name}": {
       "delete": {
+        "description": "Refused when it would empty the Section and this Cluster's deployment sets\n`event-listener.config-files` -- that property names a file Trino will not start\nwithout, and there is no listener that does nothing to render in its place (#125).",
         "operationId": "delete_event_listener_api_v1_event_listeners__name__delete",
         "parameters": [
           {
@@ -7796,7 +7797,7 @@
     },
     "/api/v1/resource-groups/{path}": {
       "delete": {
-        "description": "Refused while it still has subgroups: deleting a parent would take its whole subtree\nwith it, and an Operator should do that deliberately.",
+        "description": "Refused while it still has subgroups: deleting a parent would take its whole subtree\nwith it, and an Operator should do that deliberately.\n\nAlso refused when it would empty the Section and this Cluster's deployment provides the\nproperties file -- that pointer always names a rules file, and Trino will not start\nwithout the file it names (#125).",
         "operationId": "delete_resource_group_api_v1_resource_groups__path__delete",
         "parameters": [
           {
