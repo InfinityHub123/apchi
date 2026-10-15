@@ -159,6 +159,12 @@ file, and Trino refuses to start when a file it was told to read is missing — 
 last resource group or the last listener would leave a coordinator that cannot come back.
 Apchi refuses the delete and names the pointer to remove first.
 
+**Both must be populated before any Apply succeeds**, including an Apply that only adds a
+catalog. Apchi writes each Secret whole, so an Apply with one of these Sections empty would
+write an empty Secret over the file the pointer names and the next restart would not come
+back. Since Trino cannot start without those files in the first place, a running cluster here
+always has both — adopt them into the Candidate (§15) rather than leaving them unmodelled.
+
 Nothing harmless is rendered instead, and the reason differs. An empty resource groups
 document makes Trino reject every query matching no selector, so a no-op would need a
 catch-all root group — and `hardConcurrencyLimit` and `maxQueued` are required integers with

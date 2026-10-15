@@ -327,6 +327,24 @@ async def test_emptying_is_allowed_in_the_default_mode(client: AsyncClient) -> N
 
 # --- the net under the request-time refusal -----------------------------------------------
 
+#: What each Section held before the Candidate was emptied, so `plan` reports a removal.
+HELD = {
+    "resource_groups": {"global": STORED_GROUP},
+    "event_listeners": {"audit": STORED_LISTENER},
+}
+
+
+def _cluster(settings: Settings, kubernetes: FakeKubernetes) -> object:
+    from app.sections.admin import AdminValues
+    from app.sections.base import Cluster
+
+    return Cluster(
+        trino=Trino(host="127.0.0.1", port=1),
+        kubernetes=kubernetes,
+        settings=settings,
+        admin=AdminValues(),
+    )
+
 
 @pytest.mark.parametrize("section_name", ["resource_groups", "event_listeners"])
 async def test_an_empty_section_fails_validation_however_it_got_empty(
@@ -336,21 +354,39 @@ async def test_an_empty_section_fails_validation_however_it_got_empty(
     whole-document import both reach the Candidate without passing through it, so the rule is
     enforced at Apply time as well -- otherwise either path would produce a Cluster that
     cannot restart."""
-    from app.sections.admin import AdminValues
-    from app.sections.base import Cluster
-
     section = next(s for s in REGISTERED if s.name == section_name)
-    cluster = Cluster(
-        trino=Trino(host="127.0.0.1", port=1),
-        kubernetes=pointing_kubernetes,
-        settings=pointed,
-        admin=AdminValues(),
-    )
 
-    failures = await section.check(cluster, {}, section.plan({}, {}))
+    failures = await section.check(
+        _cluster(pointed, pointing_kubernetes), {}, section.plan({}, HELD[section_name])
+    )
 
     assert [f.section for f in failures] == [section_name]
     assert "refuses to start" in failures[0].reason
+
+
+@pytest.mark.parametrize("section_name", ["resource_groups", "event_listeners"])
+async def test_the_refusal_is_the_state_and_not_only_the_transition(
+    pointed: Settings, pointing_kubernetes: FakeKubernetes, section_name: str
+) -> None:
+    """Pinned, because scoping this to the transition is the tempting mistake and it is unsafe.
+
+    Refusing only an Apply that *removes* the last resource looks kinder: an Apply touching
+    nothing but catalogs would stop being blocked by a Section nobody asked about. But
+    `files.by_secret` writes each Secret **whole**, so an Apply with this Section empty writes
+    an empty Secret, the mounted directory loses the file the deployment's pointer names, and
+    the next restart leaves a coordinator that cannot come back -- with Apchi having deleted
+    the Admin's own seeded file on the way past.
+
+    So an empty Section is refused whether or not this Apply is what emptied it. The test
+    that caught the mistake was in tier 2, because only a real Cluster runs an Apply in this
+    mode; this is the cheap guard that keeps it caught.
+    """
+    section = next(s for s in REGISTERED if s.name == section_name)
+
+    # No removal in the plan: nothing was there to remove. Still refused.
+    failures = await section.check(_cluster(pointed, pointing_kubernetes), {}, section.plan({}, {}))
+
+    assert [f.section for f in failures] == [section_name]
 
 
 @pytest.mark.parametrize("section_name", ["resource_groups", "event_listeners"])
@@ -358,16 +394,14 @@ async def test_an_empty_section_passes_validation_in_the_default_mode(
     settings: Settings, fake_kubernetes: FakeKubernetes, section_name: str
 ) -> None:
     """Where Apchi mounts the files itself, an empty Section is the ordinary case -- the first
-    Apply of a fresh Cluster has every Section empty."""
-    from app.sections.admin import AdminValues
-    from app.sections.base import Cluster
-
+    Apply of a fresh Cluster has every Section empty, and emptying one is how an Operator
+    turns it off."""
     section = next(s for s in REGISTERED if s.name == section_name)
-    cluster = Cluster(
-        trino=Trino(host="127.0.0.1", port=1),
-        kubernetes=fake_kubernetes,
-        settings=settings,
-        admin=AdminValues(),
-    )
 
-    assert await section.check(cluster, {}, section.plan({}, {})) == []
+    assert await section.check(_cluster(settings, fake_kubernetes), {}, section.plan({}, {})) == []
+    assert (
+        await section.check(
+            _cluster(settings, fake_kubernetes), {}, section.plan({}, HELD[section_name])
+        )
+        == []
+    )

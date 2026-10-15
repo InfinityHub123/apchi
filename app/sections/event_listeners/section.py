@@ -334,7 +334,22 @@ class EventListenersSection:
     ) -> list[ValidationFailure]:
         """The net under `refuse_if_emptying`, for the ways this Section empties that do not
         go through a DELETE: a Section Revert to an empty Snapshot, and a whole-document
-        import (#125)."""
+        import (#125).
+
+        The **state**, not the transition, and that distinction was got wrong once. Scoping it
+        to the transition looks kinder -- an Apply that touches only catalogs would stop being
+        blocked by a Section nobody asked about -- but it is unsafe: `files.by_secret` writes
+        each Secret whole, so an Apply with this Section empty writes an empty Secret, the
+        mounted directory loses the file `event-listener.config-files` names, and the next
+        restart leaves a coordinator that cannot come back. Apchi would have deleted the
+        Admin's own seeded file on its way past.
+
+        There is also no legitimate state this blocks. Trino will not start at all unless that
+        file already exists (§16), so a *running* Cluster in this mode always has a listener --
+        and a Candidate that does not is a Cluster waiting to be adopted (§15), not a Cluster
+        with no listener. The way out is to configure one or to take the pointer out of the
+        deployment, and the message says both.
+        """
         if cluster.settings.event_listener_config_files_from_deployment and not desired:
             return [ValidationFailure(section=SECTION, reason=CANNOT_EMPTY)]
         return []

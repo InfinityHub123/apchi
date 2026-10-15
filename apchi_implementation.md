@@ -1429,11 +1429,32 @@ thing it is probing starts cleanly having validated nothing. So that one file re
 Cluster unvalidated, and if it is broken the Cluster fails and Auto Rollback puts it back —
 the same contract, one stage later. Apchi logs a warning saying so when an Admin writes it.
 
-**Not every remaining path is reachable**, and that is a property of the deployment rather
-than a decision here. Apchi delivers a single file by mounting it (§16), and precondition 6
-already refuses a single-file mount whose parent is covered by a whole-directory mount. A
-deployment that mounts `/etc/trino` as one volume therefore cannot receive raw files there, and
-Apchi says so before applying rather than after.
+**On a whole-directory deployment, raw files do not work at all.** This is the one §14
+capability that does not reach both deployment shapes (§16), and it is structural rather than
+unfinished.
+
+A raw file's path is the Admin's to choose — that is the feature — which makes it a
+single-file mount by nature. There is no directory to move it into without taking away the
+thing being asked for, which is what separates this from Resource Groups and Event Listeners,
+whose paths Apchi knows in advance. So on a deployment that mounts `/etc/trino` as one volume,
+**every** raw path is refused:
+
+| | |
+|---|---|
+| file-by-file (`deploy/trino-dev`) | every path under `/etc/trino` works |
+| whole directory (official chart) | every path refused, at write time |
+
+Refused when the Admin writes the file rather than during the Apply, because somebody reaching
+for this is usually mid-incident and a refusal that arrives minutes later costs them the thing
+they were fixing. The message names the mount that covers the path and the chart values to use
+instead.
+
+`config.properties` is the sharpest case and cannot work there even in principle: on such a
+deployment that file *is* the chart's own ConfigMap, so there is nothing for Apchi to replace.
+An Admin there sets what they need through the chart — `additionalConfigProperties` on the
+official one — which is the same capability by a different route, and the route that
+deployment already provides. `docs/official-trino-chart.md` says so where an Admin will be
+looking.
 
 ## Maintenance Mode
 
@@ -1575,6 +1596,21 @@ rules"*. A no-op would therefore mean a catch-all root group, and `hardConcurren
 `maxQueued` are required integers with no "unlimited", so Apchi would be inventing a
 concurrency policy on the Operator's behalf. Event Listeners have no no-op at all: `http`,
 `mysql` and `kafka` each need a real sink.
+
+**And it is the Section's state, not just the change.** An Apply is refused while either
+Section is empty, whether or not this Apply is what emptied it — so on such a deployment both
+must be populated before *any* Apply succeeds, including one that touches only catalogs.
+
+That is sharper than it first looks, and the reason is delivery rather than policy:
+`files.by_secret` writes each Secret **whole**, so an Apply with one of these Sections empty
+writes an empty Secret, the mounted directory loses the file the pointer names, and the next
+restart leaves a coordinator that cannot come back — with Apchi having deleted the Admin's own
+file on the way past. Refusing only the *transition* to empty was tried and is unsafe for
+exactly that reason.
+
+No legitimate state is blocked by it. Trino will not start unless those files already exist,
+so a **running** Cluster in this mode always has rules and a listener; a Candidate that has
+neither is a Cluster waiting to be adopted (§15), not a Cluster with nothing configured.
 
 **The same constraint applies at install, not only later.** Trino validates every path property
 at startup, so on such a deployment the Secrets those pointers name must already hold a file
