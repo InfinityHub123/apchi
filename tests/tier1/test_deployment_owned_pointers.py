@@ -18,6 +18,7 @@ is about. The pointer is always there, so the file it names has to be too -- and
 removed it would leave a coordinator that cannot come back.
 """
 
+import json
 from collections.abc import AsyncIterator
 
 import pytest
@@ -270,22 +271,52 @@ async def test_the_pointers_are_not_demanded_in_the_default_mode(
 # --- the cost: the Sections can no longer be emptied --------------------------------------
 
 
-async def test_removing_the_last_resource_group_is_refused(pointed_client: AsyncClient) -> None:
-    """The pointer always names a rules file and Trino refuses to start when a file it was
-    told to read is missing, so this would leave a coordinator that cannot come back.
+async def test_removing_the_last_resource_group_renders_trinos_own_fallback(
+    pointed_client: AsyncClient, pointed: Settings
+) -> None:
+    """Emptying this Section is allowed here, and that took reading Trino to establish.
 
-    Refused at request time rather than only at Apply because the Candidate is shared: an
-    empty Section that only Validation catches blocks everyone's Apply until somebody works
-    out whose edit did it (ADR-0002).
+    `InternalResourceGroupManager` returns early when `etc/resource-groups.properties` is
+    absent, leaving `LegacyResourceGroupConfigurationManager` in force -- which matches every
+    query into a group called `global` at `query.max-concurrent-queries` and
+    `query.max-queued-queries`. So "no resource groups" has never meant "no limits" in Trino;
+    it means those two numbers.
+
+    Where Apchi owns the mounts it expresses "none" by removing them and Trino falls back on
+    its own. Here it cannot remove them, so it writes the fallback out -- and the two
+    deployment shapes end up behaving identically, which is the point.
     """
-    created = await pointed_client.post(GROUPS, json=GROUP)
-    assert created.status_code in (200, 201), created.text
+    assert (await pointed_client.post(GROUPS, json=GROUP)).status_code == 201
 
-    refused = await pointed_client.delete(f"{GROUPS}/global")
+    removed = await pointed_client.delete(f"{GROUPS}/global")
 
-    assert refused.status_code == 409, refused.text
-    assert "resource-groups.config-file" in refused.json()["message"]
-    assert (await pointed_client.get(GROUPS)).json() != []
+    assert removed.status_code == 204, removed.text
+    assert (await pointed_client.get(GROUPS)).json() == [], "the Candidate should be empty"
+
+    section = next(s for s in REGISTERED if s.name == "resource_groups")
+    from app.sections.admin import AdminValues
+
+    rendered = section.render_files({}, pointed, AdminValues())
+    document = json.loads(rendered[RULES_IN_DIR])
+    assert document == {
+        "rootGroups": [{"name": "global", "hardConcurrencyLimit": 1000, "maxQueued": 5000}],
+        "selectors": [{"group": "global"}],
+    }, "an empty Section must render exactly what an absent file does"
+
+
+async def test_the_fallback_carries_a_selector_because_groups_alone_reject_everything(
+    pointed: Settings,
+) -> None:
+    """The half that is easy to get wrong. The legacy manager matches every query itself
+    rather than consulting selectors, so reproducing it needs a catch-all selector -- a
+    document with groups and none rejects every query with "No matching resource group found
+    with the configured selection rules", reproduced against a running coordinator."""
+    section = next(s for s in REGISTERED if s.name == "resource_groups")
+    from app.sections.admin import AdminValues
+
+    document = json.loads(section.render_files({}, pointed, AdminValues())[RULES_IN_DIR])
+
+    assert document["selectors"] == [{"group": "global"}]
 
 
 async def test_removing_a_resource_group_that_is_not_the_last_is_allowed(
@@ -346,31 +377,29 @@ def _cluster(settings: Settings, kubernetes: FakeKubernetes) -> object:
     )
 
 
-@pytest.mark.parametrize("section_name", ["resource_groups", "event_listeners"])
-async def test_an_empty_section_fails_validation_however_it_got_empty(
-    pointed: Settings, pointing_kubernetes: FakeKubernetes, section_name: str
+async def test_emptying_event_listeners_fails_validation_however_it_got_empty(
+    pointed: Settings, pointing_kubernetes: FakeKubernetes
 ) -> None:
     """The DELETE refusal is not the only way in. A Section Revert to an empty Snapshot and a
     whole-document import both reach the Candidate without passing through it, so the rule is
     enforced at Apply time as well -- otherwise either path would produce a Cluster that
     cannot restart."""
-    section = next(s for s in REGISTERED if s.name == section_name)
+    section = next(s for s in REGISTERED if s.name == "event_listeners")
 
     failures = await section.check(
-        _cluster(pointed, pointing_kubernetes), {}, section.plan({}, HELD[section_name])
+        _cluster(pointed, pointing_kubernetes), {}, section.plan({}, HELD["event_listeners"])
     )
 
-    assert [f.section for f in failures] == [section_name]
+    assert [f.section for f in failures] == ["event_listeners"]
     assert "refuses to start" in failures[0].reason
 
 
-@pytest.mark.parametrize("section_name", ["resource_groups", "event_listeners"])
-async def test_the_refusal_is_the_state_and_not_only_the_transition(
-    pointed: Settings, pointing_kubernetes: FakeKubernetes, section_name: str
+async def test_the_listener_refusal_is_the_state_and_not_only_the_transition(
+    pointed: Settings, pointing_kubernetes: FakeKubernetes
 ) -> None:
     """Pinned, because scoping this to the transition is the tempting mistake and it is unsafe.
 
-    Refusing only an Apply that *removes* the last resource looks kinder: an Apply touching
+    Refusing only an Apply that *removes* the last listener looks kinder: an Apply touching
     nothing but catalogs would stop being blocked by a Section nobody asked about. But
     `files.by_secret` writes each Secret **whole**, so an Apply with this Section empty writes
     an empty Secret, the mounted directory loses the file the deployment's pointer names, and
@@ -381,12 +410,12 @@ async def test_the_refusal_is_the_state_and_not_only_the_transition(
     that caught the mistake was in tier 2, because only a real Cluster runs an Apply in this
     mode; this is the cheap guard that keeps it caught.
     """
-    section = next(s for s in REGISTERED if s.name == section_name)
+    section = next(s for s in REGISTERED if s.name == "event_listeners")
 
     # No removal in the plan: nothing was there to remove. Still refused.
     failures = await section.check(_cluster(pointed, pointing_kubernetes), {}, section.plan({}, {}))
 
-    assert [f.section for f in failures] == [section_name]
+    assert [f.section for f in failures] == ["event_listeners"]
 
 
 @pytest.mark.parametrize("section_name", ["resource_groups", "event_listeners"])

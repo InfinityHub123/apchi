@@ -12,7 +12,6 @@ from app.api.deps import (
     CandidateStoreDep,
     ClusterDep,
     OperatorMutationAllowed,
-    SettingsDep,
     SnapshotStoreDep,
 )
 from app.pipeline.recovery import RevertEffect, RevertRequest, section_revert
@@ -126,18 +125,17 @@ async def edit_resource_group(
     summary="Remove a resource group",
     dependencies=[OperatorMutationAllowed],
 )
-async def delete_resource_group(path: str, store: CandidateStoreDep, settings: SettingsDep) -> None:
+async def delete_resource_group(path: str, store: CandidateStoreDep) -> None:
     """Refused while it still has subgroups: deleting a parent would take its whole subtree
     with it, and an Operator should do that deliberately.
 
-    Also refused when it would empty the Section and this Cluster's deployment provides the
-    properties file -- that pointer always names a rules file, and Trino will not start
-    without the file it names (#125).
+    Removing the last group is allowed on every deployment shape. Where Apchi owns the mounts
+    it takes them away and Trino falls back to its legacy manager; where the deployment owns
+    the pointer Apchi writes that fallback out instead (#125). Either way the Cluster ends up
+    behaving the same, so there is nothing here to refuse.
     """
     candidate = await store.load()
-    groups = candidate.resources(GROUPS)
-    section.delete_group(groups, path)
-    section.refuse_if_emptying(groups, settings)
+    section.delete_group(candidate.resources(GROUPS), path)
     await store.save(candidate)
 
 
