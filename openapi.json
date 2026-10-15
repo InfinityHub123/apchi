@@ -7797,7 +7797,7 @@
     },
     "/api/v1/resource-groups/{path}": {
       "delete": {
-        "description": "Refused while it still has subgroups: deleting a parent would take its whole subtree\nwith it, and an Operator should do that deliberately.\n\nAlso refused when it would empty the Section and this Cluster's deployment provides the\nproperties file -- that pointer always names a rules file, and Trino will not start\nwithout the file it names (#125).",
+        "description": "Refused while it still has subgroups: deleting a parent would take its whole subtree\nwith it, and an Operator should do that deliberately.\n\nRemoving the last group is allowed on every deployment shape. Where Apchi owns the mounts\nit takes them away and Trino falls back to its legacy manager; where the deployment owns\nthe pointer Apchi writes that fallback out instead (#125). Either way the Cluster ends up\nbehaving the same, so there is nothing here to refuse.",
         "operationId": "delete_resource_group_api_v1_resource_groups__path__delete",
         "parameters": [
           {

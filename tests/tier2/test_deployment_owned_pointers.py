@@ -357,26 +357,51 @@ async def test_trino_reads_the_rules_from_the_directory_the_deployment_pointed_a
     )
 
 
-async def test_emptying_resource_groups_is_refused_on_this_deployment(
-    pointed_client: AsyncClient,
+async def test_emptying_resource_groups_leaves_a_cluster_that_still_serves(
+    pointed_client: AsyncClient, forward: PortForward
 ) -> None:
-    """The cost of the mode, against the cluster that pays it.
+    """The assertion only a real coordinator can make about the fallback.
 
-    The deployment's properties file always names a rules file, and Trino refuses to start
-    when a file it was told to read is missing -- so removing the last group would leave a
-    coordinator that cannot come back. Asserted here as well as in tier 1 because the premise
-    is a property of this cluster rather than of Apchi.
+    Emptying this Section renders what Trino does with no `resource-groups.properties` at all:
+    one catch-all group called `global` at `query.max-concurrent-queries` /
+    `query.max-queued-queries`. Tier 1 checks the document; what it cannot check is that Trino
+    accepts it and keeps serving -- and the failure mode if the selector were missing is not a
+    startup error but every query rejected at runtime, which is exactly the shape a fake
+    cannot catch.
+
+    Both Sections are staged first because both are mandatory here, then the groups are taken
+    away, which is the transition under test.
     """
-    await pointed_client.post(GROUPS, json=GROUP)
+    assert (await pointed_client.post(GROUPS, json=GROUP)).status_code == 201
+    assert (await pointed_client.put(f"{GROUPS}/selectors", json=SELECTORS)).status_code == 200
+    assert (await pointed_client.post(LISTENERS, json=LISTENER)).status_code == 201
+    first = await _apply(pointed_client)
+    assert first["stage"] == "succeeded", first
 
-    refused = await pointed_client.delete(f"{GROUPS}/global")
+    assert (
+        await pointed_client.put(f"{GROUPS}/selectors", json={"selectors": []})
+    ).status_code == 200
+    assert (await pointed_client.delete(f"{GROUPS}/global")).status_code == 204
+    record = await _apply(pointed_client)
 
-    assert refused.status_code == 409, refused.text
-    assert "resource-groups.config-file" in refused.json()["message"]
-    # And the pointer really is what the message blames, on this cluster.
-    assert MANAGER_FROM_DEPLOYMENT.strip() in kubectl(
-        "exec", "deploy/trino-coordinator", "--", "cat", MANAGER_PATH
+    assert record["stage"] == "succeeded", record
+    delivered = json.loads(kubectl("exec", "deploy/trino-coordinator", "--", "cat", RULES_IN_DIR))
+    assert delivered == {
+        "rootGroups": [{"name": "global", "hardConcurrencyLimit": 1000, "maxQueued": 5000}],
+        "selectors": [{"group": "global"}],
+    }, "the fallback Apchi wrote is not what an absent file does"
+
+    # The part that matters: queries still run, and land in the fallback group.
+    forward.restart()
+    trino = Trino(host="127.0.0.1", port=forward.port, user="apchi")
+    assert await trino.query("SELECT 1") == [[1]]
+    groups = await trino.query(
+        "SELECT DISTINCT resource_group_id FROM system.runtime.queries "
+        "WHERE resource_group_id IS NOT NULL"
     )
+    # Trino reports the id as its path segments, so a root group called `global` comes back as
+    # the one-element array ["global"] rather than the string.
+    assert any(row[0] == ["global"] for row in groups), groups
 
 
 async def test_emptying_event_listeners_is_refused_on_this_deployment(

@@ -39,7 +39,6 @@ from app.sections.resource_groups.generator import (
     Unreadable,
     children_of,
     groups_of,
-    is_empty,
     parent_of,
     parse_rules,
     render,
@@ -112,31 +111,6 @@ def delete_group(stored: Resources, path: str) -> None:
             "Remove them first, or they would go with it."
         )
     del stored[path]
-
-
-#: Why emptying this Section is refused when the deployment owns the pointer, in one place
-#: so the request-time refusal and the Apply-time one cannot drift apart.
-CANNOT_EMPTY = (
-    f"This Cluster's deployment provides {MANAGER_PATH}, which always names a resource "
-    "groups file, and Trino refuses to start when a file it was told to read is missing. "
-    "Removing the last resource group would leave a coordinator that cannot come back. "
-    f"Remove resource-groups.config-file from {MANAGER_PATH} first, or keep at least one "
-    "group."
-)
-
-
-def refuse_if_emptying(stored: Resources, settings: Settings) -> None:
-    """Refuse a change that would leave this Section with nothing, in that mode only.
-
-    At request time rather than only at Apply, because the Candidate is shared: an empty
-    Section that only Validation catches blocks everyone's Apply until somebody works out
-    whose edit did it (ADR-0002). `check` enforces the same rule for the paths that do not
-    come through here -- a Section Revert, and a whole-document import.
-    """
-    if not settings.resource_groups_properties_from_deployment:
-        return
-    if is_empty(stored):
-        raise Conflict(CANNOT_EMPTY)
 
 
 def get_settings(stored: Resources) -> ResourceGroupSettings:
@@ -355,27 +329,6 @@ class ResourceGroupsSection:
         groups = groups_of(desired)
         paths = sorted(groups)
         failures: list[ValidationFailure] = []
-
-        # The net under `refuse_if_emptying`, for the ways a Section empties that do not go
-        # through a DELETE: a Section Revert to an empty Snapshot, and a whole-document
-        # import. Refused here rather than rendered as something harmless, because there is
-        # no harmless rendering -- an empty rules file makes Trino reject every query that
-        # matches no selector, and inventing a catch-all group would mean inventing a
-        # concurrency limit on the Operator's behalf (#125).
-        #
-        # The **state**, not the transition, and that distinction was got wrong once. Scoping
-        # it to the transition looks kinder -- an Apply touching only catalogs would stop
-        # being blocked by a Section nobody asked about -- but it is unsafe: `by_secret`
-        # writes each Secret whole, so an Apply with this Section empty writes an empty
-        # Secret, the mounted directory loses the file `resource-groups.config-file` names,
-        # and the next restart leaves a coordinator that cannot come back. Apchi would have
-        # deleted the Admin's own seeded file on its way past.
-        #
-        # Nor does it block a legitimate state: Trino will not start unless that file exists
-        # (§16), so a running Cluster in this mode always has rules, and a Candidate that
-        # does not is one waiting to be adopted (§15).
-        if cluster.settings.resource_groups_properties_from_deployment and is_empty(desired):
-            failures.append(ValidationFailure(section=SECTION, reason=CANNOT_EMPTY))
 
         # Trino refuses to start on this rather than ignoring it, so catching it here turns
         # a coordinator that will not come back into a Candidate that will not be applied.

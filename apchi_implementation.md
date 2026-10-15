@@ -1213,9 +1213,31 @@ the content.
 **Unless the deployment owns the pointer** (§16). A deployment that mounts the whole of
 `/etc/trino` cannot accept either single-file mount, so there the Admin provides
 `resource-groups.properties` and Apchi writes only the rules, into
-`/etc/trino/resource-groups/` — the path the official `trino/trino` chart already uses. Apchi
-no longer owns the switch then, so it can no longer turn the Section off: emptying it is
-refused rather than producing a coordinator that will not restart.
+`/etc/trino/resource-groups/` — the path the official `trino/trino` chart already uses.
+
+Apchi no longer owns the switch then, so "none configured" cannot be the absence of the
+mounts. It writes out what the absence *means* instead, and that is not a value Apchi chose.
+Read from the 483 source: `InternalResourceGroupManager.loadConfigurationManager()` returns
+early when the file does not exist, leaving `LegacyResourceGroupConfigurationManager` in
+force — whose `match()` returns `ResourceGroupId("global")` for **every** query, and whose
+`configure()` sets `hardConcurrencyLimit` from `query.max-concurrent-queries` (default 1000)
+and `maxQueued` from `query.max-queued-queries` (default 5000), both `@Deprecated`.
+
+So an empty Section renders exactly that: one catch-all root group named `global` at
+1000/5000, with a catch-all selector. The selector is not optional — the legacy manager
+matches queries itself rather than consulting selectors, and a document with groups and none
+rejects every query with *"No matching resource group found with the configured selection
+rules"*, verified against a running coordinator. Both deployment shapes therefore behave
+identically when an Operator empties this Section.
+
+The Admin's own `query.max-concurrent-queries` and `query.max-queued-queries` are not read
+when rendering that fallback. Both are deprecated and rarely set, and being wrong costs a
+concurrency ceiling rather than an outage.
+
+**"No resource groups" has never meant "no limits" in Trino**, which is worth stating because
+it is easy to assume otherwise. A Cluster with no rules file still runs under the legacy
+manager's 1000 concurrent and 5000 queued. Emptying this Section — on either deployment shape
+— therefore returns the Cluster to those numbers rather than removing all governance.
 
 **What Validation catches that a request cannot.** Two rules span the whole Candidate rather
 than one resource, so they are checked at Validate: a selector naming a group that does not
@@ -1582,24 +1604,29 @@ really names the directory Apchi fills.** An Admin who turns the mode on and for
 property gets a Section that writes files nobody reads — the Apply succeeds, the Secret is
 correct, and the Cluster behaves as if the Section were empty.
 
-**What it costs: those two Sections can no longer be emptied in that mode.** The pointer is
+**What it costs: Event Listeners can no longer be emptied in that mode.** The pointer is
 always present, so the file it names has to be, and Trino refuses to start when a file it was
 told to read is missing. Emptying is therefore refused — at request time, because the Candidate
 is shared and an empty Section caught only by Validation blocks everyone's Apply
 ([ADR-0002](./docs/adr/0002-configuration-candidate.md)), and again during Validation for the
 paths that do not go through a delete: a Section Revert, and a whole-document import.
 
-Nothing harmless is rendered in place of empty, and the reason differs per Section. An empty
-resource groups document makes Trino reject every query matching no selector — verified against
-a running coordinator: *"No matching resource group found with the configured selection
-rules"*. A no-op would therefore mean a catch-all root group, and `hardConcurrencyLimit` and
-`maxQueued` are required integers with no "unlimited", so Apchi would be inventing a
-concurrency policy on the Operator's behalf. Event Listeners have no no-op at all: `http`,
-`mysql` and `kafka` each need a real sink.
+Resource Groups is **not** refused, because Trino supplies the answer. An absent rules file
+leaves the legacy manager in force — a catch-all group at `query.max-concurrent-queries` and
+`query.max-queued-queries` — so an empty Section renders that document and both deployment
+shapes behave the same (§13.5). Event Listeners has no equivalent: Trino ships no listener
+that does nothing, so there is nothing to render in place of none.
 
-**And it is the Section's state, not just the change.** An Apply is refused while either
-Section is empty, whether or not this Apply is what emptied it — so on such a deployment both
-must be populated before *any* Apply succeeds, including one that touches only catalogs.
+Note what the fallback is **not**: an empty document. A rules file with no selectors rejects
+every query — verified against a running coordinator: *"No matching resource group found with
+the configured selection rules"*. Reproducing the legacy manager needs a catch-all group *and*
+a catch-all selector, because that manager matches every query itself rather than consulting
+selectors at all.
+
+**And it is the Section's state, not just the change.** An Apply is refused while Event
+Listeners is empty, whether or not this Apply is what emptied it — so on such a deployment a
+listener must be configured before *any* Apply succeeds, including one that touches only
+catalogs.
 
 That is sharper than it first looks, and the reason is delivery rather than policy:
 `files.by_secret` writes each Secret **whole**, so an Apply with one of these Sections empty

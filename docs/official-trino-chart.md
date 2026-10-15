@@ -154,24 +154,46 @@ writing files nobody reads looks applied and does nothing, which is worse.
 
 ## What this costs
 
-**Resource Groups and Event Listeners can no longer be emptied.** Each pointer always names a
-file, and Trino refuses to start when a file it was told to read is missing — so removing the
-last resource group or the last listener would leave a coordinator that cannot come back.
-Apchi refuses the delete and names the pointer to remove first.
+**Event Listeners cannot be emptied.** The pointer always names a file and Trino refuses to
+start when a file it was told to read is missing, so removing the last listener would leave a
+coordinator that cannot come back. Trino ships no listener that does nothing — `http`, `mysql`
+and `kafka` each need a real sink — so there is nothing to render in its place and Apchi
+refuses the delete, naming the pointer to remove first.
 
-**Both must be populated before any Apply succeeds**, including an Apply that only adds a
-catalog. Apchi writes each Secret whole, so an Apply with one of these Sections empty would
-write an empty Secret over the file the pointer names and the next restart would not come
-back. Since Trino cannot start without those files in the first place, a running cluster here
-always has both — adopt them into the Candidate (§15) rather than leaving them unmodelled.
+**It must be populated before any Apply succeeds**, including an Apply that only adds a
+catalog. Apchi writes each Secret whole, so an Apply with that Section empty would write an
+empty Secret over the file the pointer names and the next restart would not come back. Since
+Trino cannot start without that file in the first place, a running cluster here always has a
+listener — adopt it into the Candidate (§15) rather than leaving it unmodelled.
 
-Nothing harmless is rendered instead, and the reason differs. An empty resource groups
-document makes Trino reject every query matching no selector, so a no-op would need a
-catch-all root group — and `hardConcurrencyLimit` and `maxQueued` are required integers with
-no "unlimited", so Apchi would be choosing a concurrency policy for you. Event Listeners have
-no no-op at all: `http`, `mysql` and `kafka` each need a real sink.
+**Resource Groups can be emptied, and behaves exactly as it does elsewhere.** Trino supplies
+the answer here: when `etc/resource-groups.properties` is absent,
+`InternalResourceGroupManager` returns early and `LegacyResourceGroupConfigurationManager`
+stays in force — matching every query into a group called `global` at
+`query.max-concurrent-queries` (default 1000) and `query.max-queued-queries` (default 5000).
 
-On `charts/trino` neither limit applies, because Apchi owns those mounts there.
+So an empty Section renders precisely that, catch-all selector included:
+
+```json
+{"rootGroups": [{"name": "global", "hardConcurrencyLimit": 1000, "maxQueued": 5000}],
+ "selectors": [{"group": "global"}]}
+```
+
+The selector is not decoration. The legacy manager matches queries itself rather than
+consulting selectors, and a document with groups and none rejects every query with
+`No matching resource group found with the configured selection rules`.
+
+Worth knowing either way: **"no resource groups" has never meant "no limits" in Trino.** A
+cluster with no rules file still runs under 1000 concurrent and 5000 queued, so emptying this
+Section returns you to those numbers rather than removing all governance.
+
+Apchi does not read your `query.max-concurrent-queries` / `query.max-queued-queries` when
+rendering that fallback — both are deprecated and rarely set, and being wrong costs a
+concurrency ceiling rather than an outage. Set the limits you want as a real resource group if
+you have tuned them.
+
+On `charts/trino` the Event Listeners limit does not apply, because Apchi owns that mount
+there.
 
 **Admin raw files do not work** (§14, [#161](https://github.com/InfinityHub123/apchi/issues/161)).
 Their path is the Admin's to choose, which makes them single-file mounts by nature, so every
