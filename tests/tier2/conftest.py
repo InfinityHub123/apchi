@@ -505,6 +505,16 @@ def _restore_baseline(settings: Settings) -> None:
         )
 
 
+#: Divergence from the manifests immediately after the session's baseline restore. See
+#: `baseline`, and `test_baseline.py` for the assertion that reads it.
+_AT_SESSION_START: list[str] = []
+
+
+def divergence_at_session_start() -> list[str]:
+    """How the cluster differed from the manifests once the session had set it up."""
+    return list(_AT_SESSION_START)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def baseline(cluster: None) -> None:
     """Put the cluster into a known state once, before any test runs.
@@ -526,6 +536,14 @@ def baseline(cluster: None) -> None:
     if problems := _divergence(settings):
         logger.warning("tier 2 cluster is not at baseline: %s", ", ".join(problems))
         _restore_baseline(settings)
+    # Recorded, because "the suite starts from what the manifests ship" is a property of this
+    # moment and of nothing later. The per-test reset restores each Secret to how it found it
+    # at setup, not to the manifest, so a test that changes one leaves it changed for the rest
+    # of the shard -- and a test asserting live divergence passes or fails on which files
+    # happen to share its shard. That is how this broke: adding a tier 2 file shifted the
+    # positional shards and put the assertion after something that moves the catalog seed.
+    _AT_SESSION_START.clear()
+    _AT_SESSION_START.extend(_divergence(settings))
 
 
 @pytest.fixture(scope="session")

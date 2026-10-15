@@ -15,6 +15,7 @@ from tests.tier2.conftest import (
     CATALOG_SEED_SECRET,
     _divergence,
     _restore_baseline,
+    divergence_at_session_start,
     kubectl,
     manifest_secrets,
 )
@@ -34,8 +35,17 @@ def test_the_manifests_are_the_baseline(settings: Settings) -> None:
 
 
 def test_the_suite_starts_from_what_the_manifests_ship(settings: Settings) -> None:
-    """Whatever the last run did, this one begins here."""
-    assert _divergence(settings) == []
+    """Whatever the last run did, this one begins here.
+
+    Asserted against the divergence recorded at session start rather than against the cluster
+    as it stands now. The per-test reset restores each Secret to how it found it at setup, not
+    to the manifest, so a test that changes one leaves it changed for the rest of its shard --
+    and reading live state here made this pass or fail on which files happened to share the
+    shard. It failed the day a new tier 2 file shifted the positional sharding.
+    """
+    del settings  # the recorded answer was computed with the session's own Settings
+
+    assert divergence_at_session_start() == []
 
 
 async def test_a_clean_cluster_is_left_alone(
