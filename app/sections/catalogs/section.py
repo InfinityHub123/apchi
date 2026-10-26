@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.adapters.trino import Trino
-from app.api.errors import NameAlreadyTaken, NotFound, UnprocessablePayload
+from app.api.errors import NameAlreadyTaken, NotFound, UnknownConnector, UnprocessablePayload
 from app.config import Settings
 from app.sections import SectionName
 from app.sections.admin import AdminValues
@@ -118,7 +118,11 @@ async def refuse_unknown_connector(trino: Trino, connector: str) -> None:
     """
     problem = unknown_connector_problem(connector, await trino.connector_factories())
     if problem is not None:
-        raise UnprocessablePayload(
+        # `unknown_connector`, not the generic payload code. §19 makes the code the thing
+        # clients branch on, and this is the one refusal here with a specific remedy -- a
+        # form can offer the suggestion, where for a bad property it can only show the
+        # message. The code already existed and nothing raised it.
+        raise UnknownConnector(
             problem,
             details=[{"property": "connector", "problem": "not a connector on this Cluster"}],
         )

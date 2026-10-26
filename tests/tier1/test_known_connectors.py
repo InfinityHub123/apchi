@@ -79,6 +79,10 @@ async def test_an_unknown_connector_is_refused(applying_client: AsyncClient) -> 
     body = response.json()
     assert "postgresqlaa" in body["message"]
     assert "Did you mean 'postgresql'?" in body["message"]
+    # Its own code rather than the generic one. §19 makes the code what clients branch on,
+    # and this refusal is the one here a client can act on by itself -- a form can offer the
+    # suggestion, where for a bad property it can only show the message.
+    assert body["code"] == "unknown_connector", body
 
 
 async def test_a_refused_connector_stages_nothing(applying_client: AsyncClient) -> None:
