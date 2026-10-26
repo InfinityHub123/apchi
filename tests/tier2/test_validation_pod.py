@@ -154,9 +154,20 @@ async def test_an_apply_validates_against_a_real_pod_and_cleans_it_up(
 async def test_a_catalog_trino_rejects_fails_the_apply_in_a_real_cluster(
     e2e_client: AsyncClient, forwarded_kubernetes: ForwardedKubernetes
 ) -> None:
-    """A real pod rejecting the configuration, and a Cluster left untouched."""
+    """A real pod rejecting the configuration, and a Cluster left untouched.
+
+    The configuration has to be one only Trino can judge. A connector that does not exist is
+    refused at request time now (#170), so this uses a real but uncurated connector with a
+    property nothing consumes -- which passes request-time validation and makes the probe
+    refuse to build the catalog.
+    """
     await e2e_client.post(
-        "/api/v1/catalogs", json={"name": "imaginary", "connector": "nosuchconnector"}
+        "/api/v1/catalogs",
+        json={
+            "name": "imaginary",
+            "connector": "memory",
+            "properties": {"no-such-property": "1"},
+        },
     )
 
     started = await e2e_client.post("/api/v1/applies")
