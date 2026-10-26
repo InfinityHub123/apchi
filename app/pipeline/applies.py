@@ -11,7 +11,7 @@ reconnecting mid-Apply replays what it missed instead of seeing a blank timeline
 import asyncio
 import logging
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
@@ -34,6 +34,7 @@ from app.audit.events import Action, AuditStore, Category, Outcome
 from app.auth.identity import Identity
 from app.logging import apply_id_var
 from app.pipeline.auto_rollback import INCIDENT_MESSAGE
+from app.sections.base import ValidationFailure
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +119,16 @@ class ApplyRecord(BaseModel):
     operator_message: str | None = Field(
         default=None,
         description="What to show an Operator. Set when an Apply ends in an incident.",
+    )
+    warnings: list[ValidationFailure] = Field(
+        default_factory=list,
+        description=(
+            "What Validation found worth saying and not worth refusing over. An Apply that "
+            "succeeded with warnings succeeded: these are reported so an Operator can see "
+            "them next to the Apply that carried them, rather than having to run a separate "
+            "Validation to find out. A Catalog the probe could not connect to is the one "
+            "case today (§6)."
+        ),
     )
     base_snapshot: int | None = None
     snapshot: int | None = Field(
@@ -214,6 +225,14 @@ class ApplyStore:
     async def record_snapshot(self, apply_id: str, number: int) -> None:
         await self._collection.update_one({"_id": apply_id}, {"$set": {"snapshot": number}})
 
+    async def record_warnings(self, apply_id: str, warnings: Sequence[ValidationFailure]) -> None:
+        """What Validation found worth saying. Written even when empty, which is almost
+        always: a field that is sometimes absent is one a client has to special-case."""
+        await self._collection.update_one(
+            {"_id": apply_id},
+            {"$set": {"warnings": [warning.model_dump(mode="json") for warning in warnings]}},
+        )
+
     async def fail(self, apply_id: str, reason: str) -> None:
         await self._collection.update_one({"_id": apply_id}, {"$set": {"failure_reason": reason}})
         await self.advance(apply_id, Stage.FAILED, detail=reason)
@@ -249,6 +268,11 @@ class ApplyEngine(Protocol):
         has planned, which is before the stage that asks."""
         ...
 
+    def warnings(self) -> list[ValidationFailure]:
+        """What Validation found worth saying and not worth refusing over. Known once
+        Validation has run; empty before that, and empty most of the time after."""
+        ...
+
     async def roll_out(self) -> None:
         """Restart Trino and wait for it to come back."""
         ...
@@ -273,6 +297,9 @@ class NoOpEngine:
 
     def rollout_needed(self) -> bool:
         return False
+
+    def warnings(self) -> list[ValidationFailure]:
+        return []
 
     async def roll_out(self) -> None: ...
     async def roll_back(self) -> None: ...
@@ -375,6 +402,10 @@ class ApplyRunner:
                     await self._store.advance(apply_id, stage)
                 logger.info("apply stage", extra={"stage": stage.value})
                 result = await step()
+                if stage is Stage.VALIDATING:
+                    # Recorded here rather than at the end, so an Apply that fails a later
+                    # stage still carries what Validation found.
+                    await self._store.record_warnings(apply_id, engine.warnings())
                 if stage is Stage.COMMITTING and isinstance(result, int):
                     snapshot = result
             if snapshot is not None:

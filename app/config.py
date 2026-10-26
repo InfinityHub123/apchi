@@ -106,6 +106,16 @@ class Settings(BaseSettings):
     #: reused weeks later is a new request rather than a replay of a forgotten one.
     idempotency_hours: float = 24.0
 
+    #: Whether a Catalog the validation probe cannot connect to fails the Apply.
+    #:
+    #: Off, because the probe's network is not the coordinator's. §6 already warns that a
+    #: validation pod must reach the data sources a catalog references "or catalog validation
+    #: fails for reasons unrelated to the configuration" -- and a firewall between the probe
+    #: and a database would then block every Apply for a configuration that works. So the
+    #: default reports and the Operator decides. Turn it on where the two are known to share
+    #: a network and an unreachable catalog should stop a release.
+    catalog_connectivity_blocks_apply: bool = False
+
     mongo_uri: str = "mongodb://localhost:27017"
     mongo_database: str = "apchi"
 

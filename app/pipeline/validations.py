@@ -51,6 +51,17 @@ class ValidationRecord(BaseModel):
         default_factory=list,
         description="Every reason the Candidate should not be applied, not just the first.",
     )
+    warnings: list[ValidationFailure] = Field(
+        default_factory=list,
+        description=(
+            "Things worth knowing that did not stop the Apply. A Catalog the validation "
+            "coordinator could not connect to is the one case today: `CREATE CATALOG` "
+            "succeeds against a host that does not resolve, so this is the only stage that "
+            "would notice -- and the probe's network is not the coordinator's, so it "
+            "reports rather than refuses. `catalog_connectivity_blocks_apply` moves these "
+            "into `failures` on a deployment where the two are known to match."
+        ),
+    )
     base_snapshot: int | None = None
     started_at: datetime
     finished_at: datetime | None = None
@@ -108,7 +119,11 @@ class ValidationStore:
         )
 
     async def finish(
-        self, validation_id: str, outcome: Outcome, failures: Sequence[ValidationFailure]
+        self,
+        validation_id: str,
+        outcome: Outcome,
+        failures: Sequence[ValidationFailure],
+        warnings: Sequence[ValidationFailure] = (),
     ) -> None:
         await self._collection.update_one(
             {"_id": validation_id},
@@ -116,6 +131,7 @@ class ValidationStore:
                 "$set": {
                     "outcome": outcome.value,
                     "failures": [failure.model_dump(mode="json") for failure in failures],
+                    "warnings": [warning.model_dump(mode="json") for warning in warnings],
                     "finished_at": datetime.now(UTC).isoformat(),
                 }
             },
@@ -143,8 +159,9 @@ class ValidationRunner:
 
     async def _run(self, validation_id: str) -> None:
         token = apply_id_var.set(validation_id)
+        engine = self._engine_factory(validation_id)
         try:
-            await self._engine_factory(validation_id).validate()
+            await engine.validate()
         except ValidationFailed as exc:
             logger.info("validation failed", extra={"failures": len(exc.failures)})
             await self._store.finish(validation_id, Outcome.FAILED, exc.failures)
@@ -162,8 +179,12 @@ class ValidationRunner:
                 ],
             )
         else:
-            await self._store.finish(validation_id, Outcome.PASSED, [])
-            logger.info("validation passed")
+            # A Validation that passed with something to say still passed. The warnings ride
+            # on the record rather than changing the outcome, because an outcome a client has
+            # to interpret is one that will be interpreted wrongly somewhere.
+            warnings = engine.warnings()
+            await self._store.finish(validation_id, Outcome.PASSED, [], warnings)
+            logger.info("validation passed", extra={"warnings": len(warnings)})
         finally:
             apply_id_var.reset(token)
 

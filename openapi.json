@@ -303,6 +303,14 @@
             "format": "date-time",
             "title": "Started At",
             "type": "string"
+          },
+          "warnings": {
+            "description": "What Validation found worth saying and not worth refusing over. An Apply that succeeded with warnings succeeded: these are reported so an Operator can see them next to the Apply that carried them, rather than having to run a separate Validation to find out. A Catalog the probe could not connect to is the one case today (\u00a76).",
+            "items": {
+              "$ref": "#/components/schemas/ValidationFailure"
+            },
+            "title": "Warnings",
+            "type": "array"
           }
         },
         "required": [
@@ -2921,6 +2929,14 @@
             "format": "date-time",
             "title": "Started At",
             "type": "string"
+          },
+          "warnings": {
+            "description": "Things worth knowing that did not stop the Apply. A Catalog the validation coordinator could not connect to is the one case today: `CREATE CATALOG` succeeds against a host that does not resolve, so this is the only stage that would notice -- and the probe's network is not the coordinator's, so it reports rather than refuses. `catalog_connectivity_blocks_apply` moves these into `failures` on a deployment where the two are known to match.",
+            "items": {
+              "$ref": "#/components/schemas/ValidationFailure"
+            },
+            "title": "Warnings",
+            "type": "array"
           }
         },
         "required": [

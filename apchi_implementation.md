@@ -280,8 +280,55 @@ A Candidate with no catalogs gets no pod at all. The pod is the expensive part o
 and an empty Candidate is a real case: the first Apply of a fresh Cluster, and every Apply
 that only drops things.
 
-Note the limit honestly: some connectors initialise lazily, so a wrong JDBC URL can pass
-startup validation and only fail at query time.
+### Reachability: a catalog that loads is not a catalog that works
+
+`CREATE CATALOG` succeeding proves nothing about whether the catalog can reach anything.
+Verified against Trino 483 — a catalog pointed at a host that does not resolve is created
+without complaint:
+
+```
+CREATE CATALOG pg USING postgresql WITH (
+  "connection-url" = 'jdbc:postgresql://nosuchhost.invalid:5432/db', ...)
+  -> OK
+```
+
+This used to be recorded here as a limit to accept ("some connectors initialise lazily, so a
+wrong JDBC URL can pass startup validation and only fail at query time"). It is now checked.
+
+**The query has to be `SHOW SCHEMAS`.** A bare `SELECT 1` answers `1` and touches no catalog
+at all, so it proves nothing; `SHOW SCHEMAS FROM "<catalog>"` is what forces a connection:
+
+```
+SHOW SCHEMAS FROM "tpch"  -> OK, 10 rows, 0.1s
+SHOW SCHEMAS FROM "pg"    -> JDBC_ERROR: Error listing schemas for catalog pg:
+                             The connection attempt failed.
+```
+
+`SELECT 1 FROM <catalog>.information_schema.schemata LIMIT 1` gives the identical error.
+`SHOW SCHEMAS` is preferred for being shorter and for working on a connector that has no
+`information_schema`.
+
+**Advisory by default**, which follows from what this section already says two paragraphs up:
+the validation pod must reach the data sources a catalog references *"or catalog validation
+fails for reasons unrelated to the configuration"*. Both things are true at once — the check
+is worth running, and its verdict is not reliable enough to refuse an Apply on, because the
+probe's network is not the coordinator's. A firewall between the probe and a database would
+otherwise block every Apply for a configuration that works. So an unreachable Catalog arrives
+as a **warning** on the Validation and on the Apply, and `catalog_connectivity_blocks_apply`
+turns it into a failure where the two are known to share a network.
+
+A warning is a new thing for the pipeline to carry, and it is deliberately not a new outcome:
+a Validation that passed with something to say still **passed**. An outcome a client has to
+interpret is one that gets interpreted wrongly somewhere.
+
+**Bounded, because the slow case is slow.** Measured: 0.1s when it works, 0.1s on a DNS
+failure, and **20.1s on a blackholed host** — the JDBC connect timeout, which no Apchi setting
+reaches. Ten unreachable catalogs checked one after another is over three minutes added to
+every Apply, so the queries run four at a time with a 10s limit each.
+
+Reachability is asked **last**, and only if the `CREATE CATALOG` statements were all accepted.
+Asking about a catalog Trino refused to create would report it unreachable, which is true and
+useless: the Operator already has the real reason.
 
 # 7. Apply
 

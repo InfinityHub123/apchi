@@ -145,6 +145,8 @@ spec:
               value: {{ .Values.deployment.providesResourceGroupsProperties | quote }}
             - name: APCHI_EVENT_LISTENER_CONFIG_FILES_FROM_DEPLOYMENT
               value: {{ .Values.deployment.setsEventListenerConfigFiles | quote }}
+            - name: APCHI_CATALOG_CONNECTIVITY_BLOCKS_APPLY
+              value: {{ .Values.validation.catalogConnectivityBlocksApply | quote }}
             - name: APCHI_ROLLOUT_TIMEOUT_SECONDS
               value: {{ .Values.timeouts.rolloutSeconds | int64 | quote }}
             - name: APCHI_VALIDATION_TIMEOUT_SECONDS

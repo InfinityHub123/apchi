@@ -24,6 +24,7 @@ from typing import Any
 from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.config import Settings
+from app.pipeline.connectivity import unreachable
 from app.pipeline.files import probe_files
 from app.pipeline.references import missing_certificates
 from app.sections import SectionName
@@ -33,6 +34,7 @@ from app.sections.base import (
     SectionPlan,
     ValidationFailure,
 )
+from app.sections.catalogs import SECTION as CATALOGS
 from app.sections.registry import REGISTERED
 
 logger = logging.getLogger(__name__)
@@ -292,8 +294,12 @@ async def validate_candidate(
     plans: dict[SectionName, SectionPlan],
     cluster: Cluster,
     validation_id: str,
-) -> None:
+) -> list[ValidationFailure]:
     """Raises ValidationFailed if the Candidate should not be applied.
+
+    Returns what is worth saying but not worth refusing over. Today that is one thing: a
+    Catalog the probe could not connect to (§6). An empty list is the normal answer, and a
+    non-empty one does **not** mean the Candidate failed.
 
     Two phases, because one of them is expensive. Every Section's own checks run first,
     against the Cluster and the Candidate alone; only if some Section has something an
@@ -307,6 +313,7 @@ async def validate_candidate(
     inside either of them (§6).
     """
     failures: list[ValidationFailure] = []
+    warnings: list[ValidationFailure] = []
     for section in REGISTERED:
         desired = sections.get(section.name, {})
         failures.extend(await section.check(cluster, desired, plans[section.name]))
@@ -323,7 +330,7 @@ async def validate_candidate(
         # expensive part of Validation, and an empty Candidate is a real case: the first
         # Apply of a fresh Cluster, and every Apply that only drops things.
         logger.info("no Trino validation needed")
-        return
+        return warnings
 
     files: dict[str, str] = {}
     properties = dict(_PROBE_CONFIG)
@@ -377,7 +384,18 @@ async def validate_candidate(
             failures.extend(
                 await section.check_against_probe(probe, sections.get(section.name, {}))
             )
+        # Reachability last, and only if the statements were accepted. Asking a catalog that
+        # Trino refused to create would report it unreachable, which is true and useless --
+        # the Operator already has the real reason.
+        catalogs = sections.get(CATALOGS, {})
+        if catalogs and not failures:
+            unreached = await unreachable(probe, catalogs)
+            if cluster.settings.catalog_connectivity_blocks_apply:
+                failures.extend(unreached)
+            else:
+                warnings.extend(unreached)
 
     if failures:
         raise ValidationFailed(failures)
-    logger.info("validation passed", extra={"sections": len(probing)})
+    logger.info("validation passed", extra={"sections": len(probing), "warnings": len(warnings)})
+    return warnings
