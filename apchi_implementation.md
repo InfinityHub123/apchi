@@ -1986,36 +1986,40 @@ checks for `None` cannot tell them apart — which made a Catalog's client certi
 Trino that is a `DROP CATALOG`. The distinction comes from which fields a request actually
 set, not from the values it sent.
 
-## Idempotency
+## Idempotency: removed
 
-Clients retry after network failures. An **opt-in `Idempotency-Key` header** makes a retry
-safe: the first call with a key does the work, and a repeat returns that call's recorded
-response with `Idempotent-Replay: true` rather than doing it again. Honoured on every mutating
-method; reusing a key for a different request is refused rather than answered.
+Apchi had an **opt-in `Idempotency-Key` header**: the first call with a key did the work and a
+repeat returned that call's recorded response with `Idempotent-Replay: true`. It was removed
+(#168), and the reason it was built is worth keeping next to the reason it went.
 
-Opt-in because the header is the only thing that can tell a deliberate retry from a second,
-genuinely intended request. Two Applies in a row is a reasonable thing to want.
+**It stored live credentials.** Replaying a response means storing one, so the store held
+response bodies in MongoDB. A `POST /catalogs` body carries the whole property map, which is
+where a connection password lives — so the collection became a second place credentials
+existed, behind nothing but a 24-hour expiry, and outside the redaction filter that covers the
+logs (§20). `POST /tokens` had been excluded by hand for exactly this reason; catalogs and
+client certificates had not, and the general case is the same as the special one.
 
-Keys are scoped by **actor and key together** — two Operators picking the same key must not
-collide, and certainly must not be shown each other's responses — and expire, because a key is
-only interesting for as long as a retry might arrive.
+**What it protected was narrower than this document claimed.** The argument was that a retried
+`POST /applies` means "a second rollout, a second Snapshot and running queries terminated". The
+first and third of those are wrong, and measuring said so: a repeated Apply with nothing
+changed succeeds, writes a redundant Snapshot, and rolls nothing out. The restart decision comes
+from the plan diff (§7.4), and the second Apply plans against the Snapshot the first one just
+committed, so there is no diff to roll out. A retry arriving while the first Apply is still
+running was already refused with a `409`.
 
-The four endpoints this was asked for are not equally at risk, and the difference is worth
-recording. `POST /applies` already refuses while an Apply is in flight, so its open window is
-a retry arriving after the first *finished*: that starts a second Apply, which means a second
-rollout, a second Snapshot and running queries terminated (§7.4). The creates already refuse a
-duplicate name with a `409`, which is safe but gives a retrying client an error for work it
-succeeded at. Rollback stages deterministically from a Snapshot and was already idempotent.
+So what removal reopens is **duplicate Snapshots**, not terminated queries.
 
-**A failed request releases its key**, so a retry after a failure runs. Replaying a failure
-would make a key a way to get permanently stuck.
+**And it cost something on every page of the reference.** The claim needed the resolved caller,
+so it was a router-level dependency, so `Idempotency-Key` was declared on 76 of 82 operations —
+32 of them `GET`s, where its own description said it was ignored. An interactive reference is a
+promise about what matters, and that header was the most prominent parameter in the document.
 
-**`POST /tokens` claims its key but stores no response.** It answers with a secret Apchi
-deliberately never keeps (§19's authentication, invariant: a digest and nothing else), so
-caching it to replay would make that store the one place a live token exists. The claim is the
-part that matters — a retry does not mint a second credential — and the retry is told the
-credential cannot be shown again and that nothing ran twice, which is true and more useful
-than a second token nobody expected.
+The `idempotency` collection is left to its expiry rather than dropped. Apchi does not delete a
+database it has stopped writing to.
+
+**The better-aimed fix, if duplicate Snapshots turn out to matter**, is a no-op guard on
+`POST /applies`: refuse an Apply whose Candidate does not differ from its base Snapshot. That is
+a decision about Apply semantics rather than about retries, and it is not taken here.
 
 ## Errors
 

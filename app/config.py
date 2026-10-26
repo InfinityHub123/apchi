@@ -101,11 +101,6 @@ class Settings(BaseSettings):
     #: with the last, the same way it owns the Event Listener volume (§13.6).
     raw_files_volume_name: str = "apchi-admin-raw-files"
 
-    #: How long an `Idempotency-Key` is remembered. The window a retry plausibly spans: long
-    #: enough for a client to come back after a network failure, short enough that a key
-    #: reused weeks later is a new request rather than a replay of a forgotten one.
-    idempotency_hours: float = 24.0
-
     #: Whether a Catalog the validation probe cannot connect to fails the Apply.
     #:
     #: Off, because the probe's network is not the coordinator's. §6 already warns that a
