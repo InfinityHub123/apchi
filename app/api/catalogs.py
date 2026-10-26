@@ -10,6 +10,7 @@ from app.api.deps import (
     ClusterDep,
     OperatorMutationAllowed,
     SnapshotStoreDep,
+    TrinoDep,
 )
 from app.pipeline.recovery import RevertEffect, RevertRequest, section_revert
 from app.sections.catalogs import SECTION as CATALOGS
@@ -64,7 +65,8 @@ CREATE_EXAMPLES = {
         "description": (
             "Properties pass through unchecked and the Catalog comes back with "
             "`supported: false`, so nothing but the ephemeral coordinator at Validation "
-            "will judge them."
+            "will judge them. The connector itself is still checked: it has to be one this "
+            "Trino actually has."
         ),
         "value": {
             "name": "events",
@@ -110,8 +112,9 @@ UPDATE_EXAMPLES = {
     "connector": {
         "summary": "Change the connector",
         "description": (
-            "It cannot be cleared: a Catalog without a connector is not a Catalog, so "
-            "sending null is refused and omitting the field keeps the current one."
+            "Refused if this Trino has no such connector. It cannot be cleared either: "
+            "a Catalog without a connector is not a Catalog, so sending null is refused and "
+            "omitting the field keeps the current one."
         ),
         "value": {"connector": "mysql"},
     },
@@ -157,7 +160,9 @@ async def list_catalogs(store: CandidateStoreDep) -> list[Catalog]:
 async def create_catalog(
     write: Annotated[CatalogWrite, Body(openapi_examples=CREATE_EXAMPLES)],
     store: CandidateStoreDep,
+    trino: TrinoDep,
 ) -> Catalog:
+    await section.refuse_unknown_connector(trino, write.connector)
     candidate = await store.load()
     created = section.create_catalog(candidate.resources(CATALOGS), write)
     await store.save(candidate)
@@ -179,7 +184,13 @@ async def update_catalog(
     name: str,
     update: Annotated[CatalogUpdate, Body(openapi_examples=UPDATE_EXAMPLES)],
     store: CandidateStoreDep,
+    trino: TrinoDep,
 ) -> Catalog:
+    # Only when the request actually sends one. An omitted connector keeps whatever is
+    # staged, and re-checking that would refuse an edit to the properties of a Catalog whose
+    # connector came from a Trino image the Cluster no longer runs.
+    if update.connector is not None:
+        await section.refuse_unknown_connector(trino, update.connector)
     candidate = await store.load()
     updated = section.update_catalog(candidate.resources(CATALOGS), name, update)
     await store.save(candidate)

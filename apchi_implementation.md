@@ -150,6 +150,12 @@ unknown fields, malformed configuration, invalid references, impossible values,
 permission-rule structure, resource-group structure, certificate structure, and catalog
 properties wherever Apchi has a schema for the connector (§13.1).
 
+One of these is not static in the usual sense. A Catalog's **connector must be one the
+coordinator actually has**, and only the coordinator can say which those are, so that check
+asks it — cached, and silent whenever the answer cannot be had. §13.1 argues why the
+alternative, a list of connector names kept in this repository, would be wrong in more ways
+than it would be right.
+
 Rejecting at request time matters more here than in most designs, because the Candidate is
 shared: a payload that gets a `201` becomes every Operator's problem until someone fixes or
 reverts it (§4).
@@ -859,6 +865,58 @@ escape hatch for a curated path.
 Seven schemas is a real but bounded commitment, and each drifts with Trino versions — so the
 supported Trino range §8 pins is what bounds the maintenance. Everything outside this set
 passes through.
+
+### A connector that does not exist is a different answer from one that is uncurated
+
+Pass-through is for a connector Apchi has no *schema* for. It was also, for a while, the
+answer for a connector Trino has no *plugin* for: the model constrains the name to a regex, so
+`postgresqlaa` was accepted, marked unsupported, and refused by the validation probe minutes
+later in the middle of an Apply. For the one field that decides which plugin loads, that is
+the wrong place to find out about a typo.
+
+**The list of connectors that exist comes from the coordinator**, because Trino enumerates its
+own when asked for one it does not have:
+
+```
+CREATE CATALOG apchi_connector_probe USING apchi_connector_probe
+  -> No factory for connector 'apchi_connector_probe'. Available factories:
+     [ai, bigquery, blackhole, cassandra, ..., trino_thrift]
+```
+
+Nothing else is as trustworthy. A list shipped in this repository would be wrong for any
+Trino but the one it was written against, would miss a custom plugin baked into an Admin's
+image, and would have been wrong three times over on day one: the names are `delta_lake`,
+`gsheets` and `trino_thrift`, where the documentation prints "Delta Lake", "Google Sheets" and
+"Thrift". `/usr/lib/trino/plugin` is not the authority either — it spells one of them
+`delta-lake`, and it holds event listeners and authenticators that are not connectors at all.
+
+Two properties of the statement are load-bearing, and both were found by running it rather
+than by reading about it:
+
+- **The catalog name must not already exist.** Trino checks existence before it looks for a
+  factory, so `CREATE CATALOG memory USING <unknown>` answers `Catalog 'memory' already
+  exists` and names nothing.
+- **No `IF NOT EXISTS`.** With it the statement succeeds and does nothing, which is exactly
+  the error this depends on.
+
+**It fails open, and that is the condition of shipping it.** The answer arrives inside an
+error message, which no contract covers. So every way of not getting one — Trino rewording the
+sentence, the coordinator being unreachable, a leftover catalog of the probe's name — ends in
+Apchi refusing nothing and the probe at Validation catching what it used to catch. A check
+built on parsed prose must not be able to make every Catalog unstageable.
+
+The list is read lazily and cached, in both directions. Lazily because Apchi starts whether or
+not Trino does, so a list read at boot would be empty on every Cluster that came up second.
+Cached because the query would otherwise run on every request; and the *failure* is cached too,
+or a coordinator that is down would cost every catalog request its timeout. That timeout is set
+explicitly for this one query: the client defaults to 30s across three attempts, which is the
+right trade inside an Apply and the wrong one while an Operator waits for a `POST`.
+
+**The cost, stated so nobody has to find it.** The statement is a **failed query**, so it
+appears in `system.runtime.queries` and is shipped to whatever the Event Listeners Section
+(§13.6) is pointed at. One per Apchi process per cache window. The catalog and the connector
+are both named `apchi_connector_probe` so that a reader of the query history can tell what it
+was for without asking anyone.
 
 **Credential exposure, accepted:** credentials inlined in `CREATE CATALOG` are delivered
 verbatim to any configured event listener endpoint. `QueryMetadata` carries the full SQL

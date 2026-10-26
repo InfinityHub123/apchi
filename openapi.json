@@ -4977,7 +4977,7 @@
                   }
                 },
                 "uncurated": {
-                  "description": "Properties pass through unchecked and the Catalog comes back with `supported: false`, so nothing but the ephemeral coordinator at Validation will judge them.",
+                  "description": "Properties pass through unchecked and the Catalog comes back with `supported: false`, so nothing but the ephemeral coordinator at Validation will judge them. The connector itself is still checked: it has to be one this Trino actually has.",
                   "summary": "A connector Apchi has no schema for",
                   "value": {
                     "connector": "clickhouse",
@@ -5203,7 +5203,7 @@
                   "value": {}
                 },
                 "connector": {
-                  "description": "It cannot be cleared: a Catalog without a connector is not a Catalog, so sending null is refused and omitting the field keeps the current one.",
+                  "description": "Refused if this Trino has no such connector. It cannot be cleared either: a Catalog without a connector is not a Catalog, so sending null is refused and omitting the field keeps the current one.",
                   "summary": "Change the connector",
                   "value": {
                     "connector": "mysql"

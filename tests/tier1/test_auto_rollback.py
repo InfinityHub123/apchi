@@ -169,8 +169,16 @@ async def test_the_rollback_stage_names_what_went_wrong(rolled_back: dict) -> No
 
 async def test_a_validation_failure_attempts_no_rollback(applying_client: AsyncClient) -> None:
     """Nothing reached the Cluster, so there is nothing to undo."""
+    # A real connector with a property nothing consumes: uncurated, so it passes request-time
+    # validation, and refused by Trino when the probe tries to build it. A connector that does
+    # not exist no longer reaches an Apply (#170).
     await applying_client.post(
-        "/api/v1/catalogs", json={"name": "imaginary", "connector": "nosuchconnector"}
+        "/api/v1/catalogs",
+        json={
+            "name": "imaginary",
+            "connector": "memory",
+            "properties": {"no-such-property": "1"},
+        },
     )
 
     record = await _apply(applying_client)
