@@ -2962,24 +2962,6 @@
               "description": "Only for a Cluster that has committed Snapshots MongoDB no longer holds. Repeat the Snapshot number Apchi says it once reached, to confirm that adopting may start again at 1 without those Snapshots. A number rather than a flag, so it cannot be set out of habit.",
               "title": "Discard History Through"
             }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
           }
         ],
         "responses": {
@@ -3034,26 +3016,6 @@
       "post": {
         "description": "Reads and records. Touches no part of the Cluster and not the Candidate.\n\nRe-reading keeps whatever has been amended and reports what the Cluster changed, because\nan Admin re-reads precisely when they are unsure -- the worst moment to take their work\naway.",
         "operationId": "create_discovery_api_v1_admin_adoption_discoveries_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "201": {
             "content": {
@@ -3084,16 +3046,6 @@
               }
             },
             "description": "Authenticated, but not an Admin."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "Read the Cluster's configuration, changing nothing",
@@ -3106,26 +3058,6 @@
       "delete": {
         "description": "Discards Apchi's reading and the amendments with it. Nothing on the Cluster is\ntouched -- a discovery never reached it.",
         "operationId": "discard_discovery_api_v1_admin_adoption_discovery_delete",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "204": {
             "description": "Successful Response"
@@ -3149,16 +3081,6 @@
               }
             },
             "description": "Authenticated, but not an Admin."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "Discard the discovery and everything supplied for it",
@@ -3168,26 +3090,6 @@
       },
       "get": {
         "operationId": "get_discovery_api_v1_admin_adoption_discovery_get",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -3218,16 +3120,6 @@
               }
             },
             "description": "Authenticated, but not an Admin."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "The current discovery",
@@ -3248,24 +3140,6 @@
             "schema": {
               "title": "Name",
               "type": "string"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -3356,24 +3230,6 @@
               "title": "Resource",
               "type": "string"
             }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
           }
         ],
         "responses": {
@@ -3428,26 +3284,6 @@
       "post": {
         "description": "Writes Apchi's Secrets and nothing else: no mount, no Rollout, no Snapshot, and not\none byte of the Secrets Apchi read the configuration out of.\n\nSo the Cluster goes on serving exactly what it was serving. Making these copies live is\nthe next step and it is the Admin's: re-point the deployment, add the catalog-seed\ninitContainer, set a refresh period. The response says precisely what is left.\n\nReversible at this point by deleting the Secrets -- nothing has happened yet.",
         "operationId": "seed_cluster_api_v1_admin_adoption_seed_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -3478,16 +3314,6 @@
               }
             },
             "description": "Authenticated, but not an Admin."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "Write Apchi's own Secrets from a completed discovery",
@@ -3500,26 +3326,6 @@
       "post": {
         "description": "The same pipeline, over the latest Snapshot merged with today's Admin values.\n\nNot the Candidate: an Admin Apply must not push an Operator's staged, unreviewed\nchanges to the Cluster. And no Snapshot at the end, because nothing an Operator owns\nchanged -- what this Apply did is recorded as an Apply and nowhere else (section 14).\n\nIt freezes the Candidate exactly as an Operator Apply does. Both mutate one Cluster,\nand the pipeline's guarantees depend on nothing else changing underneath.",
         "operationId": "start_admin_apply_api_v1_admin_applies_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "202": {
             "content": {
@@ -3550,16 +3356,6 @@
               }
             },
             "description": "Authenticated, but not an Admin."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "Apply an Admin change without creating a Snapshot",
@@ -3571,26 +3367,6 @@
     "/api/v1/admin/certificate-mapping/preserved": {
       "get": {
         "operationId": "get_preserved_mappings_api_v1_admin_certificate_mapping_preserved_get",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -3621,16 +3397,6 @@
               }
             },
             "description": "Authenticated, but not an Admin."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "Mapping patterns preserved through a migration",
@@ -3641,26 +3407,6 @@
       "put": {
         "description": "Stages nothing and reaches nothing. The Cluster gets this at the next Apply --\nan Admin Apply if the Admin wants it now, an Operator Apply otherwise.\n\nApchi does not time the migration. It schedules no removal, counts nothing down and\nnever warns that a preserved pattern is overdue: only the Admin knows whether their\nclients have moved, and a deadline Apchi invented would be a deadline it could enforce\nby accident.",
         "operationId": "set_preserved_mappings_api_v1_admin_certificate_mapping_preserved_put",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -3723,26 +3469,6 @@
       "put": {
         "description": "The Admin scope's import: the six Sections, and the Admin values with them.\n\n**It replaces every Admin value**, including the ones the document does not mention,\nbecause that is what replacing means. A document with `enforce_permissions` absent\nturns enforcement off across the Cluster, and one with no preserved patterns drops the\nrules an adopted Cluster was relying on. That is why `admin` is required rather than\ndefaulted -- an omission that large should not be expressible -- and why the response\nsays what the Admin values now are instead of leaving a caller to assume only what they\nsent changed.\n\nNothing reaches the Cluster. The next Apply is what delivers it, as with every other\nAdmin value (`PUT /admin/permissions/enforcement` and the preserved patterns are the\nsame shape).",
         "operationId": "import_configuration_api_v1_admin_configuration_put",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -3805,26 +3531,6 @@
       "get": {
         "description": "What makes this the *full* configuration is the Admin values.\n\nAdmin values are applied through the pipeline and never recorded in a Snapshot\n(invariant 9, \u00a714), so a Snapshot export is less than what the Cluster is running. This\nis the pair. It is the only difference between the two scopes, and it explains itself:\nan Operator cannot set them, so an Operator's export must not carry them.\n\nOne configuration, not every Snapshot. History lives in MongoDB, whose durability is\nthe platform's concern rather than Apchi's (#110).\n\n**The response holds real credentials**, for the same reason a Snapshot export does.",
         "operationId": "export_configuration_api_v1_admin_configuration_export_get",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -3855,16 +3561,6 @@
               }
             },
             "description": "Authenticated, but not an Admin."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "The full configuration: the Sections and the Admin values",
@@ -3877,26 +3573,6 @@
       "get": {
         "description": "Which paths exist and how big they are. **Not their content.**\n\nDeliberately not a round trip. Apchi cannot tell which part of an arbitrary file an Admin\nwrote is a credential, so it treats all of it as one -- and a listing that handed it back\nwould make every reader of this endpoint a reader of those secrets. What \"what have we\ninjected here\" actually asks is which paths exist, and that is answerable.",
         "operationId": "list_raw_files_api_v1_admin_files_get",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -3931,16 +3607,6 @@
               }
             },
             "description": "Authenticated, but not an Admin."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "Raw files an Admin has written",
@@ -3961,24 +3627,6 @@
             "schema": {
               "title": "Path",
               "type": "string"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -4033,24 +3681,6 @@
             "schema": {
               "title": "Path",
               "type": "string"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -4115,26 +3745,6 @@
     "/api/v1/admin/maintenance-mode": {
       "get": {
         "operationId": "get_maintenance_mode_api_v1_admin_maintenance_mode_get",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -4165,16 +3775,6 @@
               }
             },
             "description": "Authenticated, but not an Admin."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "Whether Operator changes are currently disabled",
@@ -4185,26 +3785,6 @@
       "put": {
         "description": "Releasing is how an incident is closed: an Admin has looked at the Cluster and\nis satisfied it is in a state Operators can safely edit again.",
         "operationId": "set_maintenance_mode_api_v1_admin_maintenance_mode_put",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -4266,26 +3846,6 @@
     "/api/v1/admin/permissions/enforcement": {
       "get": {
         "operationId": "get_enforcement_api_v1_admin_permissions_enforcement_get",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -4316,16 +3876,6 @@
               }
             },
             "description": "Authenticated, but not an Admin."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "Whether grants are enforced",
@@ -4336,26 +3886,6 @@
       "put": {
         "description": "An Admin's decision, and an Admin's timing.\n\nTurning this on is what makes a grant mean something, and on a Cluster already serving\nusers it denies every identity without a grant everything it had. An Operator cannot do\nit -- they would be closing a Cluster by editing configuration -- and Apchi will not do\nit on their behalf. It stages nothing by itself: the Cluster gets it at the next Apply,\nwhich Review reports as costing no restart because Trino re-reads the rules on a timer.",
         "operationId": "set_enforcement_api_v1_admin_permissions_enforcement_put",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -4450,24 +3980,6 @@
               "description": "A `next` from a previous page. Omit for the newest page. Opaque: it names a position in this collection's order and should be passed back unmodified.",
               "title": "Before"
             }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
           }
         ],
         "responses": {
@@ -4509,26 +4021,6 @@
       },
       "post": {
         "operationId": "start_apply_api_v1_applies_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "202": {
             "content": {
@@ -4549,16 +4041,6 @@
               }
             },
             "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "Promote the Configuration Candidate",
@@ -4578,24 +4060,6 @@
             "schema": {
               "title": "Apply Id",
               "type": "string"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -4665,24 +4129,6 @@
                 }
               ],
               "title": "Last-Event-Id"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -4836,24 +4282,6 @@
               ],
               "description": "A `next` from a previous page. Omit for the newest page.",
               "title": "Before"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -5125,26 +4553,6 @@
       "put": {
         "description": "PUT because it replaces the whole resource, which is what an import is.\n\nAn import is not a Reset. `POST /candidate/reset` re-derives from a Snapshot and so\nalways leaves an empty diff; this replaces from a file and is expected to leave a large\none. Both discard staged edits, so both take the same gate.\n\nRejected whole, naming every problem, before anything is stored: the Candidate is\nshared, so one invalid resource in it would block everyone's Apply and not just the\nimporter's (ADR-0002).\n\nNothing reaches the Cluster. The response is the Review of what an Apply would now\nchange -- diffed against this Cluster's latest Snapshot, because that is the change\nanyone here is about to make.",
         "operationId": "import_candidate_api_v1_candidate_put",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -5197,26 +4605,6 @@
       "get": {
         "description": "Staged work, which is in no Snapshot.\n\nExported as well as Snapshots because this is the case \"I was working on this and want\nit elsewhere\" actually needs: an edit that has not been applied has never been\ncommitted, so no Snapshot holds it.\n\n**The response holds real credentials**, for the same reason a Snapshot export does.",
         "operationId": "export_candidate_api_v1_candidate_export_get",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -5237,16 +4625,6 @@
               }
             },
             "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "What is staged, as a portable configuration",
@@ -5259,26 +4637,6 @@
       "post": {
         "description": "Re-derives the Candidate from the latest Snapshot.\n\nBecause nothing reaches the Cluster before Apply, this cannot affect production.",
         "operationId": "reset_api_v1_candidate_reset_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "204": {
             "description": "Successful Response"
@@ -5292,16 +4650,6 @@
               }
             },
             "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "Discard everything staged",
@@ -5314,26 +4662,6 @@
       "post": {
         "description": "Full Rollback: for a serious mistake, and never implicit.\n\nLike a Section Revert this only stages. The Snapshot being restored from is not\nmodified -- applying this produces a new one, so history is never rewritten.",
         "operationId": "rollback_api_v1_candidate_rollback_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -5385,26 +4713,6 @@
     "/api/v1/catalogs": {
       "get": {
         "operationId": "list_catalogs_api_v1_catalogs_get",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -5429,16 +4737,6 @@
               }
             },
             "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "List staged Catalogs",
@@ -5448,26 +4746,6 @@
       },
       "post": {
         "operationId": "create_catalog_api_v1_catalogs_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -5520,26 +4798,6 @@
       "post": {
         "description": "Stages into the Candidate; it does not apply. An ordinary POST /applies follows,\nlike any other edit.\n\nThe response says which catalogs an Apply would drop, and that reverting one Section\nwhile the others stay put produces a configuration that has never run.",
         "operationId": "revert_api_v1_catalogs_revert_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -5600,24 +4858,6 @@
               "title": "Name",
               "type": "string"
             }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
           }
         ],
         "responses": {
@@ -5660,24 +4900,6 @@
             "schema": {
               "title": "Name",
               "type": "string"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -5728,24 +4950,6 @@
             "schema": {
               "title": "Name",
               "type": "string"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -5801,26 +5005,6 @@
       "delete": {
         "description": "Removing it does not remove the file. Trino's authenticator refuses to start without\none, so what Apchi writes instead is the rule that leaves every name as presented --\nwhich is how Trino behaves with no mapping configured at all.",
         "operationId": "clear_certificate_mapping_api_v1_certificate_mapping_delete",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "204": {
             "description": "Successful Response"
@@ -5834,16 +5018,6 @@
               }
             },
             "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "Remove the Certificate Mapping Pattern",
@@ -5853,26 +5027,6 @@
       },
       "get": {
         "operationId": "get_certificate_mapping_api_v1_certificate_mapping_get",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -5893,16 +5047,6 @@
               }
             },
             "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "The staged Certificate Mapping Pattern",
@@ -5912,26 +5056,6 @@
       },
       "put": {
         "operationId": "set_certificate_mapping_api_v1_certificate_mapping_put",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -5983,26 +5107,6 @@
     "/api/v1/certificate-mapping/revert": {
       "post": {
         "operationId": "revert_api_v1_certificate_mapping_revert_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -6078,24 +5182,6 @@
               "description": "Only certificates in this state.",
               "title": "Status"
             }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
           }
         ],
         "responses": {
@@ -6142,26 +5228,6 @@
       "post": {
         "description": "Uploading under a name that is already staged replaces it, which is how renewal\nworks: the Catalogs referencing it reference the name.",
         "operationId": "upload_certificate_api_v1_certificates_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "multipart/form-data": {
@@ -6213,26 +5279,6 @@
     "/api/v1/certificates/revert": {
       "post": {
         "operationId": "revert_api_v1_certificates_revert_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -6294,24 +5340,6 @@
               "title": "Name",
               "type": "string"
             }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
           }
         ],
         "responses": {
@@ -6354,24 +5382,6 @@
             "schema": {
               "title": "Name",
               "type": "string"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -6416,26 +5426,6 @@
     "/api/v1/event-listeners": {
       "get": {
         "operationId": "list_event_listeners_api_v1_event_listeners_get",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -6460,16 +5450,6 @@
               }
             },
             "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "List staged Event Listeners",
@@ -6479,26 +5459,6 @@
       },
       "post": {
         "operationId": "create_event_listener_api_v1_event_listeners_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -6551,26 +5511,6 @@
       "post": {
         "description": "Stages into the Candidate; it does not apply. An ordinary POST /applies follows,\nlike any other edit -- and because this Section is rollout-required, that Apply\nrestarts the coordinator. The effect says so, and what it costs.",
         "operationId": "revert_api_v1_event_listeners_revert_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -6632,24 +5572,6 @@
               "title": "Name",
               "type": "string"
             }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
           }
         ],
         "responses": {
@@ -6692,24 +5614,6 @@
             "schema": {
               "title": "Name",
               "type": "string"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -6760,24 +5664,6 @@
             "schema": {
               "title": "Name",
               "type": "string"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -6854,26 +5740,6 @@
     "/api/v1/permissions": {
       "get": {
         "operationId": "list_grants_api_v1_permissions_get",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -6898,16 +5764,6 @@
               }
             },
             "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "The staged grants",
@@ -6917,26 +5773,6 @@
       },
       "post": {
         "operationId": "add_grant_api_v1_permissions_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -6988,26 +5824,6 @@
     "/api/v1/permissions/revert": {
       "post": {
         "operationId": "revert_api_v1_permissions_revert_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -7060,26 +5876,6 @@
       "get": {
         "description": "Visible on purpose. An Operator who cannot see these cannot understand why catalog\nDDL is refused to them -- or, depending on the posture an Admin has set, why a grant\ndoes not narrow anyone's access yet.",
         "operationId": "get_system_rules_api_v1_permissions_system_get",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -7100,16 +5896,6 @@
               }
             },
             "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "The rules Apchi owns and nobody may edit",
@@ -7129,24 +5915,6 @@
             "schema": {
               "title": "Key",
               "type": "string"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -7190,24 +5958,6 @@
             "schema": {
               "title": "Key",
               "type": "string"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -7259,24 +6009,6 @@
             "schema": {
               "title": "Key",
               "type": "string"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -7331,26 +6063,6 @@
     "/api/v1/resource-groups": {
       "get": {
         "operationId": "list_resource_groups_api_v1_resource_groups_get",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -7375,16 +6087,6 @@
               }
             },
             "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "The staged resource groups",
@@ -7394,26 +6096,6 @@
       },
       "post": {
         "operationId": "add_resource_group_api_v1_resource_groups_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -7465,26 +6147,6 @@
     "/api/v1/resource-groups/revert": {
       "post": {
         "operationId": "revert_api_v1_resource_groups_revert_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -7536,26 +6198,6 @@
     "/api/v1/resource-groups/selectors": {
       "get": {
         "operationId": "get_selectors_api_v1_resource_groups_selectors_get",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -7576,16 +6218,6 @@
               }
             },
             "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "The staged selectors, in order",
@@ -7596,26 +6228,6 @@
       "put": {
         "description": "Whole-list replacement is the contract. A selector naming a group that is not staged\nyet is accepted here and refused at Validate, so an Operator can write the rule before\nthe group it points at.",
         "operationId": "set_selectors_api_v1_resource_groups_selectors_put",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -7667,26 +6279,6 @@
     "/api/v1/resource-groups/settings": {
       "get": {
         "operationId": "get_settings_api_v1_resource_groups_settings_get",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -7707,16 +6299,6 @@
               }
             },
             "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "The Section's own settings",
@@ -7727,26 +6309,6 @@
       "put": {
         "description": "The CPU quota period governs the whole file rather than any one group, and Trino\nrefuses to start when a group sets a CPU limit without it.",
         "operationId": "set_settings_api_v1_resource_groups_settings_put",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -7808,24 +6370,6 @@
               "title": "Path",
               "type": "string"
             }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
           }
         ],
         "responses": {
@@ -7868,24 +6412,6 @@
             "schema": {
               "title": "Path",
               "type": "string"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -7936,24 +6462,6 @@
             "schema": {
               "title": "Path",
               "type": "string"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -8008,26 +6516,6 @@
     "/api/v1/review": {
       "get": {
         "operationId": "review_api_v1_review_get",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -8048,16 +6536,6 @@
               }
             },
             "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "What an Apply would change",
@@ -8101,24 +6579,6 @@
               ],
               "description": "A `next` from a previous page. Omit for the newest page. Opaque: it names a position in this collection's order and should be passed back unmodified.",
               "title": "Before"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -8172,24 +6632,6 @@
               "title": "Number",
               "type": "integer"
             }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
           }
         ],
         "responses": {
@@ -8242,24 +6684,6 @@
             "schema": {
               "title": "Number",
               "type": "integer"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -8337,24 +6761,6 @@
               "description": "A `next` from a previous page. Omit for the newest page. Opaque: it names a position in this collection's order and should be passed back unmodified.",
               "title": "Before"
             }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
           }
         ],
         "responses": {
@@ -8397,26 +6803,6 @@
       "post": {
         "description": "The response carries the secret, and nothing ever will again.\n\nApchi stores a digest of it, so a token that is lost is replaced rather than looked up.\nThe token acts as **you**: it takes your role on every request it makes, so it loses\naccess when you do.",
         "operationId": "create_token_api_v1_tokens_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -8477,24 +6863,6 @@
             "schema": {
               "title": "Token Id",
               "type": "string"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -8565,24 +6933,6 @@
               "description": "A `next` from a previous page. Omit for the newest page. Opaque: it names a position in this collection's order and should be passed back unmodified.",
               "title": "Before"
             }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
           }
         ],
         "responses": {
@@ -8624,26 +6974,6 @@
       },
       "post": {
         "operationId": "start_validation_api_v1_validations_post",
-        "parameters": [
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
         "responses": {
           "202": {
             "content": {
@@ -8664,16 +6994,6 @@
               }
             },
             "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "Validate the Configuration Candidate without applying it",
@@ -8693,24 +7013,6 @@
             "schema": {
               "title": "Validation Id",
               "type": "string"
-            }
-          },
-          {
-            "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Makes a retry safe: the first call with this key does the work, and a repeat returns that call's recorded response with `Idempotent-Replay: true` rather than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on reads. Reusing a key for a different request is refused.",
-              "title": "Idempotency-Key"
             }
           }
         ],

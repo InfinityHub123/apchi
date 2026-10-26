@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from app.adapters.kubernetes import RealKubernetes
 from app.adapters.mongo import Mongo
 from app.adapters.trino import Trino
-from app.api import errors, idempotency
+from app.api import errors
 from app.api.admin import router as admin_router
 from app.api.adoption import router as adoption_router
 from app.api.applies import router as applies_router
@@ -20,10 +20,9 @@ from app.api.candidate import router as candidate_router
 from app.api.catalogs import router as catalogs_router
 from app.api.certificate_mapping import router as certificate_mapping_router
 from app.api.client_certificates import router as certificates_router
-from app.api.deps import AdminOnly, Authenticated, Idempotent
+from app.api.deps import AdminOnly, Authenticated
 from app.api.event_listeners import router as event_listeners_router
 from app.api.health import router as health_router
-from app.api.idempotency import IdempotencyStore
 from app.api.permissions import router as permissions_router
 from app.api.resource_groups import router as resource_groups_router
 from app.api.snapshots import router as snapshots_router
@@ -60,7 +59,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Indexed on its first write rather than here. An index on an empty collection has no
     # reader, and three create_index round trips per process start is what wedged the test
     # MongoDB in #131 -- tier 1 starts an app per test. See AuditStore.
-    app.state.idempotency_store = IdempotencyStore(app.state.mongo.database)
     app.state.audit_store = AuditStore(
         app.state.mongo.database, retention_days=settings.audit_retention_days
     )
@@ -204,9 +202,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
     errors.install(app)
-    # Records the response of a request that claimed an Idempotency-Key, and renders a
-    # replay. The claim itself is a dependency, because it needs the resolved caller.
-    idempotency.install(app)
     # Documented on the contract rather than left to be discovered: these become reachable
     # the moment a mode other than `none` is configured, and the mode is runtime
     # configuration, so every gated operation can answer this way.
@@ -246,7 +241,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.include_router(
             router,
             prefix="/api/v1",
-            dependencies=[Authenticated, Idempotent],
+            dependencies=[Authenticated],
             responses=unauthenticated,
         )
     # Admin surfaces, both of them under /admin: these inject low-level configuration and
@@ -256,7 +251,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.include_router(
             router,
             prefix="/api/v1",
-            dependencies=[AdminOnly, Idempotent],
+            dependencies=[AdminOnly],
             responses=unauthenticated | forbidden,
         )
     return app

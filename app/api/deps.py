@@ -1,14 +1,12 @@
 """Shared request dependencies."""
 
-from datetime import timedelta
 from typing import Annotated, Final
 
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Request
 
 from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.api.errors import Conflict, Forbidden, MaintenanceModeEngaged, Unauthenticated
-from app.api.idempotency import HEADER, MUTATIONS, IdempotencyStore, fingerprint
 from app.audit.actor import acting_as
 from app.audit.events import AuditStore
 from app.auth.identity import NOBODY, Identity
@@ -372,71 +370,3 @@ def audit_store(request: Request) -> AuditStore:
 
 
 AuditStoreDep = Annotated[AuditStore, Depends(audit_store)]
-
-
-def idempotency_store(request: Request) -> IdempotencyStore:
-    store: IdempotencyStore = request.app.state.idempotency_store
-    return store
-
-
-IdempotencyStoreDep = Annotated[IdempotencyStore, Depends(idempotency_store)]
-
-
-#: Named `idempotency_key` and not `key` at the call site below, which is not cosmetic: a
-#: dependency's parameter is matched against the route's path format, `/permissions/{key}`
-#: exists, and FastAPI then treats it as a path parameter -- which may not have a default.
-#: The failure is an assertion while *building the schema*, so it takes out every route at once.
-#:
-#: Declared as a parameter rather than read straight off `request.headers`, so it appears in
-#: the committed contract. `openapi.json` *is* the contract here -- CI fails on a diff against
-#: it -- and a client generated from a document that does not mention this header cannot use
-#: the feature. It therefore appears on reads too, where it is ignored; the description says
-#: so, which is a smaller cost than being invisible.
-IdempotencyKey = Annotated[
-    str | None,
-    Header(
-        alias=HEADER,
-        description=(
-            "Makes a retry safe: the first call with this key does the work, and a repeat "
-            "returns that call's recorded response with `Idempotent-Replay: true` rather "
-            "than doing it again. Honoured on POST, PUT, PATCH and DELETE, and ignored on "
-            "reads. Reusing a key for a different request is refused."
-        ),
-    ),
-]
-
-
-async def idempotent(
-    request: Request,
-    identity: CallerDep,
-    keys: IdempotencyStoreDep,
-    settings: SettingsDep,
-    idempotency_key: IdempotencyKey = None,
-) -> None:
-    """Claim this request's `Idempotency-Key`, or replay what the first call with it returned.
-
-    A dependency rather than middleware because this needs the **caller**: keys are scoped by
-    actor, and a middleware runs before routing, so no identity has been resolved yet. The
-    other half -- recording the response -- has to be middleware, because only middleware sees
-    what the handler produced. `api/idempotency.py` explains the split.
-
-    Opt-in: no header, no change. The header is the only thing that can tell a deliberate
-    retry from a second, genuinely intended request, and two Applies in a row is a reasonable
-    thing to want.
-    """
-    if not idempotency_key or request.method not in MUTATIONS:
-        return
-    claim = await keys.claim(
-        identity.subject,
-        idempotency_key,
-        fingerprint(request.method, request.url.path, await request.body()),
-        timedelta(hours=settings.idempotency_hours),
-    )
-    if claim.replay is not None:
-        raise claim.replay
-    # The middleware records the response against this claim once the handler has produced
-    # one. Set last, so a refused claim above leaves nothing for it to act on.
-    request.state.idempotency_id = claim.identifier
-
-
-Idempotent = Depends(idempotent)
