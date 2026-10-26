@@ -50,7 +50,10 @@ async def set_certificate_mapping(
 async def clear_certificate_mapping(store: CandidateStoreDep) -> None:
     """Removing it does not remove the file. Trino's authenticator refuses to start without
     one, so what Apchi writes instead is the rule that leaves every name as presented --
-    which is how Trino behaves with no mapping configured at all."""
+    which is how Trino behaves with no mapping configured at all.
+    To take **every** Section back to one Snapshot instead of just this one, use
+    `POST /candidate/rollback` -- a Full Rollback.
+    """
     candidate = await store.load()
     section.clear_mapping(candidate.resources(MAPPING))
     await store.save(candidate)
@@ -59,7 +62,7 @@ async def clear_certificate_mapping(store: CandidateStoreDep) -> None:
 @router.post(
     "/revert",
     response_model=RevertEffect,
-    summary="Stage this Section's content from an earlier Snapshot",
+    summary="Revert one Section to an earlier Snapshot",
     dependencies=[OperatorMutationAllowed],
 )
 async def revert(

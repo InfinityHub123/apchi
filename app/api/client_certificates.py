@@ -106,7 +106,10 @@ async def get_certificate(
 async def delete_certificate(name: str, store: CandidateStoreDep) -> None:
     """Refused while a Catalog still presents it. Removing it would leave that Catalog
     pointing at a file that is about to disappear, and the failure would surface as a
-    connection error with nothing pointing back at this request."""
+    connection error with nothing pointing back at this request.
+    To take **every** Section back to one Snapshot instead of just this one, use
+    `POST /candidate/rollback` -- a Full Rollback.
+    """
     candidate = await store.load()
     section.get_certificate(candidate.resources(CERTIFICATES), name, 0)
     if used_by := certificates_in_use(candidate.sections, name):
@@ -122,7 +125,7 @@ async def delete_certificate(name: str, store: CandidateStoreDep) -> None:
 @router.post(
     "/revert",
     response_model=RevertEffect,
-    summary="Stage this Section's content from an earlier Snapshot",
+    summary="Revert one Section to an earlier Snapshot",
     dependencies=[OperatorMutationAllowed],
 )
 async def revert(

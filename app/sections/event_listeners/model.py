@@ -23,7 +23,26 @@ ListenerType = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_-]{0,62}
 class EventListenerWrite(BaseModel):
     """What an Operator sends."""
 
-    model_config = ConfigDict(extra="forbid")
+    #: `connect-ingest-uri` is the one required property of the `http` listener, so an
+    #: example without it would not be a usable starting point.
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "name": "audit_sink",
+                    "type": "http",
+                    "properties": {
+                        "http-event-listener.connect-ingest-uri": (
+                            "http://audit.observability.svc.cluster.local:8080/trino"
+                        ),
+                        "http-event-listener.log-completed": "true",
+                        "http-event-listener.log-created": "false",
+                    },
+                }
+            ]
+        },
+    )
 
     name: ListenerName
     type: ListenerType

@@ -30,7 +30,9 @@ router = APIRouter(prefix="/permissions", tags=["permissions"])
 class PrivilegesWrite(BaseModel):
     """What a staged grant can be changed to."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_extra={"examples": [{"privileges": ["SELECT", "INSERT"]}]}
+    )
 
     privileges: list[Privilege] = Field(min_length=1)
 
@@ -90,7 +92,10 @@ async def get_grant(key: str, store: CandidateStoreDep) -> Grant:
 )
 async def set_privileges(key: str, write: PrivilegesWrite, store: CandidateStoreDep) -> Grant:
     """The privileges are what changes. Where a grant applies is its identity -- moving it
-    is removing one grant and adding another, which is what an Operator means anyway."""
+    is removing one grant and adding another, which is what an Operator means anyway.
+    To take **every** Section back to one Snapshot instead of just this one, use
+    `POST /candidate/rollback` -- a Full Rollback.
+    """
     candidate = await store.load()
     saved = section.set_privileges(candidate.resources(PERMISSIONS), key, write.privileges)
     await store.save(candidate)
@@ -112,7 +117,7 @@ async def delete_grant(key: str, store: CandidateStoreDep) -> None:
 @router.post(
     "/revert",
     response_model=RevertEffect,
-    summary="Stage this Section's content from an earlier Snapshot",
+    summary="Revert one Section to an earlier Snapshot",
     dependencies=[OperatorMutationAllowed],
 )
 async def revert(

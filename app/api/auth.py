@@ -71,7 +71,10 @@ def _set_cookie(
 
 
 class Credentials(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"username": "jo", "password": "the-password-goes-here"}]},
+    )
 
     username: str = Field(min_length=1, max_length=256)
     password: str = Field(min_length=1, max_length=1024)

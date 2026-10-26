@@ -20,7 +20,14 @@ Case = Literal["keep", "lower", "upper"]
 class CertificateMappingWrite(BaseModel):
     """What an Operator sends."""
 
-    model_config = ConfigDict(extra="forbid")
+    #: A certificate subject reads right to left, so the CN is the part worth matching
+    #: and the rest of the DN is what makes the pattern specific.
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [{"pattern": "CN=([^,]+), OU=analytics.*", "user": "$1", "case": "lower"}]
+        },
+    )
 
     pattern: Annotated[str, StringConstraints(min_length=1, max_length=512)] = Field(
         description="A regular expression matched against the subject the caller presents."

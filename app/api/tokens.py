@@ -24,7 +24,10 @@ router = APIRouter(prefix="/tokens", tags=["tokens"], dependencies=[Authenticate
 
 
 class TokenRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"name": "ci-pipeline", "expires_in_days": 90}]},
+    )
 
     name: str = Field(
         min_length=1,

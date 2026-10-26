@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import FastAPI, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from pymongo.errors import PyMongoError
 
 from app.audit.actor import actor
@@ -30,6 +30,39 @@ _MUTATIONS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 class ApiError(BaseModel):
+    #: Worth an example even though nobody sends one. `code` is what clients branch on
+    #: (§19) and `details` is where a form finds the field to highlight, and neither reads
+    #: as load-bearing until it is seen filled in.
+    #:
+    #: Copied from a real refusal rather than written. One typo against a curated connector
+    #: produces *two* problems -- the unknown key and the required one it was meant to be --
+    #: and an example showing one would teach a client to render one. `request_id` is a bare
+    #: uuid4 hex, with no prefix, which is the other thing a written example gets wrong.
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "code": "unprocessable_payload",
+                    "message": "The properties are not valid for the 'postgresql' connector.",
+                    "details": [
+                        {
+                            "property": "connection-uri",
+                            "problem": (
+                                "'connection-uri' is not a property of the 'postgresql' "
+                                "connector; did you mean 'connection-url'?"
+                            ),
+                        },
+                        {
+                            "property": "connection-url",
+                            "problem": "'connection-url' is required by the 'postgresql' connector",
+                        },
+                    ],
+                    "request_id": "9f3c1ad47e8b4e6ab0d2c5f7138ae204",
+                }
+            ]
+        }
+    )
+
     code: str
     message: str
     details: list[dict[str, Any]] = []
