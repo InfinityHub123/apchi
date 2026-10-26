@@ -29,7 +29,12 @@ from app.sections.base import (
 )
 from app.sections.catalogs import SECTION, apply
 from app.sections.catalogs.certificates import WIRED, ssl_is_configured
-from app.sections.catalogs.connectors import PropertyProblem, is_curated, validate_properties
+from app.sections.catalogs.connectors import (
+    PropertyProblem,
+    is_curated,
+    unknown_connector_problem,
+    validate_properties,
+)
 from app.sections.catalogs.generator import (
     Unreadable,
     effective,
@@ -97,6 +102,25 @@ def _certificate_usable(connector: str, properties: dict[str, str], certificate:
             "Set sslmode on the connection URL -- Apchi will not choose between `require` "
             "and `verify-full` for you.",
             details=[{"property": "properties", "problem": "no sslmode on the connection URL"}],
+        )
+
+
+async def refuse_unknown_connector(trino: Trino, connector: str) -> None:
+    """Refuse a connector this Cluster does not have, before it is staged.
+
+    Asked of the Cluster rather than checked against a list here, and asked at request time
+    rather than at Validation. The connector is the one field that decides which plugin
+    loads, and `postgresqlaa` used to be accepted and then rejected by the probe minutes
+    later -- during an Apply, which is the expensive place to learn about a typo.
+
+    Silent when the Cluster will not say what it has. `unknown_connector_problem` is where
+    that is argued.
+    """
+    problem = unknown_connector_problem(connector, await trino.connector_factories())
+    if problem is not None:
+        raise UnprocessablePayload(
+            problem,
+            details=[{"property": "connector", "problem": "not a connector on this Cluster"}],
         )
 
 

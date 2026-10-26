@@ -8,6 +8,7 @@ from app.api.deps import (
     ClusterDep,
     OperatorMutationAllowed,
     SnapshotStoreDep,
+    TrinoDep,
 )
 from app.pipeline.recovery import RevertEffect, RevertRequest, section_revert
 from app.sections.catalogs import SECTION as CATALOGS
@@ -50,7 +51,8 @@ async def list_catalogs(store: CandidateStoreDep) -> list[Catalog]:
     summary="Stage a new Catalog",
     dependencies=[OperatorMutationAllowed],
 )
-async def create_catalog(write: CatalogWrite, store: CandidateStoreDep) -> Catalog:
+async def create_catalog(write: CatalogWrite, store: CandidateStoreDep, trino: TrinoDep) -> Catalog:
+    await section.refuse_unknown_connector(trino, write.connector)
     candidate = await store.load()
     created = section.create_catalog(candidate.resources(CATALOGS), write)
     await store.save(candidate)
@@ -68,7 +70,14 @@ async def get_catalog(name: str, store: CandidateStoreDep) -> Catalog:
     summary="Edit a staged Catalog",
     dependencies=[OperatorMutationAllowed],
 )
-async def update_catalog(name: str, update: CatalogUpdate, store: CandidateStoreDep) -> Catalog:
+async def update_catalog(
+    name: str, update: CatalogUpdate, store: CandidateStoreDep, trino: TrinoDep
+) -> Catalog:
+    # Only when the request actually sends one. An omitted connector keeps whatever is
+    # staged, and re-checking that would refuse an edit to the properties of a Catalog whose
+    # connector came from a Trino image the Cluster no longer runs.
+    if update.connector is not None:
+        await section.refuse_unknown_connector(trino, update.connector)
     candidate = await store.load()
     updated = section.update_catalog(candidate.resources(CATALOGS), name, update)
     await store.save(candidate)

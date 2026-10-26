@@ -21,9 +21,20 @@ from app.pipeline.validation import ROLE_LABEL, VALIDATION_ROLE
 from tests.conftest import FakeKubernetes
 
 MEMORY = {"name": "scratch", "connector": "memory", "properties": {}}
-#: Passes static validation -- an uncurated connector passes through -- and is then
-#: rejected by a real Trino, which is exactly the gap Trino validation exists to fill.
-IMAGINARY = {"name": "imaginary", "connector": "nosuchconnector", "properties": {}}
+#: Passes static validation and is then rejected by a real Trino, which is exactly the gap
+#: Trino validation exists to fill.
+#:
+#: It used to be a connector that did not exist, `nosuchconnector`. That is now refused at
+#: request time (#170), so it can no longer reach an Apply -- and a test whose subject is
+#: Validation needs a configuration only Trino can judge. `memory` is a real connector with
+#: no curated schema, so its properties pass through unvalidated; Trino then refuses to build
+#: it because nothing consumed the property. Verified against Trino 483: "Configuration
+#: property 'no-such-property' was not used".
+IMAGINARY = {
+    "name": "imaginary",
+    "connector": "memory",
+    "properties": {"no-such-property": "1"},
+}
 SECRET = "trino-catalog-seed"
 
 
@@ -115,7 +126,9 @@ async def test_the_failure_names_the_resource_and_the_reason(
     assert [(f["section"], f["resource"]) for f in verdict["failures"]] == [
         ("catalogs", "imaginary")
     ]
-    assert "nosuchconnector" in verdict["failures"][0]["reason"]
+    # Trino's own words, not a paraphrase: the reason an Operator reads has to be the one
+    # the coordinator gave, or fixing the Candidate becomes guesswork.
+    assert "'no-such-property' was not used" in verdict["failures"][0]["reason"]
 
 
 async def test_validation_runs_once_per_apply_not_once_per_catalog(
