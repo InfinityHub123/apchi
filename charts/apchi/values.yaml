@@ -231,6 +231,20 @@ deployment:
   providesResourceGroupsProperties: false
   setsEventListenerConfigFiles: false
 
+# Whether a Catalog the validation coordinator cannot connect to fails the Apply (#171).
+#
+# Validation asks each Catalog for its schemas, which is what makes it actually connect --
+# CREATE CATALOG succeeds against a host that does not even resolve. Off by default, because
+# the validation pod's network is not the coordinator's: a NetworkPolicy or a firewall that
+# stands between the probe and a database would otherwise block every Apply for a
+# configuration that works. The finding arrives as a warning on the Validation and the Apply
+# instead.
+#
+# Turn it on where the probe and the coordinator are known to reach the same places, and an
+# unreachable Catalog should stop a release.
+validation:
+  catalogConnectivityBlocksApply: false
+
 timeouts:
   # How long a Rollout may take before the Apply fails. A coordinator that never comes
   # back must not hang the pipeline.

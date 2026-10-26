@@ -28,7 +28,7 @@ from app.pipeline.snapshots import SnapshotStore
 from app.pipeline.validation import validate_candidate
 from app.pipeline.verification import verify
 from app.sections import SectionName
-from app.sections.base import Cluster, Resources, SectionPlan
+from app.sections.base import Cluster, Resources, SectionPlan, ValidationFailure
 from app.sections.registry import REGISTERED
 
 logger = logging.getLogger(__name__)
@@ -60,6 +60,7 @@ class Engine:
         self._plans: dict[SectionName, SectionPlan] = {}
         self._rollout: set[SectionName] = set()
         self._raw_files_changed = False
+        self._warnings: list[ValidationFailure] = []
         self._cluster = Cluster(trino=trino, kubernetes=kubernetes, settings=settings)
 
     async def _freeze_admin_values(self) -> None:
@@ -104,7 +105,19 @@ class Engine:
         # ask for a Rollout -- and §14 requires it to, because these values are read once at
         # start and are the class most able to stop Trino booting.
         self._raw_files_changed = await raw_files.changed(self._cluster)
-        await validate_candidate(self._desired, self._plans, self._cluster, self._apply_id)
+        self._warnings = await validate_candidate(
+            self._desired, self._plans, self._cluster, self._apply_id
+        )
+
+    def warnings(self) -> list[ValidationFailure]:
+        """What Validation found worth saying and not worth refusing over.
+
+        Read by the caller after the stage rather than returned from it, for the same
+        reason `rollout_needed` is: the runner drives every stage through one uniform
+        callable, and a stage that answered differently from the rest would have to be
+        special-cased in the loop.
+        """
+        return list(self._warnings)
 
     async def _desired_and_baseline(
         self,

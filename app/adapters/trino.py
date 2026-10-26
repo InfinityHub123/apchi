@@ -46,6 +46,12 @@ class _Patience(NamedTuple):
 
 _PROBE_PATIENCE = _Patience(request_timeout=5.0, max_attempts=1)
 
+#: How long one catalog gets to answer `SHOW SCHEMAS`. Measured against Trino 483: 0.1s when
+#: it works, 0.1s on a DNS failure, and **20.1s on a blackholed host** -- the JDBC connect
+#: timeout, which no Apchi setting reaches. Ten unreachable catalogs at that rate is over
+#: three minutes added to an Apply, so the wait is bounded here instead.
+_REACHABILITY_PATIENCE = _Patience(request_timeout=10.0, max_attempts=1)
+
 #: How long a connector list is believed, and how long a failure to read one is left alone.
 #:
 #: Both directions matter. A list that never expired would miss a plugin an Admin added by
@@ -235,6 +241,23 @@ class Trino:
         except Exception:
             logger.exception("could not drop the connector probe catalog")
         return None
+
+    async def schemas_of(self, catalog: str) -> list[str]:
+        """`SHOW SCHEMAS`, which is what makes a catalog actually connect.
+
+        `SELECT 1` does not: with no `FROM` it answers 1 and touches no catalog at all. Nor
+        does `CREATE CATALOG`, which is why this exists -- a catalog pointed at a host that
+        does not resolve is created happily and fails only when something reads from it.
+        Verified against Trino 483, both halves.
+
+        `SELECT 1 FROM <catalog>.information_schema.schemata LIMIT 1` produces the identical
+        error. This is preferred for being shorter and for working on a connector with no
+        `information_schema`.
+        """
+        rows = await run_in_threadpool(
+            self._query_sync, f"SHOW SCHEMAS FROM {_identifier(catalog)}", _REACHABILITY_PATIENCE
+        )
+        return [str(row[0]) for row in rows.rows]
 
     async def drop_catalog(self, name: str) -> None:
         """Issues DROP CATALOG. This permanently deletes the backing .properties

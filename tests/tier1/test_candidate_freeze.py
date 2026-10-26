@@ -13,6 +13,7 @@ from httpx import ASGITransport, AsyncClient
 from app.config import Settings
 from app.main import create_app
 from app.pipeline.applies import ApplyEngine, ApplyStore, Stage
+from app.sections.base import ValidationFailure
 
 PG = {
     "name": "finance",
@@ -45,6 +46,9 @@ class SlowEngine:
 
     def rollout_needed(self) -> bool:
         return False
+
+    def warnings(self) -> list[ValidationFailure]:
+        return []
 
     async def roll_out(self) -> None: ...
     async def roll_back(self) -> None: ...
