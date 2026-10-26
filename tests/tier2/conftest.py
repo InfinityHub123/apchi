@@ -683,7 +683,22 @@ class ForwardedKubernetes:
                 return state
             self._forwards[name] = forward
         else:
-            self._forwards[name].ensure_alive()
+            try:
+                self._forwards[name].ensure_alive()
+            except AssertionError:
+                # The same race as above, one poll later. A forward built while the pod was
+                # addressable cannot be revived once the pod has gone -- and Kubernetes has
+                # not necessarily reported a problem yet, which is how control reaches here
+                # at all. Reviving it fails, and that is not a verdict about the Candidate
+                # either.
+                #
+                # Unguarded, this is what a probe that is *meant* to fail looks like from
+                # the outside: the AssertionError surfaces from `pod_state` in place of the
+                # ValidationFailed that names the resource, and the Operator-facing failure
+                # arrives with `resource: None`. Which is a harness error wearing a product
+                # bug's clothes, and it cost a CI shard to tell apart (#174).
+                self._forwards.pop(name).stop()
+                return state
         return state.model_copy(update={"host": "127.0.0.1", "port": self._forwards[name].port})
 
     async def delete_pod(self, name: str) -> None:
