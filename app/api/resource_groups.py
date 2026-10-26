@@ -7,6 +7,7 @@ seeing what now shadows it.
 """
 
 from fastapi import APIRouter, status
+from pydantic import ConfigDict
 
 from app.api.deps import (
     CandidateStoreDep,
@@ -30,6 +31,23 @@ router = APIRouter(prefix="/resource-groups", tags=["resource groups"])
 
 class ResourceGroupCreate(ResourceGroupWrite):
     """A group and where it belongs. The parent must already be staged."""
+
+    #: A child of `global`, which has to be staged already. Memory as a percentage
+    #: rather than a byte count, because a cluster that is resized should not need
+    #: every group rewritten.
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "path": "global.etl",
+                    "hard_concurrency_limit": 10,
+                    "soft_memory_limit": "40%",
+                    "max_queued": 100,
+                    "scheduling_policy": "fair",
+                }
+            ]
+        }
+    )
 
     path: GroupPath
 
@@ -133,6 +151,9 @@ async def delete_resource_group(path: str, store: CandidateStoreDep) -> None:
     it takes them away and Trino falls back to its legacy manager; where the deployment owns
     the pointer Apchi writes that fallback out instead (#125). Either way the Cluster ends up
     behaving the same, so there is nothing here to refuse.
+
+    To take **every** Section back to one Snapshot instead of just this one, use
+    `POST /candidate/rollback` -- a Full Rollback.
     """
     candidate = await store.load()
     section.delete_group(candidate.resources(GROUPS), path)
@@ -142,7 +163,7 @@ async def delete_resource_group(path: str, store: CandidateStoreDep) -> None:
 @router.post(
     "/revert",
     response_model=RevertEffect,
-    summary="Stage this Section's content from an earlier Snapshot",
+    summary="Revert one Section to an earlier Snapshot",
     dependencies=[OperatorMutationAllowed],
 )
 async def revert(

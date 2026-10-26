@@ -30,7 +30,21 @@ ANY = "*"
 class GrantWrite(BaseModel):
     """A grant as an Operator sends it."""
 
-    model_config = ConfigDict(extra="forbid")
+    #: Narrow on purpose. `table` omitted means every table in the schema, which is the
+    #: widest thing an example should suggest.
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "identity": "analytics-team",
+                    "catalog": "finance_pg",
+                    "schema": "reporting",
+                    "privileges": ["SELECT"],
+                }
+            ]
+        },
+    )
 
     identity: Name = Field(description="The Trino Identity being granted access.")
     catalog: Name = Field(description="The catalog the grant applies to.")
@@ -67,6 +81,23 @@ def key_of(write: GrantWrite) -> str:
 
 class Grant(GrantWrite):
     """A grant as it is stored and returned, with the key that addresses it."""
+
+    #: Its own, not `GrantWrite`'s. Pydantic merges `model_config` across the MRO, so without
+    #: this the example here would be the request body -- which has no `key` and is therefore
+    #: not a Grant. `tests/tier1/test_api_examples.py` is what notices.
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "key": "analytics-team:finance_pg:reporting:*",
+                    "identity": "analytics-team",
+                    "catalog": "finance_pg",
+                    "schema": "reporting",
+                    "privileges": ["SELECT"],
+                }
+            ]
+        }
+    )
 
     key: str = Field(description="The identifier this grant is addressed by.")
 

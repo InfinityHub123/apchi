@@ -56,6 +56,19 @@ class _TrinoModel(BaseModel):
 class ResourceGroupWrite(_TrinoModel):
     """A group's own configuration. Its name and place in the hierarchy are its path."""
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "hard_concurrency_limit": 10,
+                    "soft_memory_limit": "40%",
+                    "max_queued": 100,
+                    "scheduling_policy": "fair",
+                }
+            ]
+        }
+    )
+
     hard_concurrency_limit: int = Field(
         ge=0, description="How many queries may run in this group at once."
     )
@@ -103,6 +116,22 @@ class ResourceGroupWrite(_TrinoModel):
 class ResourceGroup(ResourceGroupWrite):
     """A group as it is stored and returned, with the path that addresses it."""
 
+    #: Its own rather than `ResourceGroupWrite`'s, which has no `path` and is therefore not a
+    #: group. Same reason as `Grant`: `model_config` merges across the MRO.
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "path": "global.etl",
+                    "hard_concurrency_limit": 10,
+                    "soft_memory_limit": "40%",
+                    "max_queued": 100,
+                    "scheduling_policy": "fair",
+                }
+            ]
+        }
+    )
+
     path: GroupPath = Field(description="The dotted path from a root group down to this one.")
 
 
@@ -143,7 +172,23 @@ class Selectors(BaseModel):
     would let an Operator change what matches without seeing what now shadows it.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    #: Three, because one selector cannot show what matters here: they are evaluated top
+    #: to bottom, and the last one matches everything left over. A list whose final
+    #: entry is narrow rejects every query it does not match.
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "selectors": [
+                        {"user": "etl_.*", "group": "global.etl"},
+                        {"source": "dashboard", "group": "global.interactive"},
+                        {"group": "global.adhoc"},
+                    ]
+                }
+            ]
+        },
+    )
 
     selectors: list[Selector] = Field(
         default_factory=list, max_length=200, description="Evaluated top to bottom."
@@ -158,7 +203,9 @@ class ResourceGroupSettings(BaseModel):
     limits on group: etl" -- so a Section offering CPU limits has to offer this too.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_extra={"examples": [{"cpu_quota_period": "1h"}]}
+    )
 
     cpu_quota_period: Limit | None = Field(
         default=None,

@@ -6,7 +6,9 @@ coordinator and terminates every running query. Nothing in this module does that
 Apply with an Event Listener staged is refused at Validation until delivery exists.
 """
 
-from fastapi import APIRouter, status
+from typing import Annotated
+
+from fastapi import APIRouter, Body, status
 
 from app.api.deps import (
     CandidateStoreDep,
@@ -26,11 +28,53 @@ from app.sections.event_listeners.model import (
 
 router = APIRouter(prefix="/event-listeners", tags=["event listeners"])
 
+#: Two, for the same reason the Catalog ones are three: `properties` **replaces** the map
+#: rather than merging into it, and that is invisible in any single body. Getting it wrong
+#: here is quieter than elsewhere -- a listener with a property dropped still loads, and
+#: simply stops reporting what it was configured to report.
+UPDATE_EXAMPLES = {
+    "properties": {
+        "summary": "Change one property, resend the rest",
+        "description": (
+            "Every property this listener should keep has to be in the body. Omitting "
+            "`log-created` here is not 'leave it alone', it is 'remove it' -- and Trino "
+            "then falls back to the listener's own default rather than failing."
+        ),
+        "value": {
+            "properties": {
+                "http-event-listener.connect-ingest-uri": (
+                    "http://audit.observability.svc.cluster.local:8080/trino-v2"
+                ),
+                "http-event-listener.log-completed": "true",
+                "http-event-listener.log-created": "false",
+            }
+        },
+    },
+    "type": {
+        "summary": "Change the listener type",
+        "description": (
+            "It cannot be cleared: a listener without a type is not a listener. Omit the "
+            "field to keep the current one. Changing it almost certainly means changing "
+            "`properties` in the same request, since the property names are the type's."
+        ),
+        "value": {
+            "type": "kafka",
+            "properties": {
+                "kafka-event-listener.broker-endpoints": "kafka.svc.cluster.local:9092",
+                "kafka-event-listener.client-id": "trino-apchi",
+                "kafka-event-listener.created-event.topic": "trino-queries-created",
+                "kafka-event-listener.completed-event.topic": "trino-queries-completed",
+                "kafka-event-listener.publish-created-event": "false",
+            },
+        },
+    },
+}
+
 
 @router.post(
     "/revert",
     response_model=RevertEffect,
-    summary="Stage this Section's content from an earlier Snapshot",
+    summary="Revert one Section to an earlier Snapshot",
     dependencies=[OperatorMutationAllowed],
 )
 async def revert(
@@ -41,7 +85,10 @@ async def revert(
 ) -> RevertEffect:
     """Stages into the Candidate; it does not apply. An ordinary POST /applies follows,
     like any other edit -- and because this Section is rollout-required, that Apply
-    restarts the coordinator. The effect says so, and what it costs."""
+    restarts the coordinator. The effect says so, and what it costs.
+    To take **every** Section back to one Snapshot instead of just this one, use
+    `POST /candidate/rollback` -- a Full Rollback.
+    """
     return await section_revert(store, snapshots, cluster, LISTENERS, request.snapshot)
 
 
@@ -78,7 +125,9 @@ async def get_event_listener(name: str, store: CandidateStoreDep) -> EventListen
     dependencies=[OperatorMutationAllowed],
 )
 async def update_event_listener(
-    name: str, update: EventListenerUpdate, store: CandidateStoreDep
+    name: str,
+    update: Annotated[EventListenerUpdate, Body(openapi_examples=UPDATE_EXAMPLES)],
+    store: CandidateStoreDep,
 ) -> EventListener:
     candidate = await store.load()
     updated = section.update_event_listener(candidate.resources(LISTENERS), name, update)

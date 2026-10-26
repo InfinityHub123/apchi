@@ -132,6 +132,23 @@
         "type": "object"
       },
       "ApiError": {
+        "examples": [
+          {
+            "code": "unprocessable_payload",
+            "details": [
+              {
+                "problem": "'connection-uri' is not a property of the 'postgresql' connector; did you mean 'connection-url'?",
+                "property": "connection-uri"
+              },
+              {
+                "problem": "'connection-url' is required by the 'postgresql' connector",
+                "property": "connection-url"
+              }
+            ],
+            "message": "The properties are not valid for the 'postgresql' connector.",
+            "request_id": "9f3c1ad47e8b4e6ab0d2c5f7138ae204"
+          }
+        ],
         "properties": {
           "code": {
             "title": "Code",
@@ -494,6 +511,18 @@
       },
       "Catalog": {
         "description": "A Catalog as it is stored and returned.",
+        "examples": [
+          {
+            "connector": "postgresql",
+            "name": "finance_pg",
+            "properties": {
+              "connection-password": "the-password-goes-here",
+              "connection-url": "jdbc:postgresql://pg.finance.svc.cluster.local:5432/ledger?sslmode=verify-full",
+              "connection-user": "trino_reader"
+            },
+            "supported": true
+          }
+        ],
         "properties": {
           "certificate": {
             "anyOf": [
@@ -592,6 +621,17 @@
       "CatalogWrite": {
         "additionalProperties": false,
         "description": "What an Operator sends.",
+        "examples": [
+          {
+            "connector": "postgresql",
+            "name": "finance_pg",
+            "properties": {
+              "connection-password": "the-password-goes-here",
+              "connection-url": "jdbc:postgresql://pg.finance.svc.cluster.local:5432/ledger?sslmode=verify-full",
+              "connection-user": "trino_reader"
+            }
+          }
+        ],
         "properties": {
           "certificate": {
             "anyOf": [
@@ -634,6 +674,13 @@
       "CertificateMapping": {
         "additionalProperties": false,
         "description": "The pattern as it is stored and returned.",
+        "examples": [
+          {
+            "case": "lower",
+            "pattern": "CN=([^,]+), OU=analytics.*",
+            "user": "$1"
+          }
+        ],
         "properties": {
           "case": {
             "default": "keep",
@@ -671,6 +718,13 @@
       "CertificateMappingWrite": {
         "additionalProperties": false,
         "description": "What an Operator sends.",
+        "examples": [
+          {
+            "case": "lower",
+            "pattern": "CN=([^,]+), OU=analytics.*",
+            "user": "$1"
+          }
+        ],
         "properties": {
           "case": {
             "default": "keep",
@@ -830,6 +884,12 @@
       },
       "Credentials": {
         "additionalProperties": false,
+        "examples": [
+          {
+            "password": "the-password-goes-here",
+            "username": "jo"
+          }
+        ],
         "properties": {
           "password": {
             "maxLength": 1024,
@@ -1024,6 +1084,17 @@
       "EventListenerWrite": {
         "additionalProperties": false,
         "description": "What an Operator sends.",
+        "examples": [
+          {
+            "name": "audit_sink",
+            "properties": {
+              "http-event-listener.connect-ingest-uri": "http://audit.observability.svc.cluster.local:8080/trino",
+              "http-event-listener.log-completed": "true",
+              "http-event-listener.log-created": "false"
+            },
+            "type": "http"
+          }
+        ],
         "properties": {
           "name": {
             "pattern": "^[a-z][a-z0-9_]{0,62}$",
@@ -1051,6 +1122,17 @@
       "Grant": {
         "additionalProperties": false,
         "description": "A grant as it is stored and returned, with the key that addresses it.",
+        "examples": [
+          {
+            "catalog": "finance_pg",
+            "identity": "analytics-team",
+            "key": "analytics-team:finance_pg:reporting:*",
+            "privileges": [
+              "SELECT"
+            ],
+            "schema": "reporting"
+          }
+        ],
         "properties": {
           "catalog": {
             "description": "The catalog the grant applies to.",
@@ -1133,6 +1215,16 @@
       "GrantWrite": {
         "additionalProperties": false,
         "description": "A grant as an Operator sends it.",
+        "examples": [
+          {
+            "catalog": "finance_pg",
+            "identity": "analytics-team",
+            "privileges": [
+              "SELECT"
+            ],
+            "schema": "reporting"
+          }
+        ],
         "properties": {
           "catalog": {
             "description": "The catalog the grant applies to.",
@@ -1539,6 +1631,11 @@
       "PermissionEnforcement": {
         "additionalProperties": false,
         "description": "Whether a Trino Identity may reach only what it has been granted.",
+        "examples": [
+          {
+            "enforced": true
+          }
+        ],
         "properties": {
           "enforced": {
             "description": "False leaves the generated rules ending in a catch-all that allows everything to everyone, which is what a Cluster did before Apchi was installed.",
@@ -1554,6 +1651,17 @@
       },
       "PreservedMappings": {
         "description": "The patterns a Cluster ran before Apchi, kept alive while its clients migrate.",
+        "examples": [
+          {
+            "patterns": [
+              {
+                "case": "lower",
+                "pattern": "CN=([^,]+), OU=legacy.*",
+                "user": "$1"
+              }
+            ]
+          }
+        ],
         "properties": {
           "patterns": {
             "description": "Evaluated in the order given, beneath the Operator's pattern, so a subject matching both resolves to the convention being migrated to.",
@@ -1571,6 +1679,14 @@
       "PrivilegesWrite": {
         "additionalProperties": false,
         "description": "What a staged grant can be changed to.",
+        "examples": [
+          {
+            "privileges": [
+              "SELECT",
+              "INSERT"
+            ]
+          }
+        ],
         "properties": {
           "privileges": {
             "items": {
@@ -1720,6 +1836,11 @@
       "RawFileWrite": {
         "additionalProperties": false,
         "description": "What an Admin sends. The path is in the URL; this is the content.",
+        "examples": [
+          {
+            "content": "http-server.authentication.type=CERTIFICATE\n"
+          }
+        ],
         "properties": {
           "content": {
             "description": "The file's exact contents. Apchi does not parse, validate or merge it -- it is delivered as written and Trino decides. Treated as a secret in its entirety, so it is never logged and never returned by a listing.",
@@ -1792,6 +1913,15 @@
       "ResourceGroup": {
         "additionalProperties": false,
         "description": "A group as it is stored and returned, with the path that addresses it.",
+        "examples": [
+          {
+            "hard_concurrency_limit": 10,
+            "max_queued": 100,
+            "path": "global.etl",
+            "scheduling_policy": "fair",
+            "soft_memory_limit": "40%"
+          }
+        ],
         "properties": {
           "hard_concurrency_limit": {
             "description": "How many queries may run in this group at once.",
@@ -1928,6 +2058,15 @@
       "ResourceGroupCreate": {
         "additionalProperties": false,
         "description": "A group and where it belongs. The parent must already be staged.",
+        "examples": [
+          {
+            "hard_concurrency_limit": 10,
+            "max_queued": 100,
+            "path": "global.etl",
+            "scheduling_policy": "fair",
+            "soft_memory_limit": "40%"
+          }
+        ],
         "properties": {
           "hard_concurrency_limit": {
             "description": "How many queries may run in this group at once.",
@@ -2063,6 +2202,11 @@
       "ResourceGroupSettings": {
         "additionalProperties": false,
         "description": "What the file says outside any group. One thing, so far.\n\n`cpu_quota_period` is not optional decoration: a real coordinator refuses to start when\na group sets a CPU limit without it -- \"cpuQuotaPeriod must be specified to use CPU\nlimits on group: etl\" -- so a Section offering CPU limits has to offer this too.",
+        "examples": [
+          {
+            "cpu_quota_period": "1h"
+          }
+        ],
         "properties": {
           "cpu_quota_period": {
             "anyOf": [
@@ -2085,6 +2229,14 @@
       "ResourceGroupWrite": {
         "additionalProperties": false,
         "description": "A group's own configuration. Its name and place in the hierarchy are its path.",
+        "examples": [
+          {
+            "hard_concurrency_limit": 10,
+            "max_queued": 100,
+            "scheduling_policy": "fair",
+            "soft_memory_limit": "40%"
+          }
+        ],
         "properties": {
           "hard_concurrency_limit": {
             "description": "How many queries may run in this group at once.",
@@ -2211,6 +2363,26 @@
       },
       "RevertEffect": {
         "description": "What was staged, and what an Apply would then do to the Cluster.\n\nThe catalog lists are the point of this model. A revert is not a paper change:\napplying it issues real DROP CATALOG statements, and \"3 catalogs will be dropped\"\nis a materially different warning from \"the configuration will be rewritten\".",
+        "examples": [
+          {
+            "catalogs_created": [],
+            "catalogs_dropped": [
+              "events_clickhouse"
+            ],
+            "catalogs_replaced": [
+              "finance_pg"
+            ],
+            "cost": {
+              "restarts_coordinator": false
+            },
+            "from_snapshot": 12,
+            "other_sections_stay_at": 17,
+            "sections": [
+              "catalogs"
+            ],
+            "summary": "catalogs will be restored to Snapshot 12; every other Section stays at Snapshot 17. That combination has never run. Applying this will drop 1 catalog: events_clickhouse. Snapshot 12 is not modified; applying this produces a new Snapshot."
+          }
+        ],
         "properties": {
           "catalogs_created": {
             "items": {
@@ -2288,6 +2460,11 @@
       "RevertRequest": {
         "additionalProperties": false,
         "description": "Which Snapshot to go back to. Shared by both recovery actions so the two cannot\ndrift into different shapes for the same question.",
+        "examples": [
+          {
+            "snapshot": 12
+          }
+        ],
         "properties": {
           "snapshot": {
             "title": "Snapshot",
@@ -2554,6 +2731,23 @@
       "Selectors": {
         "additionalProperties": false,
         "description": "The whole ordered list, read and replaced as one.\n\nPositional meaning is why there is no endpoint for one selector: editing a rule in place\nwould let an Operator change what matches without seeing what now shadows it.",
+        "examples": [
+          {
+            "selectors": [
+              {
+                "group": "global.etl",
+                "user": "etl_.*"
+              },
+              {
+                "group": "global.interactive",
+                "source": "dashboard"
+              },
+              {
+                "group": "global.adhoc"
+              }
+            ]
+          }
+        ],
         "properties": {
           "selectors": {
             "description": "Evaluated top to bottom.",
@@ -2764,6 +2958,12 @@
       },
       "TokenRequest": {
         "additionalProperties": false,
+        "examples": [
+          {
+            "expires_in_days": 90,
+            "name": "ci-pipeline"
+          }
+        ],
         "properties": {
           "expires_in_days": {
             "anyOf": [
@@ -4660,7 +4860,7 @@
     },
     "/api/v1/candidate/rollback": {
       "post": {
-        "description": "Full Rollback: for a serious mistake, and never implicit.\n\nLike a Section Revert this only stages. The Snapshot being restored from is not\nmodified -- applying this produces a new one, so history is never rewritten.",
+        "description": "Full Rollback: for a serious mistake, and never implicit.\n\nReplaces **all six Sections** at once, which is what distinguishes this from the\nper-Section `POST /{section}/revert`: those leave the other Sections where they are, and\nthe result is a combination that has never run anywhere.\n\nLike a Section Revert this only stages -- an ordinary `POST /applies` follows. The\nSnapshot being restored from is not modified; applying this produces a new one, so\nhistory is never rewritten.\n\n**Admin values are not included.** Raw files, permission enforcement and the preserved\nmapping patterns are the Admin's and never enter a Snapshot (invariant 9), so a Full\nRollback does not restore them. Nor does it reach outside Apchi: a Snapshot naming a\ndatabase that has since moved restores the configuration, not the world it described.",
         "operationId": "rollback_api_v1_candidate_rollback_post",
         "requestBody": {
           "content": {
@@ -4704,7 +4904,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Stage an earlier Snapshot in its entirety",
+        "summary": "Full Rollback: revert every Section to one Snapshot",
         "tags": [
           "candidate"
         ]
@@ -4749,6 +4949,46 @@
         "requestBody": {
           "content": {
             "application/json": {
+              "examples": {
+                "certificate": {
+                  "description": "Name a Client Certificate and Apchi puts it into the properties the way this connector expects, so no path is ever typed. The `sslmode` is yours to choose and is required: a certificate does nothing until the connection is told to use TLS, and Apchi will not pick between `require` and `verify-full` for you.",
+                  "summary": "Presenting a Client Certificate",
+                  "value": {
+                    "certificate": "finance-client",
+                    "connector": "postgresql",
+                    "name": "finance_pg",
+                    "properties": {
+                      "connection-url": "jdbc:postgresql://pg.finance.svc.cluster.local:5432/ledger?sslmode=verify-full",
+                      "connection-user": "trino_reader"
+                    }
+                  }
+                },
+                "postgresql": {
+                  "description": "A curated connector, so every property here is checked against a schema and a typo like `connection-uri` is refused now rather than at Apply.",
+                  "summary": "A PostgreSQL catalog",
+                  "value": {
+                    "connector": "postgresql",
+                    "name": "finance_pg",
+                    "properties": {
+                      "connection-password": "the-password-goes-here",
+                      "connection-url": "jdbc:postgresql://pg.finance.svc.cluster.local:5432/ledger?sslmode=verify-full",
+                      "connection-user": "trino_reader"
+                    }
+                  }
+                },
+                "uncurated": {
+                  "description": "Properties pass through unchecked and the Catalog comes back with `supported: false`, so nothing but the ephemeral coordinator at Validation will judge them. The connector itself is still checked: it has to be one this Trino actually has.",
+                  "summary": "A connector Apchi has no schema for",
+                  "value": {
+                    "connector": "clickhouse",
+                    "name": "events",
+                    "properties": {
+                      "connection-url": "jdbc:clickhouse://clickhouse.svc.cluster.local:8123/",
+                      "connection-user": "trino_reader"
+                    }
+                  }
+                }
+              },
               "schema": {
                 "$ref": "#/components/schemas/CatalogWrite"
               }
@@ -4796,7 +5036,7 @@
     },
     "/api/v1/catalogs/revert": {
       "post": {
-        "description": "Stages into the Candidate; it does not apply. An ordinary POST /applies follows,\nlike any other edit.\n\nThe response says which catalogs an Apply would drop, and that reverting one Section\nwhile the others stay put produces a configuration that has never run.",
+        "description": "Stages into the Candidate; it does not apply. An ordinary POST /applies follows,\nlike any other edit.\n\nThe response says which catalogs an Apply would drop, and that reverting one Section\nwhile the others stay put produces a configuration that has never run.\n\nTo take **every** Section back to one Snapshot instead of just this one, use\n`POST /candidate/rollback` -- a Full Rollback.",
         "operationId": "revert_api_v1_catalogs_revert_post",
         "requestBody": {
           "content": {
@@ -4840,7 +5080,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Stage this Section's content from an earlier Snapshot",
+        "summary": "Revert one Section to an earlier Snapshot",
         "tags": [
           "catalogs"
         ]
@@ -4956,6 +5196,31 @@
         "requestBody": {
           "content": {
             "application/json": {
+              "examples": {
+                "clear-certificate": {
+                  "description": "`null` clears it, where omitting the field would keep it. The certificate itself is untouched and stays available to other Catalogs.",
+                  "summary": "Stop presenting a Client Certificate",
+                  "value": {}
+                },
+                "connector": {
+                  "description": "Refused if this Trino has no such connector. It cannot be cleared either: a Catalog without a connector is not a Catalog, so sending null is refused and omitting the field keeps the current one.",
+                  "summary": "Change the connector",
+                  "value": {
+                    "connector": "mysql"
+                  }
+                },
+                "rotate": {
+                  "description": "`properties` **replaces** the whole map rather than merging into it, so every property the Catalog should keep has to be here. `connector` and `certificate` are omitted, which means unchanged.",
+                  "summary": "Rotate the password, keep everything else",
+                  "value": {
+                    "properties": {
+                      "connection-password": "the-new-password",
+                      "connection-url": "jdbc:postgresql://pg.finance.svc.cluster.local:5432/ledger?sslmode=verify-full",
+                      "connection-user": "trino_reader"
+                    }
+                  }
+                }
+              },
               "schema": {
                 "$ref": "#/components/schemas/CatalogUpdate"
               }
@@ -5003,7 +5268,7 @@
     },
     "/api/v1/certificate-mapping": {
       "delete": {
-        "description": "Removing it does not remove the file. Trino's authenticator refuses to start without\none, so what Apchi writes instead is the rule that leaves every name as presented --\nwhich is how Trino behaves with no mapping configured at all.",
+        "description": "Removing it does not remove the file. Trino's authenticator refuses to start without\none, so what Apchi writes instead is the rule that leaves every name as presented --\nwhich is how Trino behaves with no mapping configured at all.\nTo take **every** Section back to one Snapshot instead of just this one, use\n`POST /candidate/rollback` -- a Full Rollback.",
         "operationId": "clear_certificate_mapping_api_v1_certificate_mapping_delete",
         "responses": {
           "204": {
@@ -5149,7 +5414,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Stage this Section's content from an earlier Snapshot",
+        "summary": "Revert one Section to an earlier Snapshot",
         "tags": [
           "certificate mapping"
         ]
@@ -5321,7 +5586,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Stage this Section's content from an earlier Snapshot",
+        "summary": "Revert one Section to an earlier Snapshot",
         "tags": [
           "client certificates"
         ]
@@ -5329,7 +5594,7 @@
     },
     "/api/v1/certificates/{name}": {
       "delete": {
-        "description": "Refused while a Catalog still presents it. Removing it would leave that Catalog\npointing at a file that is about to disappear, and the failure would surface as a\nconnection error with nothing pointing back at this request.",
+        "description": "Refused while a Catalog still presents it. Removing it would leave that Catalog\npointing at a file that is about to disappear, and the failure would surface as a\nconnection error with nothing pointing back at this request.\nTo take **every** Section back to one Snapshot instead of just this one, use\n`POST /candidate/rollback` -- a Full Rollback.",
         "operationId": "delete_certificate_api_v1_certificates__name__delete",
         "parameters": [
           {
@@ -5509,7 +5774,7 @@
     },
     "/api/v1/event-listeners/revert": {
       "post": {
-        "description": "Stages into the Candidate; it does not apply. An ordinary POST /applies follows,\nlike any other edit -- and because this Section is rollout-required, that Apply\nrestarts the coordinator. The effect says so, and what it costs.",
+        "description": "Stages into the Candidate; it does not apply. An ordinary POST /applies follows,\nlike any other edit -- and because this Section is rollout-required, that Apply\nrestarts the coordinator. The effect says so, and what it costs.\nTo take **every** Section back to one Snapshot instead of just this one, use\n`POST /candidate/rollback` -- a Full Rollback.",
         "operationId": "revert_api_v1_event_listeners_revert_post",
         "requestBody": {
           "content": {
@@ -5553,7 +5818,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Stage this Section's content from an earlier Snapshot",
+        "summary": "Revert one Section to an earlier Snapshot",
         "tags": [
           "event listeners"
         ]
@@ -5670,6 +5935,33 @@
         "requestBody": {
           "content": {
             "application/json": {
+              "examples": {
+                "properties": {
+                  "description": "Every property this listener should keep has to be in the body. Omitting `log-created` here is not 'leave it alone', it is 'remove it' -- and Trino then falls back to the listener's own default rather than failing.",
+                  "summary": "Change one property, resend the rest",
+                  "value": {
+                    "properties": {
+                      "http-event-listener.connect-ingest-uri": "http://audit.observability.svc.cluster.local:8080/trino-v2",
+                      "http-event-listener.log-completed": "true",
+                      "http-event-listener.log-created": "false"
+                    }
+                  }
+                },
+                "type": {
+                  "description": "It cannot be cleared: a listener without a type is not a listener. Omit the field to keep the current one. Changing it almost certainly means changing `properties` in the same request, since the property names are the type's.",
+                  "summary": "Change the listener type",
+                  "value": {
+                    "properties": {
+                      "kafka-event-listener.broker-endpoints": "kafka.svc.cluster.local:9092",
+                      "kafka-event-listener.client-id": "trino-apchi",
+                      "kafka-event-listener.completed-event.topic": "trino-queries-completed",
+                      "kafka-event-listener.created-event.topic": "trino-queries-created",
+                      "kafka-event-listener.publish-created-event": "false"
+                    },
+                    "type": "kafka"
+                  }
+                }
+              },
               "schema": {
                 "$ref": "#/components/schemas/EventListenerUpdate"
               }
@@ -5866,7 +6158,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Stage this Section's content from an earlier Snapshot",
+        "summary": "Revert one Section to an earlier Snapshot",
         "tags": [
           "permissions"
         ]
@@ -5999,7 +6291,7 @@
         ]
       },
       "put": {
-        "description": "The privileges are what changes. Where a grant applies is its identity -- moving it\nis removing one grant and adding another, which is what an Operator means anyway.",
+        "description": "The privileges are what changes. Where a grant applies is its identity -- moving it\nis removing one grant and adding another, which is what an Operator means anyway.\nTo take **every** Section back to one Snapshot instead of just this one, use\n`POST /candidate/rollback` -- a Full Rollback.",
         "operationId": "set_privileges_api_v1_permissions__key__put",
         "parameters": [
           {
@@ -6189,7 +6481,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Stage this Section's content from an earlier Snapshot",
+        "summary": "Revert one Section to an earlier Snapshot",
         "tags": [
           "resource groups"
         ]
@@ -6359,7 +6651,7 @@
     },
     "/api/v1/resource-groups/{path}": {
       "delete": {
-        "description": "Refused while it still has subgroups: deleting a parent would take its whole subtree\nwith it, and an Operator should do that deliberately.\n\nRemoving the last group is allowed on every deployment shape. Where Apchi owns the mounts\nit takes them away and Trino falls back to its legacy manager; where the deployment owns\nthe pointer Apchi writes that fallback out instead (#125). Either way the Cluster ends up\nbehaving the same, so there is nothing here to refuse.",
+        "description": "Refused while it still has subgroups: deleting a parent would take its whole subtree\nwith it, and an Operator should do that deliberately.\n\nRemoving the last group is allowed on every deployment shape. Where Apchi owns the mounts\nit takes them away and Trino falls back to its legacy manager; where the deployment owns\nthe pointer Apchi writes that fallback out instead (#125). Either way the Cluster ends up\nbehaving the same, so there is nothing here to refuse.\n\nTo take **every** Section back to one Snapshot instead of just this one, use\n`POST /candidate/rollback` -- a Full Rollback.",
         "operationId": "delete_resource_group_api_v1_resource_groups__path__delete",
         "parameters": [
           {

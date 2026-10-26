@@ -45,7 +45,12 @@ MAX_FILES: Final = 25
 class RawFileWrite(BaseModel):
     """What an Admin sends. The path is in the URL; this is the content."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [{"content": "http-server.authentication.type=CERTIFICATE\n"}]
+        },
+    )
 
     content: str = Field(
         max_length=MAX_CONTENT_BYTES,

@@ -73,6 +73,18 @@ async def set_maintenance_mode(
 class PreservedMappings(BaseModel):
     """The patterns a Cluster ran before Apchi, kept alive while its clients migrate."""
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "patterns": [
+                        {"pattern": "CN=([^,]+), OU=legacy.*", "user": "$1", "case": "lower"}
+                    ]
+                }
+            ]
+        }
+    )
+
     patterns: list[CertificateMappingWrite] = Field(
         default_factory=list,
         max_length=MAX_PRESERVED_MAPPINGS,
@@ -123,7 +135,7 @@ async def set_preserved_mappings(
 class PermissionEnforcement(BaseModel):
     """Whether a Trino Identity may reach only what it has been granted."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [{"enforced": True}]})
 
     enforced: bool = Field(
         description=(

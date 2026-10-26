@@ -123,7 +123,7 @@ async def reset(store: CandidateStoreDep) -> None:
 @router.post(
     "/candidate/rollback",
     response_model=RevertEffect,
-    summary="Stage an earlier Snapshot in its entirety",
+    summary="Full Rollback: revert every Section to one Snapshot",
     dependencies=[OperatorMutationAllowed],
 )
 async def rollback(
@@ -134,8 +134,18 @@ async def rollback(
 ) -> RevertEffect:
     """Full Rollback: for a serious mistake, and never implicit.
 
-    Like a Section Revert this only stages. The Snapshot being restored from is not
-    modified -- applying this produces a new one, so history is never rewritten.
+    Replaces **all six Sections** at once, which is what distinguishes this from the
+    per-Section `POST /{section}/revert`: those leave the other Sections where they are, and
+    the result is a combination that has never run anywhere.
+
+    Like a Section Revert this only stages -- an ordinary `POST /applies` follows. The
+    Snapshot being restored from is not modified; applying this produces a new one, so
+    history is never rewritten.
+
+    **Admin values are not included.** Raw files, permission enforcement and the preserved
+    mapping patterns are the Admin's and never enter a Snapshot (invariant 9), so a Full
+    Rollback does not restore them. Nor does it reach outside Apchi: a Snapshot naming a
+    database that has since moved restores the configuration, not the world it described.
     """
     return await full_rollback(store, snapshots, cluster, request.snapshot)
 

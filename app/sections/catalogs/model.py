@@ -22,7 +22,27 @@ ConnectorName = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_-]{0,62
 class CatalogWrite(BaseModel):
     """What an Operator sends."""
 
-    model_config = ConfigDict(extra="forbid")
+    #: A real connector with a real-shaped JDBC URL. The route offers more, including
+    #: one that presents a Client Certificate.
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "name": "finance_pg",
+                    "connector": "postgresql",
+                    "properties": {
+                        "connection-url": (
+                            "jdbc:postgresql://pg.finance.svc.cluster.local:5432/ledger"
+                            "?sslmode=verify-full"
+                        ),
+                        "connection-user": "trino_reader",
+                        "connection-password": "the-password-goes-here",
+                    },
+                }
+            ]
+        },
+    )
 
     name: CatalogName
     connector: ConnectorName
@@ -71,6 +91,30 @@ class CatalogUpdate(BaseModel):
 
 class Catalog(BaseModel):
     """A Catalog as it is stored and returned."""
+
+    #: Its own rather than `CatalogWrite`'s -- this is not a subclass, but the response adds
+    #: `supported`, and an example without it would not show the one field here that an
+    #: Operator cannot set and has to read.
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "name": "finance_pg",
+                    "connector": "postgresql",
+                    "properties": {
+                        "connection-url": (
+                            "jdbc:postgresql://pg.finance.svc.cluster.local:5432/ledger"
+                            "?sslmode=verify-full"
+                        ),
+                        "connection-user": "trino_reader",
+                        "connection-password": "the-password-goes-here",
+                    },
+                    "certificate": None,
+                    "supported": True,
+                }
+            ]
+        }
+    )
 
     name: CatalogName
     connector: ConnectorName

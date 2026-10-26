@@ -34,7 +34,7 @@ class RevertRequest(BaseModel):
     """Which Snapshot to go back to. Shared by both recovery actions so the two cannot
     drift into different shapes for the same question."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [{"snapshot": 12}]})
 
     snapshot: int
 
@@ -46,6 +46,35 @@ class RevertEffect(BaseModel):
     applying it issues real DROP CATALOG statements, and "3 catalogs will be dropped"
     is a materially different warning from "the configuration will be rewritten".
     """
+
+    #: A revert that drops a catalog, because that is the case worth seeing before causing
+    #: it: `catalogs_dropped` becomes real `DROP CATALOG` statements at the next Apply, and
+    #: `summary` is the sentence to put in front of an Operator rather than a field count.
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "from_snapshot": 12,
+                    "sections": ["catalogs"],
+                    "other_sections_stay_at": 17,
+                    "catalogs_dropped": ["events_clickhouse"],
+                    "catalogs_created": [],
+                    "catalogs_replaced": ["finance_pg"],
+                    "cost": {
+                        "restarts_coordinator": False,
+                        "queries_at_risk": None,
+                        "warning": None,
+                    },
+                    "summary": (
+                        "catalogs will be restored to Snapshot 12; every other Section stays "
+                        "at Snapshot 17. That combination has never run. Applying this will "
+                        "drop 1 catalog: events_clickhouse. Snapshot 12 is not modified; "
+                        "applying this produces a new Snapshot."
+                    ),
+                }
+            ]
+        }
+    )
 
     from_snapshot: int
     sections: list[SectionName] = Field(description="The Sections replaced in the Candidate.")
