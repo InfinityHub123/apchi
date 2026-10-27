@@ -29,7 +29,36 @@ Status = Literal["valid", "expiring", "expired"]
 class ClientCertificate(BaseModel):
     """A certificate as it is listed and returned."""
 
-    model_config = ConfigDict(extra="forbid")
+    #: Real output, not a hand-written sample: this is what `describe` returns for a
+    #: certificate issued by an internal CA. Two things are worth reading off it.
+    #:
+    #: `subject` and `issuer` are RFC 4514, which orders the RDNs from least to most
+    #: specific and puts no space after the commas. That is **not** the spelling a
+    #: Certificate Mapping Pattern matches against -- Trino presents the JDK's rendering,
+    #: which reverses the order and joins with a comma and a space. A pattern written
+    #: against the string in this field never matches; see §13.3.
+    #:
+    #: `status` is derived from `not_after` on every read rather than stored, so it is
+    #: `valid` here only until the configured window reaches it.
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "name": "finance-client",
+                    "common_name": "trino-reader.finance.acme.internal",
+                    "subject": "C=GB,O=Acme,OU=analytics,CN=trino-reader.finance.acme.internal",
+                    "issuer": "C=GB,O=Acme,CN=Acme Internal Issuing CA",
+                    "not_before": "2026-03-14T09:12:07Z",
+                    "not_after": "2027-03-14T09:12:07Z",
+                    "status": "valid",
+                    "fingerprint": (
+                        "a12038ec184ace7cc0fb262b40d6c6b70d5624fa8e40c0414b8f575d6c2a37a3"
+                    ),
+                }
+            ]
+        },
+    )
 
     name: CertificateName
     common_name: str | None = Field(description="The subject's CN, if it has one.")

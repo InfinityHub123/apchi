@@ -114,7 +114,9 @@ UPDATE_EXAMPLES = {
         "description": (
             "Refused if this Trino has no such connector. It cannot be cleared either: "
             "a Catalog without a connector is not a Catalog, so sending null is refused and "
-            "omitting the field keeps the current one."
+            "omitting the field keeps the current one. A Catalog holding a `certificate` "
+            "can only move to a connector Apchi knows how to wire one into; otherwise "
+            "clear the certificate in the same breath and reference it by hand."
         ),
         "value": {"connector": "mysql"},
     },

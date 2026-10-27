@@ -11,7 +11,7 @@ startup with "not one of the values accepted for Enum class: [INSERT, DELETE, SE
 GRANT_SELECT, UPDATE, OWNERSHIP]".
 """
 
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
@@ -102,8 +102,22 @@ class Grant(GrantWrite):
     key: str = Field(description="The identifier this grant is addressed by.")
 
 
+#: Verbatim from what `system_rules` actually returns, rather than a sample of the shape.
+#: The real response carries six of these; this is the first.
+_FIRST_SYSTEM_RULE: dict[str, Any] = {
+    "rule": "Only Apchi may create or drop a catalog.",
+    "why": (
+        "Catalogs are applied as DDL, and Apchi is the only identity with the owner access "
+        "mode that CREATE CATALOG needs. Without it an End User could create a catalog "
+        "Apchi does not know about, which the next Apply would then remove."
+    ),
+}
+
+
 class SystemRule(BaseModel):
     """One rule Apchi owns, shown to Operators and editable by nobody."""
+
+    model_config = ConfigDict(json_schema_extra={"examples": [_FIRST_SYSTEM_RULE]})
 
     rule: str = Field(description="What the rule does, in Apchi's words.")
     why: str = Field(description="Why it exists, and what breaks without it.")
@@ -116,5 +130,10 @@ class SystemRules(BaseModel):
     refused to them, and §13.4 asks for the same of the queries block: a system-owned rule an
     Operator can read and reason about, not a silent default.
     """
+
+    #: One rule, not all six: the list is generated and its length depends on the posture an
+    #: Admin has set, so an example claiming a fixed set would go stale. `GET` it to read the
+    #: rules this Cluster actually has.
+    model_config = ConfigDict(json_schema_extra={"examples": [{"rules": [_FIRST_SYSTEM_RULE]}]})
 
     rules: list[SystemRule]

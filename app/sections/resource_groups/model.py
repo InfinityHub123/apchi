@@ -142,6 +142,17 @@ class Selector(_TrinoModel):
     therefore matches everything, which is the usual last rule.
     """
 
+    #: Two fields, because one would not show that they are ANDed: this matches a query only
+    #: if the user matches **and** the tag is present. `user` is a regular expression --
+    #: Trino's own field is one -- which is the difference from Permissions, where an
+    #: Operator writes a literal name and the generator anchors it.
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [{"user": "etl_.*", "client_tags": ["batch"], "group": "global.etl"}]
+        },
+    )
+
     group: GroupPath = Field(description="The group queries matching this rule run in.")
     user: str | None = Field(default=None, description="Regex matched against the user.")
     original_user: str | None = Field(

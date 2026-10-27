@@ -497,12 +497,15 @@
         "properties": {
           "archive": {
             "contentMediaType": "application/octet-stream",
-            "description": "A ZIP holding the certificate and key.",
+            "description": "A ZIP holding the certificate and its private key, in any order and under any member names -- Apchi works out which member is which and proves they are a pair. PEM or DER, and an encrypted key needs its passphrase removed first.",
             "title": "Archive",
             "type": "string"
           },
           "name": {
-            "description": "What Catalogs will reference it by.",
+            "description": "What Catalogs will reference it by. A Catalog names this, never a path, so renewing a certificate under the same name re-points every Catalog using it.",
+            "examples": [
+              "finance-client"
+            ],
             "maxLength": 63,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
@@ -770,6 +773,18 @@
       "ClientCertificate": {
         "additionalProperties": false,
         "description": "A certificate as it is listed and returned.",
+        "examples": [
+          {
+            "common_name": "trino-reader.finance.acme.internal",
+            "fingerprint": "a12038ec184ace7cc0fb262b40d6c6b70d5624fa8e40c0414b8f575d6c2a37a3",
+            "issuer": "C=GB,O=Acme,CN=Acme Internal Issuing CA",
+            "name": "finance-client",
+            "not_after": "2027-03-14T09:12:07Z",
+            "not_before": "2026-03-14T09:12:07Z",
+            "status": "valid",
+            "subject": "C=GB,O=Acme,OU=analytics,CN=trino-reader.finance.acme.internal"
+          }
+        ],
         "properties": {
           "common_name": {
             "anyOf": [
@@ -1023,6 +1038,18 @@
       },
       "EventListener": {
         "description": "An Event Listener as it is stored and returned.",
+        "examples": [
+          {
+            "name": "audit_sink",
+            "properties": {
+              "http-event-listener.connect-ingest-uri": "http://audit.observability.svc.cluster.local:8080/trino",
+              "http-event-listener.log-completed": "true",
+              "http-event-listener.log-created": "false"
+            },
+            "supported": true,
+            "type": "http"
+          }
+        ],
         "properties": {
           "name": {
             "pattern": "^[a-z][a-z0-9_]{0,62}$",
@@ -2609,6 +2636,15 @@
       "Selector": {
         "additionalProperties": false,
         "description": "One rule choosing a group for a query. First match wins, so position matters.\n\nEvery field but `group` is optional and every one given must match. An empty selector\ntherefore matches everything, which is the usual last rule.",
+        "examples": [
+          {
+            "client_tags": [
+              "batch"
+            ],
+            "group": "global.etl",
+            "user": "etl_.*"
+          }
+        ],
         "properties": {
           "authenticated_user": {
             "anyOf": [
@@ -2861,6 +2897,12 @@
       },
       "SystemRule": {
         "description": "One rule Apchi owns, shown to Operators and editable by nobody.",
+        "examples": [
+          {
+            "rule": "Only Apchi may create or drop a catalog.",
+            "why": "Catalogs are applied as DDL, and Apchi is the only identity with the owner access mode that CREATE CATALOG needs. Without it an End User could create a catalog Apchi does not know about, which the next Apply would then remove."
+          }
+        ],
         "properties": {
           "rule": {
             "description": "What the rule does, in Apchi's words.",
@@ -2882,6 +2924,16 @@
       },
       "SystemRules": {
         "description": "The rules Apchi generates for itself.\n\nVisible on purpose. An Operator who cannot see them cannot understand why catalog DDL is\nrefused to them, and \u00a713.4 asks for the same of the queries block: a system-owned rule an\nOperator can read and reason about, not a silent default.",
+        "examples": [
+          {
+            "rules": [
+              {
+                "rule": "Only Apchi may create or drop a catalog.",
+                "why": "Catalogs are applied as DDL, and Apchi is the only identity with the owner access mode that CREATE CATALOG needs. Without it an End User could create a catalog Apchi does not know about, which the next Apply would then remove."
+              }
+            ]
+          }
+        ],
         "properties": {
           "rules": {
             "items": {
@@ -5219,7 +5271,7 @@
                   "value": {}
                 },
                 "connector": {
-                  "description": "Refused if this Trino has no such connector. It cannot be cleared either: a Catalog without a connector is not a Catalog, so sending null is refused and omitting the field keeps the current one.",
+                  "description": "Refused if this Trino has no such connector. It cannot be cleared either: a Catalog without a connector is not a Catalog, so sending null is refused and omitting the field keeps the current one. A Catalog holding a `certificate` can only move to a connector Apchi knows how to wire one into; otherwise clear the certificate in the same breath and reference it by hand.",
                   "summary": "Change the connector",
                   "value": {
                     "connector": "mysql"
@@ -5340,6 +5392,33 @@
         "requestBody": {
           "content": {
             "application/json": {
+              "examples": {
+                "common-name": {
+                  "description": "The common case: everything up to the first comma is the CN, and `$1` is that capture. Any certificate the Cluster's truststore accepts maps, so this is the right pattern when the truststore is the access decision.",
+                  "summary": "Take the identity from the CN",
+                  "value": {
+                    "pattern": "CN=([^,]+).*",
+                    "user": "$1"
+                  }
+                },
+                "folded": {
+                  "description": "For a CA that issues mixed-case names while the grants in Permissions are written in lower case. Trino folds after the substitution, so `case` applies to the result of `user` rather than to the subject.",
+                  "summary": "Fold the derived identity to lower case",
+                  "value": {
+                    "case": "lower",
+                    "pattern": "CN=([^,]+), OU=analytics, .*",
+                    "user": "$1"
+                  }
+                },
+                "scoped": {
+                  "description": "Pins the OU as well, so a certificate from another unit matches nothing here. That is not a denial -- Apchi's generated file ends in a rule that leaves an unmatched name as presented, because what a caller may *do* is Permissions' answer, not this Section's.",
+                  "summary": "Only certificates from one team",
+                  "value": {
+                    "pattern": "CN=([^,]+), OU=analytics, .*",
+                    "user": "$1"
+                  }
+                }
+              },
               "schema": {
                 "$ref": "#/components/schemas/CertificateMappingWrite"
               }
@@ -5743,6 +5822,49 @@
         "requestBody": {
           "content": {
             "application/json": {
+              "examples": {
+                "http": {
+                  "description": "`connect-ingest-uri` is the one required property. The two `log-*` flags are what decides whether a query produces one event or two: logging only completed events halves the traffic and is the usual choice for an audit trail, since a created event carries no outcome.",
+                  "summary": "POST each event to an HTTP endpoint",
+                  "value": {
+                    "name": "audit_sink",
+                    "properties": {
+                      "http-event-listener.connect-ingest-uri": "http://audit.observability.svc.cluster.local:8080/trino",
+                      "http-event-listener.connect-retry-count": "3",
+                      "http-event-listener.log-completed": "true",
+                      "http-event-listener.log-created": "false"
+                    },
+                    "type": "http"
+                  }
+                },
+                "kafka": {
+                  "description": "All four of these are required -- the broker list, a topic per event kind and a client id -- and Trino refuses to start if any is missing, even when the matching `publish-*-event` is false. Omitting one is the mistake this example exists to prevent.",
+                  "summary": "Publish events to Kafka topics",
+                  "value": {
+                    "name": "query_events",
+                    "properties": {
+                      "kafka-event-listener.broker-endpoints": "kafka-0.kafka.svc.cluster.local:9092,kafka-1.kafka.svc.cluster.local:9092",
+                      "kafka-event-listener.client-id": "trino-production",
+                      "kafka-event-listener.completed-event.topic": "trino_query_completed",
+                      "kafka-event-listener.created-event.topic": "trino_query_created",
+                      "kafka-event-listener.excluded-fields": "payload,user",
+                      "kafka-event-listener.publish-created-event": "false"
+                    },
+                    "type": "kafka"
+                  }
+                },
+                "uncurated": {
+                  "description": "Trino ships more listeners than Apchi curates. Properties pass through unchecked and the listener comes back with `supported: false`, so nothing but the ephemeral coordinator at Validation will judge them.",
+                  "summary": "A listener type Apchi has no schema for",
+                  "value": {
+                    "name": "query_log",
+                    "properties": {
+                      "mysql-event-listener.db.url": "jdbc:mysql://audit-db.observability.svc.cluster.local:3306/trino_events?user=trino_writer&password=the-password-goes-here"
+                    },
+                    "type": "mysql"
+                  }
+                }
+              },
               "schema": {
                 "$ref": "#/components/schemas/EventListenerWrite"
               }
@@ -6084,6 +6206,45 @@
         "requestBody": {
           "content": {
             "application/json": {
+              "examples": {
+                "one-schema": {
+                  "description": "`table` omitted means every table in the schema, including tables that do not exist yet. Keyed `analytics-team:finance_pg:reporting:*`.",
+                  "summary": "Every table in one schema",
+                  "value": {
+                    "catalog": "finance_pg",
+                    "identity": "analytics-team",
+                    "privileges": [
+                      "SELECT"
+                    ],
+                    "schema": "reporting"
+                  }
+                },
+                "one-table": {
+                  "description": "The narrowest grant there is. `schema` is required alongside `table` -- a table without its schema names either `orders` in some schema or every schema's `orders`, and neither is what anybody meant, so it is refused.",
+                  "summary": "One table in one schema",
+                  "value": {
+                    "catalog": "finance_pg",
+                    "identity": "analytics-team",
+                    "privileges": [
+                      "SELECT"
+                    ],
+                    "schema": "reporting",
+                    "table": "daily_revenue"
+                  }
+                },
+                "whole-catalog": {
+                  "description": "Both levels omitted, so this reaches every table in every schema the catalog has or gains. The widest grant an Operator can write, and worth being sure about: the identity is a Trino Identity -- whoever runs the query -- not an Apchi login.",
+                  "summary": "Every schema in a catalog",
+                  "value": {
+                    "catalog": "finance_pg",
+                    "identity": "etl_service",
+                    "privileges": [
+                      "SELECT",
+                      "INSERT"
+                    ]
+                  }
+                }
+              },
               "schema": {
                 "$ref": "#/components/schemas/GrantWrite"
               }
@@ -6323,6 +6484,39 @@
         "requestBody": {
           "content": {
             "application/json": {
+              "examples": {
+                "delegating": {
+                  "description": "`GRANT_SELECT` is the privilege to pass `SELECT` on. It does not imply `SELECT`, so both belong in the list for an identity that should read as well as delegate.",
+                  "summary": "Read, and let the identity grant reading to others",
+                  "value": {
+                    "privileges": [
+                      "SELECT",
+                      "GRANT_SELECT"
+                    ]
+                  }
+                },
+                "read-only": {
+                  "description": "What most grants are. Sending this over a wider grant is how one is narrowed.",
+                  "summary": "Read, and nothing else",
+                  "value": {
+                    "privileges": [
+                      "SELECT"
+                    ]
+                  }
+                },
+                "read-write": {
+                  "description": "`DELETE` here is row deletion, not dropping the table -- dropping is `OWNERSHIP`. An identity that should load a table and correct it needs all four.",
+                  "summary": "Read and write rows",
+                  "value": {
+                    "privileges": [
+                      "SELECT",
+                      "INSERT",
+                      "UPDATE",
+                      "DELETE"
+                    ]
+                  }
+                }
+              },
               "schema": {
                 "$ref": "#/components/schemas/PrivilegesWrite"
               }
@@ -6407,6 +6601,41 @@
         "requestBody": {
           "content": {
             "application/json": {
+              "examples": {
+                "child": {
+                  "description": "`global` has to be staged already. `scheduling_weight` is this group's share among its siblings, and it means nothing unless the **parent** sets `scheduling_policy` to `weighted` or `weighted_fair` -- the policy governs how a group picks between its children.",
+                  "summary": "A child group, sharing its parent by weight",
+                  "value": {
+                    "hard_concurrency_limit": 10,
+                    "max_queued": 100,
+                    "path": "global.etl",
+                    "scheduling_weight": 3,
+                    "soft_memory_limit": "40%"
+                  }
+                },
+                "cpu-limited": {
+                  "description": "The two CPU limits come as a pair: a soft limit without a hard one stops the coordinator starting with \"Must specify hard CPU limit in addition to soft limit\", so Apchi refuses it here instead. This also needs `cpu_quota_period` on `PUT /resource-groups/settings` -- without it Trino refuses to start with \"cpuQuotaPeriod must be specified to use CPU limits on group: adhoc\".",
+                  "summary": "A group with CPU limits",
+                  "value": {
+                    "hard_concurrency_limit": 20,
+                    "hard_cpu_limit": "1h",
+                    "max_queued": 200,
+                    "path": "global.adhoc",
+                    "soft_cpu_limit": "30m",
+                    "soft_memory_limit": "20%"
+                  }
+                },
+                "root": {
+                  "description": "No dot in the path, so this is a root. Memory as a share rather than a byte count, so resizing the cluster does not mean rewriting every group.",
+                  "summary": "A root group",
+                  "value": {
+                    "hard_concurrency_limit": 100,
+                    "max_queued": 1000,
+                    "path": "global",
+                    "soft_memory_limit": "80%"
+                  }
+                }
+              },
               "schema": {
                 "$ref": "#/components/schemas/ResourceGroupCreate"
               }
@@ -6539,6 +6768,49 @@
         "requestBody": {
           "content": {
             "application/json": {
+              "examples": {
+                "by-kind-of-query": {
+                  "description": "Every field given must match, so this first rule needs both. `query_type` is one of Trino's own -- `DATA_DEFINITION` covers the DDL statements -- and `client_tags` requires every tag listed to be present on the query.",
+                  "summary": "Route by query type and client tags",
+                  "value": {
+                    "selectors": [
+                      {
+                        "group": "global.ddl",
+                        "query_type": "DATA_DEFINITION"
+                      },
+                      {
+                        "client_tags": [
+                          "batch"
+                        ],
+                        "group": "global.etl",
+                        "user": "etl_.*"
+                      },
+                      {
+                        "group": "global.adhoc"
+                      }
+                    ]
+                  }
+                },
+                "ordered": {
+                  "description": "Read top to bottom. The last entry matches everything left over, and leaving it out is what makes Trino reject a query with \"No matching resource group found with the configured selection rules\" -- so a list whose final rule is narrow refuses work rather than queueing it.",
+                  "summary": "Narrow rules first, a catch-all last",
+                  "value": {
+                    "selectors": [
+                      {
+                        "group": "global.etl",
+                        "user": "etl_.*"
+                      },
+                      {
+                        "group": "global.interactive",
+                        "source": "dashboard"
+                      },
+                      {
+                        "group": "global.adhoc"
+                      }
+                    ]
+                  }
+                }
+              },
               "schema": {
                 "$ref": "#/components/schemas/Selectors"
               }
@@ -6620,6 +6892,20 @@
         "requestBody": {
           "content": {
             "application/json": {
+              "examples": {
+                "cleared": {
+                  "description": "An empty body, which is the same configuration as never having set one. Safe only while no group sets a CPU limit -- Trino refuses to start otherwise.",
+                  "summary": "Carry no settings",
+                  "value": {}
+                },
+                "cpu-quota": {
+                  "description": "How often every group's CPU limits reset, as Trino spells a duration. Required before any group may set a CPU limit at all, which is why it governs the file rather than a group.",
+                  "summary": "Set the CPU quota period",
+                  "value": {
+                    "cpu_quota_period": "1h"
+                  }
+                }
+              },
               "schema": {
                 "$ref": "#/components/schemas/ResourceGroupSettings"
               }
@@ -6776,6 +7062,27 @@
         "requestBody": {
           "content": {
             "application/json": {
+              "examples": {
+                "raise-the-ceiling": {
+                  "description": "`soft_memory_limit` is resent unchanged. Leaving it out would not keep it -- it would clear it, and the group would be left with Trino's own default rather than the share it had.",
+                  "summary": "Raise the limits, keep the rest",
+                  "value": {
+                    "hard_concurrency_limit": 20,
+                    "max_queued": 200,
+                    "soft_memory_limit": "40%"
+                  }
+                },
+                "weighted-parent": {
+                  "description": "Set on the **parent**: the policy decides how this group picks which of its queued queries -- or which child -- runs next. `fair` is the default and round-robins; `weighted` honours each child's `scheduling_weight`.",
+                  "summary": "Share this group between its children by weight",
+                  "value": {
+                    "hard_concurrency_limit": 100,
+                    "max_queued": 1000,
+                    "scheduling_policy": "weighted",
+                    "soft_memory_limit": "80%"
+                  }
+                }
+              },
               "schema": {
                 "$ref": "#/components/schemas/ResourceGroupWrite"
               }
