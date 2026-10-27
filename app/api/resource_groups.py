@@ -6,7 +6,9 @@ first match wins and editing one in place would let an Operator change what matc
 seeing what now shadows it.
 """
 
-from fastapi import APIRouter, status
+from typing import Annotated
+
+from fastapi import APIRouter, Body, status
 from pydantic import ConfigDict
 
 from app.api.deps import (
@@ -52,6 +54,154 @@ class ResourceGroupCreate(ResourceGroupWrite):
     path: GroupPath
 
 
+#: Three, and they walk down the hierarchy -- because a group's place in the tree is its
+#: `path` and nothing else, and the parent has to be staged before the child.
+#:
+#: `hard_concurrency_limit` is in all three because Trino requires it: a group without one
+#: stops the coordinator starting with "Missing required property: hardConcurrencyLimit",
+#: verified against a real coordinator.
+CREATE_EXAMPLES = {
+    "root": {
+        "summary": "A root group",
+        "description": (
+            "No dot in the path, so this is a root. Memory as a share rather than a byte "
+            "count, so resizing the cluster does not mean rewriting every group."
+        ),
+        "value": {
+            "path": "global",
+            "hard_concurrency_limit": 100,
+            "max_queued": 1000,
+            "soft_memory_limit": "80%",
+        },
+    },
+    "child": {
+        "summary": "A child group, sharing its parent by weight",
+        "description": (
+            "`global` has to be staged already. `scheduling_weight` is this group's share "
+            "among its siblings, and it means nothing unless the **parent** sets "
+            "`scheduling_policy` to `weighted` or `weighted_fair` -- the policy governs how "
+            "a group picks between its children."
+        ),
+        "value": {
+            "path": "global.etl",
+            "hard_concurrency_limit": 10,
+            "max_queued": 100,
+            "soft_memory_limit": "40%",
+            "scheduling_weight": 3,
+        },
+    },
+    "cpu-limited": {
+        "summary": "A group with CPU limits",
+        "description": (
+            "The two CPU limits come as a pair: a soft limit without a hard one stops the "
+            'coordinator starting with "Must specify hard CPU limit in addition to soft '
+            'limit", so Apchi refuses it here instead. This also needs '
+            "`cpu_quota_period` on `PUT /resource-groups/settings` -- without it Trino "
+            'refuses to start with "cpuQuotaPeriod must be specified to use CPU limits on '
+            'group: adhoc".'
+        ),
+        "value": {
+            "path": "global.adhoc",
+            "hard_concurrency_limit": 20,
+            "max_queued": 200,
+            "soft_memory_limit": "20%",
+            "soft_cpu_limit": "30m",
+            "hard_cpu_limit": "1h",
+        },
+    },
+}
+
+#: A PUT **replaces** the group's configuration, so every setting it should keep has to be
+#: in the body -- the same whole-document rule as a Catalog's properties. The path is not in
+#: the body: moving a group is removing it and adding it elsewhere.
+EDIT_EXAMPLES = {
+    "raise-the-ceiling": {
+        "summary": "Raise the limits, keep the rest",
+        "description": (
+            "`soft_memory_limit` is resent unchanged. Leaving it out would not keep it -- "
+            "it would clear it, and the group would be left with Trino's own default rather "
+            "than the share it had."
+        ),
+        "value": {
+            "hard_concurrency_limit": 20,
+            "max_queued": 200,
+            "soft_memory_limit": "40%",
+        },
+    },
+    "weighted-parent": {
+        "summary": "Share this group between its children by weight",
+        "description": (
+            "Set on the **parent**: the policy decides how this group picks which of its "
+            "queued queries -- or which child -- runs next. `fair` is the default and "
+            "round-robins; `weighted` honours each child's `scheduling_weight`."
+        ),
+        "value": {
+            "hard_concurrency_limit": 100,
+            "max_queued": 1000,
+            "soft_memory_limit": "80%",
+            "scheduling_policy": "weighted",
+        },
+    },
+}
+
+#: Two, and both are whole lists, because the order **is** the configuration: Trino takes
+#: the first selector that matches and a narrow rule placed last is a rule nothing reaches.
+SELECTOR_EXAMPLES = {
+    "ordered": {
+        "summary": "Narrow rules first, a catch-all last",
+        "description": (
+            "Read top to bottom. The last entry matches everything left over, and leaving "
+            'it out is what makes Trino reject a query with "No matching resource group '
+            'found with the configured selection rules" -- so a list whose final rule is '
+            "narrow refuses work rather than queueing it."
+        ),
+        "value": {
+            "selectors": [
+                {"user": "etl_.*", "group": "global.etl"},
+                {"source": "dashboard", "group": "global.interactive"},
+                {"group": "global.adhoc"},
+            ]
+        },
+    },
+    "by-kind-of-query": {
+        "summary": "Route by query type and client tags",
+        "description": (
+            "Every field given must match, so this first rule needs both. `query_type` is "
+            "one of Trino's own -- `DATA_DEFINITION` covers the DDL statements -- and "
+            "`client_tags` requires every tag listed to be present on the query."
+        ),
+        "value": {
+            "selectors": [
+                {"query_type": "DATA_DEFINITION", "group": "global.ddl"},
+                {"client_tags": ["batch"], "user": "etl_.*", "group": "global.etl"},
+                {"group": "global.adhoc"},
+            ]
+        },
+    },
+}
+
+#: The file's own settings, outside any group. One of them, so far.
+SETTINGS_EXAMPLES = {
+    "cpu-quota": {
+        "summary": "Set the CPU quota period",
+        "description": (
+            "How often every group's CPU limits reset, as Trino spells a duration. Required "
+            "before any group may set a CPU limit at all, which is why it governs the file "
+            "rather than a group."
+        ),
+        "value": {"cpu_quota_period": "1h"},
+    },
+    "cleared": {
+        "summary": "Carry no settings",
+        "description": (
+            "An empty body, which is the same configuration as never having set one. Safe "
+            "only while no group sets a CPU limit -- Trino refuses to start otherwise."
+        ),
+        "value": {},
+    },
+}
+
+
 # Declared before the `{path}` routes: `selectors` is a legal path segment, and a route
 # matching it as one would shadow this.
 @router.get("/selectors", response_model=Selectors, summary="The staged selectors, in order")
@@ -65,7 +215,10 @@ async def get_selectors(store: CandidateStoreDep) -> Selectors:
     summary="Replace the selectors",
     dependencies=[OperatorMutationAllowed],
 )
-async def set_selectors(selectors: Selectors, store: CandidateStoreDep) -> Selectors:
+async def set_selectors(
+    selectors: Annotated[Selectors, Body(openapi_examples=SELECTOR_EXAMPLES)],
+    store: CandidateStoreDep,
+) -> Selectors:
     """Whole-list replacement is the contract. A selector naming a group that is not staged
     yet is accepted here and refused at Validate, so an Operator can write the rule before
     the group it points at."""
@@ -87,7 +240,8 @@ async def get_settings(store: CandidateStoreDep) -> ResourceGroupSettings:
     dependencies=[OperatorMutationAllowed],
 )
 async def set_settings(
-    settings: ResourceGroupSettings, store: CandidateStoreDep
+    settings: Annotated[ResourceGroupSettings, Body(openapi_examples=SETTINGS_EXAMPLES)],
+    store: CandidateStoreDep,
 ) -> ResourceGroupSettings:
     """The CPU quota period governs the whole file rather than any one group, and Trino
     refuses to start when a group sets a CPU limit without it."""
@@ -109,7 +263,10 @@ async def list_resource_groups(store: CandidateStoreDep) -> list[ResourceGroup]:
     summary="Add a resource group",
     dependencies=[OperatorMutationAllowed],
 )
-async def add_resource_group(write: ResourceGroupCreate, store: CandidateStoreDep) -> ResourceGroup:
+async def add_resource_group(
+    write: Annotated[ResourceGroupCreate, Body(openapi_examples=CREATE_EXAMPLES)],
+    store: CandidateStoreDep,
+) -> ResourceGroup:
     candidate = await store.load()
     body = ResourceGroupWrite.model_validate(write.model_dump(exclude={"path"}))
     saved = section.add_group(candidate.resources(GROUPS), write.path, body)
@@ -129,7 +286,9 @@ async def get_resource_group(path: str, store: CandidateStoreDep) -> ResourceGro
     dependencies=[OperatorMutationAllowed],
 )
 async def edit_resource_group(
-    path: str, write: ResourceGroupWrite, store: CandidateStoreDep
+    path: str,
+    write: Annotated[ResourceGroupWrite, Body(openapi_examples=EDIT_EXAMPLES)],
+    store: CandidateStoreDep,
 ) -> ResourceGroup:
     candidate = await store.load()
     saved = section.edit_group(candidate.resources(GROUPS), path, write)

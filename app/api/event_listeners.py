@@ -28,6 +28,77 @@ from app.sections.event_listeners.model import (
 
 router = APIRouter(prefix="/event-listeners", tags=["event listeners"])
 
+#: The two types Apchi curates, plus one it does not -- because which type a listener is
+#: decides the whole property namespace, and each property is prefixed by the type that
+#: reads it. A body naming `http` and carrying `kafka-event-listener.*` is refused, and no
+#: single example can show that.
+#:
+#: Every property here is from Trino's own 483 documentation for that listener.
+CREATE_EXAMPLES = {
+    "http": {
+        "summary": "POST each event to an HTTP endpoint",
+        "description": (
+            "`connect-ingest-uri` is the one required property. The two `log-*` flags are "
+            "what decides whether a query produces one event or two: logging only "
+            "completed events halves the traffic and is the usual choice for an audit "
+            "trail, since a created event carries no outcome."
+        ),
+        "value": {
+            "name": "audit_sink",
+            "type": "http",
+            "properties": {
+                "http-event-listener.connect-ingest-uri": (
+                    "http://audit.observability.svc.cluster.local:8080/trino"
+                ),
+                "http-event-listener.log-completed": "true",
+                "http-event-listener.log-created": "false",
+                "http-event-listener.connect-retry-count": "3",
+            },
+        },
+    },
+    "kafka": {
+        "summary": "Publish events to Kafka topics",
+        "description": (
+            "All four of these are required -- the broker list, a topic per event kind and "
+            "a client id -- and Trino refuses to start if any is missing, even when the "
+            "matching `publish-*-event` is false. Omitting one is the mistake this example "
+            "exists to prevent."
+        ),
+        "value": {
+            "name": "query_events",
+            "type": "kafka",
+            "properties": {
+                "kafka-event-listener.broker-endpoints": (
+                    "kafka-0.kafka.svc.cluster.local:9092,kafka-1.kafka.svc.cluster.local:9092"
+                ),
+                "kafka-event-listener.created-event.topic": "trino_query_created",
+                "kafka-event-listener.completed-event.topic": "trino_query_completed",
+                "kafka-event-listener.client-id": "trino-production",
+                "kafka-event-listener.publish-created-event": "false",
+                "kafka-event-listener.excluded-fields": "payload,user",
+            },
+        },
+    },
+    "uncurated": {
+        "summary": "A listener type Apchi has no schema for",
+        "description": (
+            "Trino ships more listeners than Apchi curates. Properties pass through "
+            "unchecked and the listener comes back with `supported: false`, so nothing but "
+            "the ephemeral coordinator at Validation will judge them."
+        ),
+        "value": {
+            "name": "query_log",
+            "type": "mysql",
+            "properties": {
+                "mysql-event-listener.db.url": (
+                    "jdbc:mysql://audit-db.observability.svc.cluster.local:3306/trino_events"
+                    "?user=trino_writer&password=the-password-goes-here"
+                )
+            },
+        },
+    },
+}
+
 #: Two, for the same reason the Catalog ones are three: `properties` **replaces** the map
 #: rather than merging into it, and that is invisible in any single body. Getting it wrong
 #: here is quieter than elsewhere -- a listener with a property dropped still loads, and
@@ -105,7 +176,8 @@ async def list_event_listeners(store: CandidateStoreDep) -> list[EventListener]:
     dependencies=[OperatorMutationAllowed],
 )
 async def create_event_listener(
-    write: EventListenerWrite, store: CandidateStoreDep
+    write: Annotated[EventListenerWrite, Body(openapi_examples=CREATE_EXAMPLES)],
+    store: CandidateStoreDep,
 ) -> EventListener:
     candidate = await store.load()
     created = section.create_event_listener(candidate.resources(LISTENERS), write)

@@ -62,8 +62,28 @@ async def list_certificates(
 async def upload_certificate(
     store: CandidateStoreDep,
     settings: SettingsDep,
-    name: Annotated[CertificateName, Form(description="What Catalogs will reference it by.")],
-    archive: Annotated[UploadFile, File(description="A ZIP holding the certificate and key.")],
+    name: Annotated[
+        CertificateName,
+        Form(
+            description=(
+                "What Catalogs will reference it by. A Catalog names this, never a path, "
+                "so renewing a certificate under the same name re-points every Catalog "
+                "using it."
+            ),
+            examples=["finance-client"],
+        ),
+    ],
+    archive: Annotated[
+        UploadFile,
+        File(
+            description=(
+                "A ZIP holding the certificate and its private key, in any order and under "
+                "any member names -- Apchi works out which member is which and proves they "
+                "are a pair. PEM or DER, and an encrypted key needs its passphrase removed "
+                "first."
+            )
+        ),
+    ],
 ) -> ClientCertificate:
     """Uploading under a name that is already staged replaces it, which is how renewal
     works: the Catalogs referencing it reference the name."""

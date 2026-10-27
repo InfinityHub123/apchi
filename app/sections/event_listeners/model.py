@@ -74,6 +74,28 @@ class EventListenerUpdate(BaseModel):
 class EventListener(BaseModel):
     """An Event Listener as it is stored and returned."""
 
+    #: Its own rather than `EventListenerWrite`'s, because the response carries `supported`
+    #: and a request does not. Shown true here: `http` is one of the two types Apchi
+    #: curates, so these properties were checked against a schema before they were stored.
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "name": "audit_sink",
+                    "type": "http",
+                    "properties": {
+                        "http-event-listener.connect-ingest-uri": (
+                            "http://audit.observability.svc.cluster.local:8080/trino"
+                        ),
+                        "http-event-listener.log-completed": "true",
+                        "http-event-listener.log-created": "false",
+                    },
+                    "supported": True,
+                }
+            ]
+        }
+    )
+
     name: ListenerName
     type: ListenerType
     properties: dict[str, str] = Field(default_factory=dict)

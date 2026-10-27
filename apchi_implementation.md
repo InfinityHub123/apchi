@@ -1127,6 +1127,35 @@ Python's engine, so it is an approximation. An expression only Python accepts, s
 `(?P<name>...)`, reaches the ephemeral coordinator and fails there (§6), before the Cluster is
 touched.
 
+### The string a pattern matches is not the subject Apchi reports
+
+A pattern is matched against the **whole** subject distinguished name, and the spelling of
+that name is the JDK's rather than the certificate's. `CertificateAuthenticator` builds the
+identity from `principal.toString()`, which for an `X500Principal` reaches
+`sun.security.x509.X500Name.generateDN()` — and that joins the RDNs with `StringJoiner(", ")`
+after iterating them **in reverse**. So the CN comes first and there is a space after every
+comma:
+
+```
+CN=trino-reader.finance.acme.internal, OU=analytics, O=Acme, C=GB
+```
+
+Apchi's own `GET /certificates` reports the same certificate's `subject` as RFC 4514, which
+orders the RDNs the other way and uses no spaces:
+
+```
+C=GB,O=Acme,OU=analytics,CN=trino-reader.finance.acme.internal
+```
+
+Those are two renderings of one name, and **a pattern written against the second never
+matches**. That is a trap worth naming because the second is the one an Operator can see:
+they read a certificate back from Apchi, copy the subject they were shown, and build a
+pattern out of it. Reproduced against Trino 483 with the insecure authenticator — the
+JDK-spelled subject maps and folds as the pattern says, a subject from another OU passes
+through unchanged by the catch-all, and the RFC 4514 spelling of the *same* certificate comes
+back untouched. So the API reference states the matched form and shows it, rather than leaving
+a reader to infer it from the field beside it.
+
 **Rollout-required.** `UserMapping` parses an immutable rule list at authenticator
 construction, so every change to the pattern costs a coordinator restart. Nothing re-reads the
 file, which is why a Rollout is the only way a pattern takes effect and why no manifest here
@@ -2020,6 +2049,48 @@ database it has stopped writing to.
 **The better-aimed fix, if duplicate Snapshots turn out to matter**, is a no-op guard on
 `POST /applies`: refuse an Apply whose Candidate does not differ from its base Snapshot. That is
 a decision about Apply semantics rather than about retries, and it is not taken here.
+
+## Examples
+
+Every Section's write endpoints carry **named** examples, the kind Swagger puts in a dropdown
+with a summary beside each. Named rather than one sample per body, because what a reader needs
+from an example is usually a distinction and a single body cannot show one: omitted, present
+and `null` are three different instructions to a PATCH; a grant's reach is spelled by which
+fields are *absent*; a selector list means something different in a different order.
+
+**An example is an assertion, not prose.** Three checks stand behind them, and each exists
+because the one above it passed something broken:
+
+1. The example validates against the model that declares it. Catches an example that drifted
+   from its schema — and the inheritance trap, where a response model subclassing a request
+   model silently adopts its example through Pydantic's `model_config` merge across the MRO.
+2. Where a Section curates property schemas, the example's `properties` go through that
+   schema. Pydantic cannot do this: `properties` is a `dict[str, Any]` in every one of these
+   models, so a `kafka` listener example that was two required properties short satisfied
+   every type in the system.
+3. The example is sent to the endpoint it is documented on, against a real Trino, with
+   whatever it references staged first — then the ones that accumulate are validated together
+   against a real coordinator. This is the only check that sees the handler. A body can pass
+   both checks above and still be refused by a connector the cluster does not have, by a
+   cross-field rule, or by naming a Client Certificate nobody uploaded.
+
+The third check found two things the first two could not, both of them correct refusals that
+an example had quietly misrepresented: a Catalog with a `certificate` needs `sslmode` on its
+connection URL, and one holding a certificate cannot move to a connector Apchi has no
+certificate wiring for.
+
+**Real values, from primary sources.** Property names come from Trino's own documentation for
+the version in range, not from memory; the `ClientCertificate` response example is what
+`describe()` actually returns for a certificate generated for the purpose; the system-owned
+permission rule is copied verbatim out of what the endpoint serves. Where an example asserts a
+Trino behaviour — that a selector routes a query to a group, that a mapping pattern folds case
+— that behaviour was reproduced against a real coordinator rather than reasoned about.
+
+**Examples are alternatives where the resource is one-of.** Three ways to write a Certificate
+Mapping Pattern are three ways to write the single pattern, not three patterns; three Event
+Listener types cannot be staged together, because Trino reads one listener file and the
+Section refuses the second. The test that drives them does each in isolation for exactly that
+reason, and the accumulating ones together.
 
 ## Errors
 
