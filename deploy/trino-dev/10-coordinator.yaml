@@ -27,6 +27,11 @@ spec:
         app.kubernetes.io/instance: trino
         app.kubernetes.io/component: coordinator
     spec:
+      # The group that owns Apchi's Secret volumes. Without it the 0640 below is
+      # root:root, which the `trino` user cannot read -- including the seed initContainer,
+      # which runs as the image's user too. See values.yaml for the measurements.
+      securityContext:
+        fsGroup: 1000
       initContainers:
         # Seeds the writable store directory from the Secret Apchi patches, before Trino
         # reads it. FileCatalogStore enumerates the directory only in its constructor, so
@@ -97,8 +102,13 @@ spec:
         - {name: config, configMap: {name: trino-config}}
         - {name: access-control, secret: {secretName: trino-access-control}}
         - {name: apchi-user-mapping, secret: {secretName: trino-user-mapping}}
-        - {name: catalog-seed, secret: {secretName: trino-catalog-seed}}
-        - {name: client-certificates, secret: {secretName: trino-client-certificates}}
+        # Both of these hold credentials, so neither may be world-readable: the catalog
+        # seed carries every catalog's `connection-password`, and the certificate volume
+        # carries private keys. 0640 with the fsGroup above is root-owned and
+        # group-readable, which is what libpq will accept for a key file and what the
+        # kubelet's roMask floor allows. §13.2.
+        - {name: catalog-seed, secret: {secretName: trino-catalog-seed, defaultMode: 0640}}
+        - {name: client-certificates, secret: {secretName: trino-client-certificates, defaultMode: 0640}}
         # Ephemeral by design. Durability lives in the catalog seed Secret, not here.
         - {name: catalog-store, emptyDir: {}}
         # No volume for the resource-groups or event-listener Secrets. For both of them the

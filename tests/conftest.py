@@ -17,7 +17,7 @@ from testcontainers.community.mongodb import MongoDbContainer
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
-from app.adapters.kubernetes import PodState, RolloutState
+from app.adapters.kubernetes import CREDENTIAL_FILE_MODE, PodState, RolloutState
 from app.adapters.trino import Trino
 from app.config import Environment, Settings
 from app.main import create_app
@@ -122,6 +122,10 @@ def healthy_pod_spec() -> dict[str, Any]:
     catalog store.
     """
     return {
+        # As deploy/trino-dev has it. Not decoration in a fake either: it is what makes the
+        # credential files Apchi mounts group-readable rather than world-readable, and the
+        # fake has to describe a Cluster that exists.
+        "securityContext": {"fsGroup": 1000},
         "initContainers": [
             {
                 "name": "seed-catalogs",
@@ -316,10 +320,21 @@ class FakeKubernetes:
         seed then wrote that emptiness into the Secret. Nothing was wrong with Apchi. The
         fake was describing a Cluster that does not exist.
         """
-        self.mounts[path] = {"volume": volume, "secret": secret, "key": key}
+        # The mode, and the condition on it, mirror the real adapter: a credential file is
+        # restricted to its group only where the pod declares an fsGroup, because a
+        # root-owned 0640 file with no group Trino belongs to is one it cannot read.
+        secret_volume: dict[str, Any] = {"secretName": secret}
+        if (self.pod_spec.get("securityContext") or {}).get("fsGroup") is not None:
+            secret_volume["defaultMode"] = CREDENTIAL_FILE_MODE
+        self.mounts[path] = {
+            "volume": volume,
+            "secret": secret,
+            "key": key,
+            "mode": secret_volume.get("defaultMode"),
+        }
         volumes = self.pod_spec.setdefault("volumes", [])
         if not any(existing["name"] == volume for existing in volumes):
-            volumes.append({"name": volume, "secret": {"secretName": secret}})
+            volumes.append({"name": volume, "secret": dict(secret_volume)})
         container_spec = next(c for c in self.pod_spec["containers"] if c["name"] == container)
         mounts = container_spec.setdefault("volumeMounts", [])
         if not any(mount["mountPath"] == path for mount in mounts):

@@ -20,6 +20,10 @@ spec:
       annotations: {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      # The group that owns the certificate volume. Without it the 0640 below is root:root
+      # and the `trino` user cannot read the keys a connector presents outward.
+      securityContext:
+        fsGroup: {{ .Values.trino.fsGroup }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -52,7 +56,8 @@ spec:
           {{- end }}
       volumes:
         - {name: config, configMap: {name: {{ include "trino.fullname" . }}-config}}
-        - {name: client-certificates, secret: {secretName: {{ .Values.secrets.clientCertificates }}}}
+        # Private keys, so not world-readable. 0640 with the fsGroup above. §13.2.
+        - {name: client-certificates, secret: {secretName: {{ .Values.secrets.clientCertificates }}, defaultMode: 0640}}
       {{- with .Values.worker.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}

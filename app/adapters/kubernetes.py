@@ -13,6 +13,20 @@ from typing import Any, Protocol, runtime_checkable
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
+#: The mode for a Secret file that carries credentials.
+#:
+#: 0640 and not 0600, and that is not a compromise. A Secret volume's files are owned by
+#: **root** whatever the container runs as -- only the group follows `fsGroup` -- so 0600
+#: would be root-only and Trino, which runs as uid 1000, could not read its own private
+#: keys. 0640 makes the file root-owned and group-readable, which is exactly what libpq
+#: accepts for a key file: it refuses group-write, group-execute and any world bit, and
+#: nothing else.
+#:
+#: Asking for 0600 is not even an error, it is a no-op: the kubelet ORs `roMask = 0440`
+#: into every file's mode on a readOnly volume, so 0600 arrives as 0640 regardless. See
+#: §13.2 for the measurements.
+CREDENTIAL_FILE_MODE = 0o640
+
 
 class PodState(BaseModel):
     """Enough to decide whether to keep waiting, connect, or give up.
@@ -359,14 +373,27 @@ class RealKubernetes:
     ) -> None:
         """Mount one key of a Secret at one path. Idempotent: volumes merge by name and
         mounts by mountPath, so re-applying the same mount changes nothing -- and a
-        template that does not change triggers no rollout."""
+        template that does not change triggers no rollout.
+
+        The file is restricted to the owning group **only where the deployment declares an
+        `fsGroup`**, and that condition is the whole care here. These files can carry
+        credentials -- an Event Listener's properties will hold a password in a JDBC URL --
+        so a world-readable one is worth closing. But a Secret file is root-owned, so 0640
+        without a group that Trino belongs to is a file Trino cannot read, and
+        `event-listener.properties` unreadable is a coordinator that will not start. On a
+        deployment with no `fsGroup` the mode is left alone: Apchi does not own that pod
+        template, and hardening a file into an outage is worse than the exposure.
+        """
+        secret_volume: dict[str, Any] = {"secretName": secret}
+        if await self._fs_group(deployment) is not None:
+            secret_volume["defaultMode"] = CREDENTIAL_FILE_MODE
         await self._patch_deployment(
             deployment,
             {
                 "spec": {
                     "template": {
                         "spec": {
-                            "volumes": [{"name": volume, "secret": {"secretName": secret}}],
+                            "volumes": [{"name": volume, "secret": secret_volume}],
                             "containers": [
                                 {
                                     "name": container,
@@ -385,6 +412,16 @@ class RealKubernetes:
                 }
             },
         )
+
+    async def _fs_group(self, deployment: str) -> int | None:
+        """The pod template's `fsGroup`, or None when it declares none.
+
+        Read rather than configured: it is the Admin's pod template, and a setting Apchi
+        was told about could disagree with the one the pod actually has.
+        """
+        spec = await self.deployment_pod_spec(deployment)
+        group = (spec.get("securityContext") or {}).get("fsGroup")
+        return int(group) if group is not None else None
 
     async def unmount_secret_files(
         self, deployment: str, container: str, volume: str, paths: Sequence[str], drop_volume: bool

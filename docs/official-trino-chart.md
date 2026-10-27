@@ -59,12 +59,23 @@ additionalConfigProperties:
 # node -- so a coordinator-only mount gives workers the properties without the files and they
 # refuse to start with "file does not exist". Client certificates have to be on workers anyway
 # (ADR-0005).
+#
+# Client certificates are deliberately NOT here. `secretMounts` renders only `name` and
+# `secretName` into the volume, with no way to set `defaultMode`, so a private key mounted
+# through it arrives world-readable -- see "Private keys need a mode" below.
 secretMounts:
-  - {name: apchi-access-control,      secretName: trino-access-control,      path: /etc/trino/access-control}
-  - {name: apchi-client-certificates, secretName: trino-client-certificates, path: /etc/trino/certs}
-  - {name: apchi-user-mapping,        secretName: trino-user-mapping,        path: /etc/trino/user-mapping}
-  - {name: apchi-resource-groups,     secretName: trino-resource-groups,     path: /etc/trino/resource-groups}
-  - {name: apchi-event-listener,      secretName: trino-event-listener,      path: /etc/trino/event-listener}
+  - {name: apchi-access-control,  secretName: trino-access-control,  path: /etc/trino/access-control}
+  - {name: apchi-user-mapping,    secretName: trino-user-mapping,    path: /etc/trino/user-mapping}
+  - {name: apchi-resource-groups, secretName: trino-resource-groups, path: /etc/trino/resource-groups}
+  - {name: apchi-event-listener,  secretName: trino-event-listener,  path: /etc/trino/event-listener}
+
+# The group that owns every Secret volume's files. Without it the modes below are root-only
+# and Trino cannot read its own keys. runAsUser and runAsGroup are the chart's own defaults,
+# repeated because setting this key replaces the whole block.
+securityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
 
 coordinator:
   # Apchi keeps the durable catalogs in a Secret, because Trino's FileCatalogStore enumerates
@@ -75,11 +86,35 @@ coordinator:
       secret:
         secretName: trino-catalog-seed
         optional: true          # Apchi creates it; the first install must not wait for that
+        defaultMode: 0640       # holds every catalog's connection-password
     - name: catalog-store
       emptyDir: {}
+    - name: apchi-client-certificates
+      secret:
+        secretName: trino-client-certificates
+        optional: true
+        defaultMode: 0640       # private keys
   additionalVolumeMounts:
     - name: catalog-store
       mountPath: /data/trino/catalogs
+    - name: apchi-client-certificates
+      mountPath: /etc/trino/certs
+      readOnly: true
+
+worker:
+  # Workers open their own connections to data sources, so a certificate only the
+  # coordinator can read is a catalog that works for metadata and fails for data
+  # (ADR-0005). Declared again here because these keys are per-node.
+  additionalVolumes:
+    - name: apchi-client-certificates
+      secret:
+        secretName: trino-client-certificates
+        optional: true
+        defaultMode: 0640
+  additionalVolumeMounts:
+    - name: apchi-client-certificates
+      mountPath: /etc/trino/certs
+      readOnly: true
 
 initContainers:
   coordinator:
@@ -129,6 +164,56 @@ Query ... failed: No matching resource group found with the configured selection
 ```
 
 That is also the reason Apchi will not render an empty document for you — see below.
+
+## Private keys need a mode, and `secretMounts` cannot give them one
+
+A Kubernetes Secret volume writes its files `0644` and owns them as **root** unless the pod
+says otherwise. For a Client Certificate's private key that is two problems: every process
+in the pod can read it, and a libpq-based client refuses to use it at all —
+
+```
+private key file "/etc/trino/certs/pg-demo.key" has group or world access; file must have
+permissions u=rw (0600) or less if owned by the current user, or permissions u=rw,g=r
+(0640) or less if owned by root. Current permissions: rw-r--r--
+```
+
+**`0600` is not the fix.** Trino runs as uid 1000 and a Secret file is owned by root, so
+`0600` is a file Trino cannot read at all. Only the *group* follows `fsGroup`, which is why
+both settings above are needed and neither works alone. Measured on a real cluster with a
+readOnly mount:
+
+| volume config | resulting mode | Trino can read | libpq accepts |
+|---|---|---|---|
+| neither | `0644 root:root` | yes | **no** |
+| `fsGroup: 1000` alone | `0644 root:trino` | yes | **no** |
+| `defaultMode: 0640` + `fsGroup: 1000` | `0640 root:trino` | yes | yes |
+
+Asking for `0600` is harmless but does nothing: the kubelet ORs `roMask = 0440` into every
+file's mode on a readOnly volume, so `0600` arrives as `0640` anyway. `0640` is the floor,
+and it is exactly what libpq permits for a root-owned file.
+
+**This is why the certificates are not in `secretMounts`.** That key renders only `name` and
+`secretName` into the volume —
+
+```yaml
+{{- range .Values.secretMounts }}
+- name: {{ .name }}
+  secret:
+    secretName: {{ tpl .secretName $ }}
+{{- end }}
+```
+
+— with nowhere to put `defaultMode`. `additionalVolumes` takes a volume spec verbatim, so
+that is where a credential-bearing Secret goes. The cost is declaring it twice, once for the
+coordinator and once for the workers, because those keys are per-node.
+
+The other four Apchi Secrets stay in `secretMounts`: the access-control rules, the user
+mapping and the resource-group rules carry no credentials. An Event Listener's properties
+can — a JDBC URL with a password in it — so move that one the same way if you configure one
+with embedded credentials.
+
+Apchi's own `charts/trino` sets both halves already, and `scripts/check_trino_chart.py`
+fails if either is dropped.
 
 ## Why `type: properties`
 

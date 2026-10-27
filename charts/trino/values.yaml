@@ -68,6 +68,25 @@ trino:
   # sees. Apchi refuses to Apply against a Cluster that does not set it.
   securityRefreshPeriod: 30s
 
+  # The group every pod runs with, and the group that owns the files on Apchi's Secret
+  # volumes. It must be the `trino` user's group in the image -- gid 1000 in `trinodb/trino`
+  # -- and it is not decoration: a credential volume's `defaultMode` of 0640 makes the file
+  # root-owned and group-readable, so without the group Trino cannot read its own private
+  # keys at all.
+  #
+  # Both halves are needed and neither is sufficient. Measured on a real cluster with a
+  # readOnly secret mount:
+  #
+  #   neither                      0644 root:root   world-readable
+  #   fsGroup only                 0644 root:trino  world-readable
+  #   defaultMode 0640 + fsGroup   0640 root:trino  what we want
+  #
+  # 0600 is not reachable here, and asking for it is not an error: the kubelet ORs
+  # roMask = 0440 into every file's mode on a readOnly volume, so 0600 arrives as 0640.
+  # That is also exactly what libpq accepts for a root-owned key file, and what it refuses
+  # a world-readable one for. See §13.2.
+  fsGroup: 1000
+
   jvm:
     maxHeapSize: 2G
     extraArgs: []

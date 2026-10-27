@@ -27,6 +27,10 @@ spec:
         app.kubernetes.io/instance: trino
         app.kubernetes.io/component: worker
     spec:
+      # The group that owns the certificate volume. Without it the 0640 below is root:root
+      # and the `trino` user cannot read the keys a connector presents outward.
+      securityContext:
+        fsGroup: 1000
       containers:
         - name: trino
           image: "trinodb/trino:483"
@@ -53,4 +57,5 @@ spec:
             - {name: client-certificates, mountPath: /etc/trino/certs, readOnly: true}
       volumes:
         - {name: config, configMap: {name: trino-config}}
-        - {name: client-certificates, secret: {secretName: trino-client-certificates}}
+        # Private keys, so not world-readable. 0640 with the fsGroup above. §13.2.
+        - {name: client-certificates, secret: {secretName: trino-client-certificates, defaultMode: 0640}}

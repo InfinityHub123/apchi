@@ -20,6 +20,11 @@ spec:
       annotations: {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      # The group that owns Apchi's Secret volumes. Without it the 0640 below is
+      # root:root, which the `trino` user cannot read -- including the seed initContainer,
+      # which runs as the image's user too. See values.yaml for the measurements.
+      securityContext:
+        fsGroup: {{ .Values.trino.fsGroup }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -96,8 +101,13 @@ spec:
         - {name: config, configMap: {name: {{ include "trino.fullname" . }}-config}}
         - {name: access-control, secret: {secretName: {{ .Values.secrets.accessControl }}}}
         - {name: {{ .Values.volumes.certificateMapping }}, secret: {secretName: {{ .Values.secrets.certificateMapping }}}}
-        - {name: catalog-seed, secret: {secretName: {{ .Values.secrets.catalogSeed }}}}
-        - {name: client-certificates, secret: {secretName: {{ .Values.secrets.clientCertificates }}}}
+        # Both of these hold credentials, so neither may be world-readable: the catalog
+        # seed carries every catalog's `connection-password`, and the certificate volume
+        # carries private keys. 0640 with the fsGroup above is root-owned and
+        # group-readable, which is what libpq will accept for a key file and what the
+        # kubelet's roMask floor allows. §13.2.
+        - {name: catalog-seed, secret: {secretName: {{ .Values.secrets.catalogSeed }}, defaultMode: 0640}}
+        - {name: client-certificates, secret: {secretName: {{ .Values.secrets.clientCertificates }}, defaultMode: 0640}}
         # Ephemeral by design. Durability lives in the catalog seed Secret, not here.
         - {name: catalog-store, emptyDir: {}}
         # No volume for the resource-groups or event-listener Secrets. For both of them the

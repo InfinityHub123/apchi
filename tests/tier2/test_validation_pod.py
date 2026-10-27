@@ -17,15 +17,17 @@ import uuid
 import pytest
 from httpx import AsyncClient
 
-from app.adapters.kubernetes import RealKubernetes
+from app.adapters.kubernetes import CREDENTIAL_FILE_MODE, RealKubernetes
 from app.adapters.trino import Trino
 from app.config import Settings
 from app.pipeline.validation import (
+    LABELS,
     VALIDATION_SELECTOR,
     pod_name,
+    probe_secret,
     validation_manifest,
 )
-from tests.tier2.conftest import ForwardedKubernetes, PortForward
+from tests.tier2.conftest import ForwardedKubernetes, PortForward, kubectl
 
 pytestmark = pytest.mark.tier2
 
@@ -203,3 +205,44 @@ async def _gone(kubernetes: RealKubernetes, pod: str, timeout: float = 180) -> b
             return True
         await asyncio.sleep(2)
     return False
+
+
+async def test_a_credential_file_in_the_probe_is_not_world_readable(
+    real_kubernetes: RealKubernetes,
+) -> None:
+    """What the kubelet actually does with the manifest, which only a real cluster shows.
+
+    Tier 1 asserts the patch Apchi sends. The part that cannot be asserted from a manifest
+    is that the two halves combine the way they must: `defaultMode` restricts the file and
+    `fsGroup` keeps it readable, through a **subPath** mount, which is how every Section's
+    file reaches the probe. Get either wrong and the probe either leaks a private key or
+    cannot read its own configuration.
+    """
+    name = pod_name(f"perm-{uuid.uuid4().hex[:8]}")
+    path = "/etc/trino/certs/apchi-permcheck.key"
+    files = {path: "not-a-real-key\n"}
+    await real_kubernetes.create_secret(name, probe_secret(files), LABELS)
+    await real_kubernetes.create_pod(validation_manifest(name, TRINO_IMAGE, 300, files))
+    try:
+        deadline = asyncio.get_running_loop().time() + 300
+        while asyncio.get_running_loop().time() < deadline:
+            state = await real_kubernetes.pod_state(name)
+            assert state.problem is None, state.problem
+            if state.phase == "Running":
+                break
+            await asyncio.sleep(2)
+        else:
+            raise AssertionError(f"pod {name} never started")
+
+        described = kubectl("exec", name, "--", "stat", "-L", "-c", "%a %U:%G", path).split()
+        readable = kubectl("exec", name, "--", "cat", path)
+    finally:
+        await real_kubernetes.delete_pod(name)
+        await real_kubernetes.delete_secret(name)
+
+    mode, ownership = described[0], described[1]
+    assert mode == f"{CREDENTIAL_FILE_MODE:o}", f"{path} is {mode}, not {CREDENTIAL_FILE_MODE:o}"
+    # Root-owned and group-trino is the shape the mode above depends on: libpq allows
+    # group-read only for a file owned by root, and Trino reads it through the group.
+    assert ownership.startswith("root:"), ownership
+    assert readable.strip() == "not-a-real-key"
