@@ -101,6 +101,53 @@ def _name_disagreements() -> list[str]:
     return problems
 
 
+#: The Secret volumes that carry credentials, by volume name. The catalog seed holds every
+#: catalog's `connection-password`; the certificate volume holds private keys. Named here
+#: rather than inferred, because "does this volume carry a secret worth protecting" is a
+#: judgement about content and not something a renderer can answer.
+CREDENTIAL_VOLUMES = ("catalog-seed", "client-certificates")
+
+
+def _permission_problems(documents: list[dict[str, Any]]) -> list[str]:
+    """Whether every pod mounting credentials restricts them, and can still read them.
+
+    Both halves, because each is useless alone: without `defaultMode` the kubelet writes
+    0644 and the file is world-readable, and without `fsGroup` a 0640 Secret file is
+    root-only and Trino -- uid 1000 -- cannot read its own private keys. A chart that
+    shipped one without the other would either leak keys or fail to start. §13.2.
+    """
+    problems: list[str] = []
+    for document in documents:
+        if document["kind"] != "Deployment":
+            continue
+        name = document["metadata"]["name"]
+        spec = document["spec"]["template"]["spec"]
+        volumes = {
+            volume["name"]: volume for volume in spec.get("volumes") or [] if volume.get("secret")
+        }
+        carries = [volume for volume in CREDENTIAL_VOLUMES if volume in volumes]
+        if not carries:
+            continue
+        if (spec.get("securityContext") or {}).get("fsGroup") is None:
+            problems.append(
+                f"{name} mounts {', '.join(carries)} but sets no securityContext.fsGroup, "
+                f"so a restricted file would be root-only and Trino could not read it"
+            )
+        for volume in carries:
+            mode = volumes[volume]["secret"].get("defaultMode")
+            if mode is None:
+                problems.append(
+                    f"{name}'s {volume} volume sets no defaultMode, so the kubelet writes "
+                    f"its files 0644 -- world-readable, and libpq refuses a key file like that"
+                )
+            elif mode & 0o037:
+                problems.append(
+                    f"{name}'s {volume} volume has defaultMode {mode:#o}, which grants "
+                    f"group-write, group-execute or world access to a credential"
+                )
+    return problems
+
+
 def _coordinator(documents: list[dict[str, Any]]) -> dict[str, Any]:
     for document in documents:
         labels = document["metadata"].get("labels") or {}
@@ -132,6 +179,13 @@ def main() -> int:
             print(f"  - {problem}", file=sys.stderr)
         return 1
 
+    exposed = _permission_problems(documents)
+    if exposed:
+        print("The chart would expose credentials on disk:", file=sys.stderr)
+        for problem in exposed:
+            print(f"  - {problem}", file=sys.stderr)
+        return 1
+
     cluster = _Cluster(
         {
             d["metadata"]["name"]: (d.get("data") or {})
@@ -152,8 +206,9 @@ def main() -> int:
             print(f"  - {problem}", file=sys.stderr)
         return 1
     print(
-        f"charts/trino satisfies every precondition ({len(spec.volumes)} volumes) "
-        "and agrees with charts/apchi on names"
+        f"charts/trino satisfies every precondition ({len(spec.volumes)} volumes), "
+        f"restricts {len(CREDENTIAL_VOLUMES)} credential volumes, and agrees with "
+        "charts/apchi on names"
     )
     return 0
 

@@ -1052,6 +1052,47 @@ certificate.
 A catalog references a certificate by name; Apchi renders the path into the generated
 connector properties.
 
+### The mode is 0640, and 0600 is not available
+
+A private key arriving as `0644 root:root` was the first shape of this delivery, and it is
+wrong twice: every process in the pod can read the key, and a libpq-based client refuses to
+use it at all — "private key file ... has group or world access". That message is libpq's
+own, out of `fe-secure-openssl.c`; pgjdbc's `LazyKeyManager` has no permission check, so a
+key Trino's own JDBC connector accepts can still be refused by something else reading the
+same file.
+
+**0600 is not the fix, and asking for it is a no-op.** Two facts about Kubernetes decide
+this. A Secret volume's files are owned by **root** whatever the container runs as — only
+the group follows `fsGroup` — and Trino runs as uid 1000, so `0600` is a file Trino cannot
+read. And on a `readOnly` volume the kubelet ORs `roMask = 0440` into every file's mode
+(`pkg/volume/volume_linux.go`), so a requested `0600` arrives as `0640` regardless.
+
+So the mode is `0640` and the pod declares `fsGroup: 1000`, and neither works without the
+other. Measured on a real cluster:
+
+| volume config | resulting mode | Trino can read | libpq accepts |
+|---|---|---|---|
+| neither | `0644 root:root` | yes | **no** |
+| `fsGroup` alone | `0644 root:trino` | yes | **no** |
+| `defaultMode: 0640` + `fsGroup` | `0640 root:trino` | yes | yes |
+
+`0640` is not a compromise between the two: it is exactly what libpq permits for a
+root-owned key file, whose rule is `S_IWGRP | S_IXGRP | S_IRWXO` — group-write,
+group-execute and any world bit, and nothing else. Group-read is allowed, and group-read is
+all Trino needs.
+
+**Where Apchi mounts a file itself it restricts it only if the pod declares an `fsGroup`.**
+Apchi does not own the Admin's pod template, and `event-listener.properties` — which can
+carry a password in a JDBC URL — made unreadable is a coordinator that will not start.
+Hardening a file into an outage is worse than the exposure, so the mode is left to the
+kubelet's default there and the deployment is the thing to fix. The validation probe is
+Apchi's own pod, so it simply sets both.
+
+This is also the one place the two deployment shapes differ in what an Admin *can* do. The
+official chart's `secretMounts` renders only `name` and `secretName`, with nowhere to put a
+mode, so a credential-bearing Secret has to go through `additionalVolumes` instead — which
+is per-node, and therefore declared twice. See `docs/official-trino-chart.md`.
+
 ### Ordering
 
 The certificate must exist on disk before any catalog that references it connects. Apply

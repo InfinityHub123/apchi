@@ -15,6 +15,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from testcontainers.core.container import DockerContainer
 
+from app.adapters.kubernetes import CREDENTIAL_FILE_MODE
 from app.adapters.trino import Trino
 from app.config import Settings
 from app.main import create_app
@@ -104,6 +105,10 @@ async def test_the_listener_file_is_mounted_when_one_is_configured(
         "volume": VOLUME,
         "secret": LISTENER_SECRET,
         "key": FILE_KEY,
+        # Restricted, because an Event Listener's properties can carry a password in a
+        # JDBC URL -- and restricted only because this pod declares an fsGroup. See
+        # tests/tier1/test_credential_permissions.py for both halves of that.
+        "mode": CREDENTIAL_FILE_MODE,
     }
 
 
