@@ -173,6 +173,23 @@ def owned_paths(sections: tuple[Section, ...], settings: Settings) -> dict[str, 
     }
 
 
+def credential_secrets(sections: tuple[Section, ...], settings: Settings) -> set[str]:
+    """Every Secret a Section writes that can hold a credential.
+
+    Read from the registry rather than named in the precondition, so a Section that starts
+    rendering a password is guarded without anyone remembering to add it. The catalog seed
+    is not here for the same reason it is not in `admin_mounted_secrets`: no Section
+    declares it, because an initContainer reads it rather than Trino, so the precondition
+    names it alongside this.
+    """
+    return {
+        spec.secret
+        for section in sections
+        for spec in section.coordinator_files(settings)
+        if spec.credentials
+    }
+
+
 def admin_mounted_secrets(sections: tuple[Section, ...], settings: Settings) -> set[str]:
     """The Secrets a Section writes and the Admin mounts.
 

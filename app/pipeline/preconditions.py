@@ -15,10 +15,15 @@ import logging
 from pathlib import PurePosixPath
 from typing import Any
 
-from app.adapters.kubernetes import KubernetesAdapter
+from app.adapters.kubernetes import (
+    CREDENTIAL_FILE_MODE,
+    FORBIDDEN_CREDENTIAL_BITS,
+    TRINO_GROUP,
+    KubernetesAdapter,
+)
 from app.config import Settings
 from app.pipeline.coordinator import Container, PodSpec, Volume, VolumeMount, content_at, provides
-from app.pipeline.files import admin_mounted_secrets, owned_paths
+from app.pipeline.files import admin_mounted_secrets, credential_secrets, owned_paths
 from app.sections.event_listeners.generator import PATH_IN_DIR as EVENT_LISTENER_PATH_IN_DIR
 from app.sections.permissions.generator import PROPERTIES_PATH, REFRESH_PERIOD
 from app.sections.registry import REGISTERED
@@ -160,9 +165,80 @@ async def check(kubernetes: KubernetesAdapter, spec: PodSpec, settings: Settings
     #    Cluster behaves as if the Section were empty (#125).
     problems.extend(await _pointer_problems(kubernetes, spec, settings))
 
+    # 8. A volume holding a credential must be restricted, and still readable. The kubelet
+    #    writes a Secret volume's files 0644 and root-owned unless the pod asks otherwise,
+    #    so the default for a private key is world-readable -- and libpq refuses a key file
+    #    like that outright, which makes this one visible as a broken connector rather than
+    #    only as an exposure (#182).
+    problems.extend(_credential_exposure_problems(spec, settings))
+
     if problems:
         raise PreconditionFailed(problems)
     logger.debug("deployment preconditions hold")
+
+
+def _credential_exposure_problems(spec: PodSpec, settings: Settings) -> list[str]:
+    """Credential-bearing volumes this pod would expose on disk.
+
+    Two halves, because each is useless alone: without a mode the kubelet writes 0644, and
+    without an `fsGroup` a restricted file is root-only and Trino -- uid 1000 -- cannot read
+    its own keys. 0640 plus the group is the one combination that is both, and 0600 is not
+    reachable at all: the kubelet ORs `roMask` 0440 into the mode of a readOnly mount, which
+    was measured on a live cluster rather than inferred (§13.2).
+
+    Only the volumes the **Admin** mounts are checked for their mode, and that is a
+    correctness requirement rather than politeness. Apchi sets the mode on its own mounts
+    itself, during Apply -- so refusing one of those here would refuse the only thing that
+    could fix it, and an upgrade from a version that mounted them bare would deadlock.
+    The `fsGroup` is checked for everyone, because Apchi cannot add one: the pod's
+    securityContext is the Admin's, and a 0640 file with no group Trino belongs to is a
+    coordinator that will not start.
+
+    Both the absent mode and the permissive one are reported, and on a live cluster it is
+    always the second: the API server fills `defaultMode` in with 0644 when a Secret volume
+    does not ask, so a pod template read back from the API has no missing mode. The absent
+    case is what a chart or a manifest on disk looks like, which is what
+    `scripts/check_trino_chart.py` reads.
+    """
+    bearing = credential_secrets(REGISTERED, settings) | {settings.catalog_secret_name}
+    mounted = [volume for volume in spec.volumes if volume.secret_name in bearing]
+    if not mounted:
+        return []
+
+    if spec.fs_group is None:
+        return [
+            f"The pod mounts {', '.join(sorted(volume.name for volume in mounted))}, which "
+            f"hold credentials, but sets no securityContext.fsGroup. A Secret volume's files "
+            f"are owned by root whatever the container runs as, so without a group Trino "
+            f"belongs to they can only be world-readable or unreadable. Set "
+            f"securityContext.fsGroup to the group Trino runs as ({TRINO_GROUP}); Apchi then "
+            f"restricts the files it mounts itself."
+        ]
+
+    apchi_mounted = set(owned_paths(REGISTERED, settings).values())
+    # The volume is named and the Secret behind it is not, deliberately. Adoption decides
+    # which cutover changes must wait for the seed by looking for the catalog Secret's name
+    # in a problem, so a message naming it here would arrive labelled "this one must come
+    # after the seed" -- which is true of the initContainer and false of a file mode.
+    problems: list[str] = []
+    for volume in mounted:
+        if volume.name in apchi_mounted:
+            continue
+        mode = volume.default_mode
+        if mode is None:
+            problems.append(
+                f"Volume {volume.name!r} holds credentials and sets no defaultMode, so the "
+                f"kubelet writes its files 0644 -- readable by every process in the pod, and "
+                f"a private key mounted like that is one libpq refuses to use outright. Set "
+                f"defaultMode: 0{CREDENTIAL_FILE_MODE:o} on that volume."
+            )
+        elif mode & FORBIDDEN_CREDENTIAL_BITS:
+            problems.append(
+                f"Volume {volume.name!r} holds credentials with defaultMode {mode:#o}, which "
+                f"grants world access, group write or group execute to a credential. Set "
+                f"defaultMode: 0{CREDENTIAL_FILE_MODE:o} on that volume."
+            )
+    return problems
 
 
 def _directory_mounts_over_apchis_files(

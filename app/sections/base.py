@@ -200,6 +200,11 @@ class CoordinatorDirectory:
     #: Trino's business and not a consequence of how Apchi mounts it: access control is
     #: turned on by a file, certificate mapping by a property in `config.properties`.
     probe_config: Mapping[str, str] = field(default_factory=dict)
+    #: Whether these files can hold a secret, which decides whether §16 refuses a
+    #: deployment that mounts them world-readable. Declared by the Section because only it
+    #: knows what it renders: a private key and a connection password are credentials, an
+    #: access-control rule and a mapping pattern are not.
+    credentials: bool = False
 
 
 @dataclass(frozen=True)
@@ -240,6 +245,10 @@ class CoordinatorFile:
     #: Cluster's own copy of these properties belongs to the Admin; the probe is Apchi's,
     #: so Apchi sets them there itself.
     probe_config: Mapping[str, str] = field(default_factory=dict)
+    #: As on `CoordinatorDirectory`. Carried by both shapes because a file can hold a
+    #: credential wherever it is mounted, and whether Apchi or the Admin mounts it only
+    #: decides who has to fix the mode.
+    credentials: bool = False
 
     @property
     def key(self) -> str:

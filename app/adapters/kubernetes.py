@@ -27,6 +27,18 @@ from pydantic import BaseModel
 #: §13.2 for the measurements.
 CREDENTIAL_FILE_MODE = 0o640
 
+#: The `trino` user's group in the official image, verified by running `id` in it:
+#: `uid=1000(trino) gid=1000(trino)`. It is the other half of the mode above -- a pod whose
+#: `fsGroup` is this can read a file restricted to its group, and a pod with no `fsGroup`
+#: cannot read one at all.
+TRINO_GROUP = 1000
+
+#: Mode bits no credential file may have: world access in any form, plus group write and
+#: group execute. This is libpq's own rule for a root-owned key file, read from
+#: `fe-secure-openssl.c`, and group *read* is deliberately absent from it -- which is the
+#: only reason `CREDENTIAL_FILE_MODE` can be readable at all.
+FORBIDDEN_CREDENTIAL_BITS = 0o037
+
 
 class PodState(BaseModel):
     """Enough to decide whether to keep waiting, connect, or give up.

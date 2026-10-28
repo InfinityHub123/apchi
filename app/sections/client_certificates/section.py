@@ -137,7 +137,13 @@ class ClientCertificatesSection:
         Candidate's business: Apchi cannot declare in advance what an Operator will upload.
         """
         return (
-            CoordinatorDirectory(secret=settings.client_certificate_secret_name, path=MOUNT_DIR),
+            CoordinatorDirectory(
+                secret=settings.client_certificate_secret_name,
+                path=MOUNT_DIR,
+                # Private keys. A connector presents these outward, so Trino must read them,
+                # and libpq refuses a key file any wider than 0640 (§13.2).
+                credentials=True,
+            ),
         )
 
     def render_files(

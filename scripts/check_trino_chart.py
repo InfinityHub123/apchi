@@ -28,6 +28,7 @@ from typing import Any
 
 import yaml
 
+from app.adapters.kubernetes import FORBIDDEN_CREDENTIAL_BITS, TRINO_GROUP
 from app.config import Settings
 from app.pipeline.preconditions import PodSpec, PreconditionFailed, check
 
@@ -115,6 +116,11 @@ def _permission_problems(documents: list[dict[str, Any]]) -> list[str]:
     0644 and the file is world-readable, and without `fsGroup` a 0640 Secret file is
     root-only and Trino -- uid 1000 -- cannot read its own private keys. A chart that
     shipped one without the other would either leak keys or fail to start. §13.2.
+
+    Kept after §16 grew precondition 8, which refuses the same thing at runtime, because
+    this covers what that cannot: **every** Deployment the chart renders, workers included.
+    The precondition reads the coordinator's pod template and no other, and a private key
+    leaks on a worker exactly as it does on a coordinator.
     """
     problems: list[str] = []
     for document in documents:
@@ -128,10 +134,11 @@ def _permission_problems(documents: list[dict[str, Any]]) -> list[str]:
         carries = [volume for volume in CREDENTIAL_VOLUMES if volume in volumes]
         if not carries:
             continue
-        if (spec.get("securityContext") or {}).get("fsGroup") is None:
+        if (spec.get("securityContext") or {}).get("fsGroup") != TRINO_GROUP:
             problems.append(
-                f"{name} mounts {', '.join(carries)} but sets no securityContext.fsGroup, "
-                f"so a restricted file would be root-only and Trino could not read it"
+                f"{name} mounts {', '.join(carries)} without "
+                f"securityContext.fsGroup: {TRINO_GROUP}, so a restricted file would not be "
+                f"owned by a group Trino belongs to and it could not read it"
             )
         for volume in carries:
             mode = volumes[volume]["secret"].get("defaultMode")
@@ -140,7 +147,7 @@ def _permission_problems(documents: list[dict[str, Any]]) -> list[str]:
                     f"{name}'s {volume} volume sets no defaultMode, so the kubelet writes "
                     f"its files 0644 -- world-readable, and libpq refuses a key file like that"
                 )
-            elif mode & 0o037:
+            elif mode & FORBIDDEN_CREDENTIAL_BITS:
                 problems.append(
                     f"{name}'s {volume} volume has defaultMode {mode:#o}, which grants "
                     f"group-write, group-execute or world access to a credential"

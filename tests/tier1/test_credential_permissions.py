@@ -18,7 +18,12 @@ from typing import Any
 import pytest
 
 from app.adapters.kubernetes import CREDENTIAL_FILE_MODE, RealKubernetes
+from app.config import Settings
+from app.pipeline.files import credential_secrets
+from app.pipeline.preconditions import PreconditionFailed, check, pod_spec
 from app.pipeline.validation import validation_manifest
+from app.sections.registry import REGISTERED
+from tests.conftest import FakeKubernetes, healthy_pod_spec
 
 TRINO_IMAGE = "trinodb/trino:483"
 
@@ -125,3 +130,158 @@ def test_the_modes_libpq_refuses_are_the_ones_with_group_or_world_access(mode: i
     for a root-owned file."""
     assert mode & 0o037, f"{mode:#o} should be a mode libpq refuses"
     assert mode != CREDENTIAL_FILE_MODE
+
+
+def _with_volume(spec: dict[str, Any], volume: dict[str, Any]) -> dict[str, Any]:
+    """The healthy spec plus one more volume, mounted in the trino container."""
+    spec["volumes"].append(volume)
+    spec["containers"][0]["volumeMounts"].append(
+        {"name": volume["name"], "mountPath": f"/etc/trino/{volume['name']}"}
+    )
+    return spec
+
+
+def _volume(spec: dict[str, Any], name: str) -> dict[str, Any]:
+    found: dict[str, Any] = next(v for v in spec["volumes"] if v["name"] == name)
+    return found
+
+
+async def test_the_dev_deployment_restricts_its_credentials(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """The baseline, so every refusal below is the violation it describes and not the fake
+    being wrong about the Cluster it stands in for."""
+    await check(fake_kubernetes, pod_spec(healthy_pod_spec()), settings)
+
+
+async def test_a_pod_with_no_group_is_refused(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """The half Apchi cannot fix for itself. Without an `fsGroup` there is no group Trino
+    belongs to, so a credential file can only be world-readable or unreadable -- and the
+    pod's securityContext is the Admin's to set."""
+    spec = healthy_pod_spec()
+    del spec["securityContext"]
+
+    with pytest.raises(PreconditionFailed) as raised:
+        await check(fake_kubernetes, pod_spec(spec), settings)
+
+    assert "fsGroup" in str(raised.value)
+    assert "catalog-seed" in str(raised.value)
+
+
+async def test_an_admin_credential_volume_with_no_mode_is_refused(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """#182's case, and the one the official Trino chart produces: `secretMounts` renders
+    only a name and a secretName, so the private keys arrive 0644."""
+    spec = _with_volume(
+        healthy_pod_spec(),
+        {
+            "name": "client-certificates",
+            "secret": {"secretName": settings.client_certificate_secret_name},
+        },
+    )
+
+    with pytest.raises(PreconditionFailed) as raised:
+        await check(fake_kubernetes, pod_spec(spec), settings)
+
+    assert "client-certificates" in str(raised.value)
+    assert "defaultMode: 0640" in str(raised.value)
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o666, 0o660, 0o604])
+async def test_a_mode_libpq_refuses_is_refused_here_too(
+    mode: int, settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    spec = _with_volume(
+        healthy_pod_spec(),
+        {
+            "name": "client-certificates",
+            "secret": {
+                "secretName": settings.client_certificate_secret_name,
+                "defaultMode": mode,
+            },
+        },
+    )
+
+    with pytest.raises(PreconditionFailed) as raised:
+        await check(fake_kubernetes, pod_spec(spec), settings)
+
+    assert f"{mode:#o}" in str(raised.value)
+
+
+async def test_the_restricted_mode_is_accepted(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    spec = _with_volume(
+        healthy_pod_spec(),
+        {
+            "name": "client-certificates",
+            "secret": {
+                "secretName": settings.client_certificate_secret_name,
+                "defaultMode": CREDENTIAL_FILE_MODE,
+            },
+        },
+    )
+
+    await check(fake_kubernetes, pod_spec(spec), settings)
+
+
+async def test_a_volume_apchi_mounts_itself_is_not_refused_for_its_mode(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """The deadlock this precondition has to avoid. Apchi sets the mode on its own mounts
+    during Apply, so refusing one here would refuse the only thing that could fix it --
+    and an upgrade from a version that mounted them bare would never get past this check.
+    The `fsGroup` is what makes the next Apply restrict it, and that is checked above."""
+    spec = healthy_pod_spec()
+    spec["volumes"].append(
+        {
+            "name": settings.event_listener_volume_name,
+            "secret": {"secretName": settings.event_listener_secret_name},
+        }
+    )
+    spec["containers"][0]["volumeMounts"].append(
+        {
+            "name": settings.event_listener_volume_name,
+            "mountPath": "/etc/trino/event-listener.properties",
+            "subPath": "event-listener.properties",
+        }
+    )
+
+    await check(fake_kubernetes, pod_spec(spec), settings)
+
+
+async def test_a_volume_holding_no_credential_needs_no_mode(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """Access-control rules and mapping patterns are configuration, not secrets. Refusing
+    a bare mode on those would make every deployment restrict files for no reason, and a
+    check that fires where nothing is at stake is one an Admin learns to work around."""
+    spec = healthy_pod_spec()
+
+    assert "defaultMode" not in _volume(spec, "access-control")["secret"]
+    assert "defaultMode" not in _volume(spec, "apchi-user-mapping")["secret"]
+    await check(fake_kubernetes, pod_spec(spec), settings)
+
+
+def test_only_the_sections_that_render_a_secret_declare_one(settings: Settings) -> None:
+    """The list is the Sections' own, so this asserts what they say rather than restating
+    it: a Section that starts rendering a password is covered without this test changing,
+    and one that stops is noticed here."""
+    assert credential_secrets(REGISTERED, settings) == {
+        settings.client_certificate_secret_name,
+        settings.event_listener_secret_name,
+    }
+
+
+def test_the_event_listener_directory_shape_carries_credentials_too(settings: Settings) -> None:
+    """A listener's properties hold its password inline whether Apchi mounts the file or
+    the Admin mounts the directory it sits in (#125), and only the second shape puts the
+    mode in the Admin's hands."""
+    from_deployment = settings.model_copy(
+        update={"event_listener_config_files_from_deployment": True}
+    )
+
+    assert settings.event_listener_secret_name in credential_secrets(REGISTERED, from_deployment)

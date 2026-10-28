@@ -1834,6 +1834,47 @@ to choose, which makes them single-file mounts by nature, so on a whole-director
 they are refused — including `config.properties`, which belongs to the chart's own ConfigMap.
 An Admin on such a chart uses its `additionalConfigProperties` instead.
 
+**The eighth precondition: a volume holding a credential is restricted, and still readable.**
+A Secret volume's files are written `0644` and owned by root unless the pod asks otherwise, so
+the default for a private key is world-readable — and libpq refuses a key file like that
+outright, which is how this was found rather than how it was predicted (§13.2). Two halves,
+each useless alone: `defaultMode: 0640` on the volume, and `securityContext.fsGroup: 1000` on
+the pod, without which the restricted file is root-only and Trino cannot read its own keys.
+
+Which volumes count is the Sections' own answer, not a list kept here: a `Delivery` declares
+`credentials`, and today Client Certificates and Event Listeners do — private keys, and a
+listener's password inline in its JDBC URL. The catalog seed is named alongside them, because
+no Section declares it; an initContainer reads it rather than Trino. Access-control rules and
+mapping patterns are configuration rather than secrets and are deliberately not covered: a
+check that fires where nothing is at stake is one an Admin learns to work around.
+
+**Only the volumes the Admin mounts are checked for their mode, and that is correctness rather
+than politeness.** Apchi sets the mode on its own mounts during Apply, so refusing one here
+would refuse the only thing that could fix it — and an upgrade from a version that mounted them
+bare would deadlock on this check forever. The `fsGroup` is checked for everyone, because Apchi
+cannot add one: the pod's `securityContext` is the Admin's, and Apchi does not own that
+template.
+
+**It refuses rather than warns**, which is a deliberate departure from how catalog reachability
+is treated (§6). Reachability is a fact about the Candidate an Operator just wrote; an exposed
+key is a fact about the deployment, and warning about it on every Apply would put a notice an
+Operator cannot act on in front of the one person who cannot fix it. Refusing puts it in front
+of the Admin, once, with the volume named. The cost is real and worth stating: an existing
+install whose pod template has no `fsGroup` has **every** Apply refused after this version,
+because the catalog seed is always mounted. Apchi's own chart and the documented values for the
+official chart both set it.
+
+On Adoption this lands as a cutover change rather than a refusal, like every other precondition
+(§15) — and unlike the seed initContainer it carries no ordering, which is why the message names
+the volume and not the Secret behind it: Adoption tells the seeding change apart by the catalog
+Secret's name appearing in the problem.
+
+**What it does not cover: workers.** The precondition reads the coordinator's pod template and
+no other, because that is the only one Apchi reads at all, and a private key leaks on a worker
+exactly as it does on a coordinator. `scripts/check_trino_chart.py` holds every Deployment the
+shipped chart renders to the same rule, so Apchi's own chart cannot regress; a hand-written
+deployment's workers are the Admin's to get right.
+
 
 ## Rollout mechanics
 
