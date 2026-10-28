@@ -65,3 +65,8 @@ boot with `file does not exist: /etc/trino/user-mapping/user-mapping.json`.
 
 Read it as a diff against `00-config.yaml` and `10-trino.yaml`: that diff is the whole answer
 to "what do I have to change".
+
+Part of that answer is `securityContext.fsGroup` and a `defaultMode` on the two volumes that
+carry credentials. Those are not violations before the cutover -- this Cluster mounts nothing
+but ConfigMaps until then, and §16's eighth precondition only looks at Secrets that hold
+something worth restricting.

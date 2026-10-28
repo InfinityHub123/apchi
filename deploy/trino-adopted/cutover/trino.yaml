@@ -73,6 +73,12 @@ spec:
     metadata:
       labels: {app: adopted, component: coordinator}
     spec:
+      # Part of the cutover like everything else here, and §16's eighth precondition refuses
+      # the Apply without it: the catalog seed below carries every catalog's
+      # connection-password and the certificate volume carries private keys, and a Secret
+      # volume's files are root-owned, so this group is what keeps 0640 readable.
+      securityContext:
+        fsGroup: 1000
       initContainers:
         - name: seed-catalogs
           image: trinodb/trino:483
@@ -117,8 +123,11 @@ spec:
         - {name: theirs, configMap: {name: adopted-theirs}}
         - {name: access-control, secret: {secretName: adopted-access-control}}
         - {name: apchi-user-mapping, secret: {secretName: adopted-user-mapping}}
-        - {name: catalog-seed, secret: {secretName: adopted-catalog-seed}}
-        - {name: client-certificates, secret: {secretName: adopted-client-certificates}}
+        # Both hold credentials, so both carry a mode. 0640 with the fsGroup above is
+        # root-owned and group-readable, which is what libpq accepts for a key file and the
+        # tightest the kubelet's roMask allows. §13.2.
+        - {name: catalog-seed, secret: {secretName: adopted-catalog-seed, defaultMode: 0640}}
+        - {name: client-certificates, secret: {secretName: adopted-client-certificates, defaultMode: 0640}}
         # Writable, and an emptyDir rather than the ConfigMap it was: Trino writes this
         # directory itself, and a ConfigMap mount is always read-only.
         - {name: catalog-store, emptyDir: {}}

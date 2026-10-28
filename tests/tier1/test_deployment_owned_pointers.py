@@ -24,6 +24,7 @@ from collections.abc import AsyncIterator
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.adapters.kubernetes import CREDENTIAL_FILE_MODE
 from app.adapters.trino import Trino
 from app.config import Settings
 from app.main import create_app
@@ -112,7 +113,16 @@ def _pointed_pod_spec() -> dict:
                 "name": "apchi-resource-groups",
                 "secret": {"secretName": "trino-resource-groups"},
             },
-            {"name": "apchi-event-listener", "secret": {"secretName": "trino-event-listener"}},
+            # With a mode, because in this shape the *Admin* mounts the listener Secret
+            # and a listener's properties hold its password inline. §16 refuses the
+            # deployment without it, which is the whole of #182.
+            {
+                "name": "apchi-event-listener",
+                "secret": {
+                    "secretName": "trino-event-listener",
+                    "defaultMode": CREDENTIAL_FILE_MODE,
+                },
+            },
         ]
     )
     return spec

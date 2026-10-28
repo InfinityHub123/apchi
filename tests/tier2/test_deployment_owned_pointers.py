@@ -28,6 +28,7 @@ from collections.abc import AsyncIterator, Iterator
 import pytest
 from httpx import AsyncClient
 
+from app.adapters.kubernetes import CREDENTIAL_FILE_MODE
 from app.adapters.trino import Trino
 from app.config import Settings
 from app.pipeline.applies import TERMINAL
@@ -125,7 +126,21 @@ def _mode_b_patch() -> dict:
                 "spec": {
                     "volumes": [
                         {"name": "rg-rules", "secret": {"secretName": "trino-resource-groups"}},
-                        {"name": "el-file", "secret": {"secretName": "trino-event-listener"}},
+                        # With a mode, and `rg-rules` above deliberately without one. In this
+                        # shape the Admin mounts both, and only the listener's properties hold
+                        # a credential -- its password sits inline in a JDBC URL. §16's eighth
+                        # precondition refuses the first and ignores the second.
+                        #
+                        # The mode has to be set here rather than left out: the API server
+                        # fills in 0644 when a Secret volume does not ask, so "no mode" is not
+                        # a state a live deployment can be in.
+                        {
+                            "name": "el-file",
+                            "secret": {
+                                "secretName": "trino-event-listener",
+                                "defaultMode": CREDENTIAL_FILE_MODE,
+                            },
+                        },
                     ],
                     "containers": [
                         {

@@ -159,7 +159,15 @@ def healthy_pod_spec() -> dict[str, Any]:
             {"name": "config", "configMap": {"name": "trino-config"}},
             {"name": "access-control", "secret": {"secretName": "trino-access-control"}},
             {"name": "apchi-user-mapping", "secret": {"secretName": MAPPING_SECRET}},
-            {"name": "catalog-seed", "secret": {"secretName": "trino-catalog-seed"}},
+            # With the mode, as deploy/trino-dev has it: the seed carries every
+            # catalog's connection-password, and §16 refuses a pod that mounts it bare.
+            {
+                "name": "catalog-seed",
+                "secret": {
+                    "secretName": "trino-catalog-seed",
+                    "defaultMode": CREDENTIAL_FILE_MODE,
+                },
+            },
             {"name": "catalog-store", "emptyDir": {}},
         ],
     }

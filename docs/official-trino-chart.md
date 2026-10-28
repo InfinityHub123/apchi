@@ -51,23 +51,27 @@ additionalConfigProperties:
   - event-listener.config-files=/etc/trino/event-listener/event-listener.properties
   - http-server.authentication.insecure.user-mapping.file=/etc/trino/user-mapping/user-mapping.json
 
-# Apchi's five Secrets, each as a whole directory. No subPath anywhere: a subPath mount never
-# receives updates, so Apchi would write a file and Trino would never see the change.
+# Three of Apchi's Secrets, each as a whole directory. No subPath anywhere: a subPath mount
+# never receives updates, so Apchi would write a file and Trino would never see the change.
 #
 # Top level, not under `coordinator`. `additionalConfigProperties` above reaches the worker
 # ConfigMap as well as the coordinator's, and Trino validates every path property on every
 # node -- so a coordinator-only mount gives workers the properties without the files and they
-# refuse to start with "file does not exist". Client certificates have to be on workers anyway
-# (ADR-0005).
+# refuse to start with "file does not exist".
 #
-# Client certificates are deliberately NOT here. `secretMounts` renders only `name` and
-# `secretName` into the volume, with no way to set `defaultMode`, so a private key mounted
-# through it arrives world-readable -- see "Private keys need a mode" below.
+# The other two are deliberately NOT here: client certificates and the event listener.
+# `secretMounts` renders only `name` and `secretName` into the volume, with no way to set
+# `defaultMode`, and both of those hold a credential -- a private key, and a listener's
+# password inline in its JDBC URL. Apchi refuses to Apply against a deployment that mounts
+# either of them world-readable, so they go through `additionalVolumes` below, on the
+# coordinator and the workers both. See "Credentials need a mode" further down.
+#
+# What is left here holds no secret: access-control rules, mapping patterns, resource group
+# rules. Apchi does not ask for a mode on those.
 secretMounts:
   - {name: apchi-access-control,  secretName: trino-access-control,  path: /etc/trino/access-control}
   - {name: apchi-user-mapping,    secretName: trino-user-mapping,    path: /etc/trino/user-mapping}
   - {name: apchi-resource-groups, secretName: trino-resource-groups, path: /etc/trino/resource-groups}
-  - {name: apchi-event-listener,  secretName: trino-event-listener,  path: /etc/trino/event-listener}
 
 # The group that owns every Secret volume's files. Without it the modes below are root-only
 # and Trino cannot read its own keys. runAsUser and runAsGroup are the chart's own defaults,
@@ -94,11 +98,18 @@ coordinator:
         secretName: trino-client-certificates
         optional: true
         defaultMode: 0640       # private keys
+    - name: apchi-event-listener
+      secret:
+        secretName: trino-event-listener
+        defaultMode: 0640       # a listener's db.url carries its password
   additionalVolumeMounts:
     - name: catalog-store
       mountPath: /data/trino/catalogs
     - name: apchi-client-certificates
       mountPath: /etc/trino/certs
+      readOnly: true
+    - name: apchi-event-listener
+      mountPath: /etc/trino/event-listener
       readOnly: true
 
 worker:
@@ -111,9 +122,20 @@ worker:
         secretName: trino-client-certificates
         optional: true
         defaultMode: 0640
+    # Not because a worker runs a listener -- it does not -- but because
+    # `additionalConfigProperties` reaches the worker ConfigMap too and Trino validates
+    # `event-listener.config-files` on every node. Without the file here, workers refuse to
+    # start with "file does not exist".
+    - name: apchi-event-listener
+      secret:
+        secretName: trino-event-listener
+        defaultMode: 0640
   additionalVolumeMounts:
     - name: apchi-client-certificates
       mountPath: /etc/trino/certs
+      readOnly: true
+    - name: apchi-event-listener
+      mountPath: /etc/trino/event-listener
       readOnly: true
 
 initContainers:
@@ -165,7 +187,7 @@ Query ... failed: No matching resource group found with the configured selection
 
 That is also the reason Apchi will not render an empty document for you — see below.
 
-## Private keys need a mode, and `secretMounts` cannot give them one
+## Credentials need a mode, and `secretMounts` cannot give them one
 
 A Kubernetes Secret volume writes its files `0644` and owns them as **root** unless the pod
 says otherwise. For a Client Certificate's private key that is two problems: every process
@@ -207,13 +229,28 @@ and it is exactly what libpq permits for a root-owned file.
 that is where a credential-bearing Secret goes. The cost is declaring it twice, once for the
 coordinator and once for the workers, because those keys are per-node.
 
-The other four Apchi Secrets stay in `secretMounts`: the access-control rules, the user
-mapping and the resource-group rules carry no credentials. An Event Listener's properties
-can — a JDBC URL with a password in it — so move that one the same way if you configure one
-with embedded credentials.
+**The event listener moves for the same reason**, and not conditionally. A listener's
+properties hold its credentials inline — `mysql-event-listener.db.url` carries the user and
+password, Kafka's SASL configuration carries a JAAS string — so Apchi treats that Secret as
+credential-bearing whether or not the listener you configure today has a password in it. A
+listener added later must not require re-plumbing the chart.
 
-Apchi's own `charts/trino` sets both halves already, and `scripts/check_trino_chart.py`
-fails if either is dropped.
+It has to be declared on **workers** as well, which is not because a worker runs a listener —
+it does not. `additionalConfigProperties` reaches the worker ConfigMap too, and Trino validates
+`event-listener.config-files` on every node, so a coordinator-only mount leaves workers with
+the property and no file and they refuse to start.
+
+The three Secrets that stay in `secretMounts` carry no credentials: the access-control rules,
+the user mapping and the resource-group rules. Apchi does not ask for a mode on those, and
+tightening them is harmless but pointless.
+
+**Apchi refuses to Apply when either half is missing** — §16's eighth precondition, checked
+before every Apply against the coordinator's pod template. It names the volume and the fix. The
+`fsGroup` half is checked whatever the deployment mounts, because the catalog seed always holds
+a connection password; so a cluster installed without the `securityContext` block above gets
+every Apply refused until it is added, with no Apply having reached Trino. Apchi's own
+`charts/trino` sets both halves, and `scripts/check_trino_chart.py` holds every Deployment it
+renders — workers included — to the same rule.
 
 ## Why `type: properties`
 

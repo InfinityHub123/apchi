@@ -38,6 +38,12 @@ class Volume(_K8sModel):
     config_map_name: str | None = Field(
         default=None, validation_alias=AliasPath("configMap", "name")
     )
+    #: The mode the kubelet writes this volume's files with. None means the volume did not
+    #: ask, and the kubelet's default is 0644 -- world-readable, which for a private key is
+    #: a file libpq refuses outright (§13.2).
+    default_mode: int | None = Field(
+        default=None, validation_alias=AliasPath("secret", "defaultMode")
+    )
 
     @property
     def read_only_by_nature(self) -> bool:
@@ -63,6 +69,13 @@ class PodSpec(_K8sModel):
         default_factory=list, validation_alias="initContainers"
     )
     volumes: list[Volume] = Field(default_factory=list)
+    #: The pod's `securityContext.fsGroup`, which is what owns a Secret volume's files as a
+    #: group. Without it a restricted file is root-only, because a Secret volume's files are
+    #: root-owned whatever the container runs as -- so this is half of "restricted but
+    #: readable" and the mode above is the other half.
+    fs_group: int | None = Field(
+        default=None, validation_alias=AliasPath("securityContext", "fsGroup")
+    )
 
     @property
     def every_container(self) -> list[Container]:

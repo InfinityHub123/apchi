@@ -292,6 +292,7 @@ class EventListenersSection:
                     secret=settings.event_listener_secret_name,
                     path=MOUNT_DIR,
                     probe_config={"event-listener.config-files": PATH_IN_DIR},
+                    credentials=True,
                 ),
             )
         return (
@@ -299,6 +300,10 @@ class EventListenersSection:
                 secret=settings.event_listener_secret_name,
                 volume=settings.event_listener_volume_name,
                 path=MOUNT_PATH,
+                # A listener's own properties carry its credentials: the mysql listener's
+                # `mysql-event-listener.db.url` holds the user and password inline, and
+                # Kafka's SASL configuration holds a JAAS string.
+                credentials=True,
             ),
         )
 

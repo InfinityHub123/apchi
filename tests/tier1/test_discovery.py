@@ -8,6 +8,7 @@ next coordinator restart.
 """
 
 import copy
+from typing import Any
 
 import pytest
 
@@ -539,3 +540,26 @@ async def test_rules_read_through_the_admins_own_properties_file_are_still_read(
 
     assert found.resources["g"]["hard_concurrency_limit"] == 1
     assert found.problems == []
+
+
+async def test_a_credential_mode_is_a_cutover_requirement_with_no_seeding_order_attached(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """A mode is a cutover change like the rest, and unlike the initContainer it can be
+    made at any time. The two are told apart by the catalog Secret's name appearing in the
+    problem, which is why precondition 8 names the volume and not the Secret behind it --
+    an Admin told to wait for the seed before tightening a file mode would wait for no
+    reason, and the reason given would be false."""
+    del _volume(fake_kubernetes.pod_spec, "catalog-seed")["secret"]["defaultMode"]
+
+    discovery = await discover(fake_kubernetes, settings)
+
+    cutover = [p for p in discovery.problems if p.kind == "cutover"]
+    assert len(cutover) == 1
+    assert "defaultMode" in cutover[0].detail
+    assert "must come after the seed" not in cutover[0].detail
+
+
+def _volume(spec: dict[str, Any], name: str) -> dict[str, Any]:
+    found: dict[str, Any] = next(v for v in spec["volumes"] if v["name"] == name)
+    return found

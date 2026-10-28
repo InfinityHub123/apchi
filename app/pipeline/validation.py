@@ -21,7 +21,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from app.adapters.kubernetes import CREDENTIAL_FILE_MODE, KubernetesAdapter
+from app.adapters.kubernetes import CREDENTIAL_FILE_MODE, TRINO_GROUP, KubernetesAdapter
 from app.adapters.trino import Trino
 from app.config import Settings
 from app.pipeline.connectivity import unreachable
@@ -64,11 +64,6 @@ _POLL_SECONDS = 2.0
 
 #: The volume carrying whatever files the Sections need inside the probe.
 _FILES_VOLUME = "section-files"
-
-#: The `trino` user's group in the official image, verified by running `id` in it:
-#: `uid=1000(trino) gid=1000(trino)`. The probe sets it as its `fsGroup` so the files
-#: below, restricted to their group, stay readable by the process that must read them.
-_TRINO_GROUP = 1000
 
 #: The probe's own configuration, written only when a Section contributes a file. A file is
 #: validated only if something is configured to read it, and the properties that do the
@@ -148,7 +143,7 @@ def validation_manifest(
             # pod template this one is Apchi's, so both halves can simply be set. Without
             # the group the 0640 below is root-only and the probe cannot read its own
             # configuration. §13.2.
-            "securityContext": {"fsGroup": _TRINO_GROUP},
+            "securityContext": {"fsGroup": TRINO_GROUP},
             "containers": [
                 {
                     "name": "trino",
