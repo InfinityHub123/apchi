@@ -169,16 +169,62 @@ async def check(kubernetes: KubernetesAdapter, spec: PodSpec, settings: Settings
     #    writes a Secret volume's files 0644 and root-owned unless the pod asks otherwise,
     #    so the default for a private key is world-readable -- and libpq refuses a key file
     #    like that outright, which makes this one visible as a broken connector rather than
-    #    only as an exposure (#182).
-    problems.extend(_credential_exposure_problems(spec, settings))
+    #    only as an exposure (#182). The only precondition that reads the worker as well,
+    #    because it is the only one whose subject is on both Deployments (#184).
+    problems.extend(await _credential_exposure_problems(kubernetes, spec, settings))
 
     if problems:
         raise PreconditionFailed(problems)
     logger.debug("deployment preconditions hold")
 
 
-def _credential_exposure_problems(spec: PodSpec, settings: Settings) -> list[str]:
-    """Credential-bearing volumes this pod would expose on disk.
+async def _credential_exposure_problems(
+    kubernetes: KubernetesAdapter, spec: PodSpec, settings: Settings
+) -> list[str]:
+    """Credential-bearing volumes either role would expose on disk.
+
+    **Both Deployments**, unlike every other precondition here. The rest are about files only
+    a coordinator reads -- the seed initContainer, the access-control properties, the
+    pointers -- and asserting them on a worker would refuse every correct deployment. This one
+    is about a private key, and a worker holds those: a connector presenting a certificate to
+    a data source runs there (ADR-0005), so the chart mounts the certificate volume on both
+    roles and a key leaks on a worker exactly as it does on a coordinator.
+    """
+    # Apchi's own volumes are the coordinator's and nowhere else: `deliver` patches one
+    # Deployment. So the worker is passed an empty set and every credential volume on it is
+    # the Admin's, which is the only reason the exemption below is safe to give at all.
+    problems = _exposure_in(
+        spec, "coordinator", settings, set(owned_paths(REGISTERED, settings).values())
+    )
+    worker = await _worker_spec(kubernetes, settings)
+    if worker is not None:
+        problems.extend(_exposure_in(worker, "worker", settings, set()))
+    return problems
+
+
+async def _worker_spec(kubernetes: KubernetesAdapter, settings: Settings) -> PodSpec | None:
+    """The worker's pod template, or None when there is no such Deployment.
+
+    Absent is tolerated rather than refused, because whether the Cluster has workers at all is
+    Verification's question and it already answers it: `ready_replicas` reads the same
+    Deployment on every Apply and raises on a name that does not resolve. Giving that
+    requirement a second owner here would mean two different failures for one
+    misconfiguration, and this precondition's subject is file modes.
+    """
+    raw = await kubernetes.deployment_pod_spec_if_present(settings.worker_deployment_name)
+    if raw is None:
+        logger.warning(
+            "no worker deployment to check for exposed credentials",
+            extra={"deployment": settings.worker_deployment_name},
+        )
+        return None
+    return pod_spec(raw)
+
+
+def _exposure_in(
+    spec: PodSpec, role: str, settings: Settings, apchi_mounted: set[str]
+) -> list[str]:
+    """One role's credential-bearing volumes, and what is wrong with them.
 
     Two halves, because each is useless alone: without a mode the kubelet writes 0644, and
     without an `fsGroup` a restricted file is root-only and Trino -- uid 1000 -- cannot read
@@ -186,13 +232,13 @@ def _credential_exposure_problems(spec: PodSpec, settings: Settings) -> list[str
     reachable at all: the kubelet ORs `roMask` 0440 into the mode of a readOnly mount, which
     was measured on a live cluster rather than inferred (§13.2).
 
-    Only the volumes the **Admin** mounts are checked for their mode, and that is a
-    correctness requirement rather than politeness. Apchi sets the mode on its own mounts
-    itself, during Apply -- so refusing one of those here would refuse the only thing that
-    could fix it, and an upgrade from a version that mounted them bare would deadlock.
-    The `fsGroup` is checked for everyone, because Apchi cannot add one: the pod's
-    securityContext is the Admin's, and a 0640 file with no group Trino belongs to is a
-    coordinator that will not start.
+    Only the volumes the **Admin** mounts are checked for their mode -- `apchi_mounted`
+    names the rest -- and that is a correctness requirement rather than politeness. Apchi
+    sets the mode on its own mounts itself, during Apply, so refusing one of those here
+    would refuse the only thing that could fix it and an upgrade from a version that
+    mounted them bare would deadlock. The `fsGroup` is checked for everyone, because Apchi
+    cannot add one: the pod's securityContext is the Admin's, and a 0640 file with no group
+    Trino belongs to is a pod that cannot read its own keys.
 
     Both the absent mode and the permissive one are reported, and on a live cluster it is
     always the second: the API server fills `defaultMode` in with 0644 when a Secret volume
@@ -206,16 +252,18 @@ def _credential_exposure_problems(spec: PodSpec, settings: Settings) -> list[str
         return []
 
     if spec.fs_group is None:
+        # The closing clause only on the coordinator, because Apply patches one Deployment:
+        # telling an Admin that Apchi will restrict the worker's files would be a promise
+        # Apchi does not keep, and the whole of the fix there is theirs.
+        follows = " Apchi then restricts the files it mounts itself." if apchi_mounted else ""
         return [
-            f"The pod mounts {', '.join(sorted(volume.name for volume in mounted))}, which "
+            f"The {role} mounts {', '.join(sorted(volume.name for volume in mounted))}, which "
             f"hold credentials, but sets no securityContext.fsGroup. A Secret volume's files "
             f"are owned by root whatever the container runs as, so without a group Trino "
             f"belongs to they can only be world-readable or unreadable. Set "
-            f"securityContext.fsGroup to the group Trino runs as ({TRINO_GROUP}); Apchi then "
-            f"restricts the files it mounts itself."
+            f"securityContext.fsGroup to the group Trino runs as ({TRINO_GROUP}).{follows}"
         ]
 
-    apchi_mounted = set(owned_paths(REGISTERED, settings).values())
     # The volume is named and the Secret behind it is not, deliberately. Adoption decides
     # which cutover changes must wait for the seed by looking for the catalog Secret's name
     # in a problem, so a message naming it here would arrive labelled "this one must come
@@ -227,16 +275,17 @@ def _credential_exposure_problems(spec: PodSpec, settings: Settings) -> list[str
         mode = volume.default_mode
         if mode is None:
             problems.append(
-                f"Volume {volume.name!r} holds credentials and sets no defaultMode, so the "
-                f"kubelet writes its files 0644 -- readable by every process in the pod, and "
-                f"a private key mounted like that is one libpq refuses to use outright. Set "
-                f"defaultMode: 0{CREDENTIAL_FILE_MODE:o} on that volume."
+                f"The {role}'s {volume.name!r} volume holds credentials and sets no "
+                f"defaultMode, so the kubelet writes its files 0644 -- readable by every "
+                f"process in the pod, and a private key mounted like that is one libpq "
+                f"refuses to use outright. Set defaultMode: 0{CREDENTIAL_FILE_MODE:o} on "
+                f"that volume."
             )
         elif mode & FORBIDDEN_CREDENTIAL_BITS:
             problems.append(
-                f"Volume {volume.name!r} holds credentials with defaultMode {mode:#o}, which "
-                f"grants world access, group write or group execute to a credential. Set "
-                f"defaultMode: 0{CREDENTIAL_FILE_MODE:o} on that volume."
+                f"The {role}'s {volume.name!r} volume holds credentials with defaultMode "
+                f"{mode:#o}, which grants world access, group write or group execute to a "
+                f"credential. Set defaultMode: 0{CREDENTIAL_FILE_MODE:o} on that volume."
             )
     return problems
 

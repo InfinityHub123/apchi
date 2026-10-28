@@ -173,6 +173,42 @@ def healthy_pod_spec() -> dict[str, Any]:
     }
 
 
+def healthy_worker_pod_spec() -> dict[str, Any]:
+    """A worker spec that meets the one precondition workers are held to.
+
+    Mirrors `deploy/trino-dev/20-worker.yaml`, which carries the certificate volume and
+    nothing else Apchi writes: a connector presenting a certificate to a data source runs
+    on a worker (ADR-0005), while access control, resource groups, event listeners and user
+    mapping are all coordinator-only.
+    """
+    return {
+        "securityContext": {"fsGroup": 1000},
+        "containers": [
+            {
+                "name": "trino",
+                "volumeMounts": [
+                    {
+                        "name": "config",
+                        "mountPath": "/etc/trino/config.properties",
+                        "subPath": "worker-config.properties",
+                    },
+                    {"name": "client-certificates", "mountPath": "/etc/trino/certs"},
+                ],
+            }
+        ],
+        "volumes": [
+            {"name": "config", "configMap": {"name": "trino-config"}},
+            {
+                "name": "client-certificates",
+                "secret": {
+                    "secretName": _SETTINGS.client_certificate_secret_name,
+                    "defaultMode": CREDENTIAL_FILE_MODE,
+                },
+            },
+        ],
+    }
+
+
 class FakeKubernetes:
     """Stands in for the Kubernetes adapter in tier 1.
 
@@ -203,6 +239,11 @@ class FakeKubernetes:
         #: What the coordinator Deployment looks like. Defaults to a spec that satisfies
         #: every precondition, so a test only describes the violation it cares about.
         self.pod_spec: dict[str, Any] = healthy_pod_spec()
+        #: And the worker's, which one precondition reads as well (#184). Separate rather
+        #: than the same dict: the two roles mount different volumes, and a test that
+        #: described an exposed key on the coordinator by editing one spec would otherwise
+        #: be describing it on both.
+        self.worker_pod_spec: dict[str, Any] | None = healthy_worker_pod_spec()
         self.pods: dict[str, dict[str, Any]] = {}
         #: Every pod ever created, so a test can prove one was and that it went away.
         self.pod_history: list[str] = []
@@ -277,6 +318,15 @@ class FakeKubernetes:
         return self.image
 
     async def deployment_pod_spec(self, deployment: str) -> dict[str, Any]:
+        if deployment == _SETTINGS.worker_deployment_name and self.worker_pod_spec is not None:
+            return self.worker_pod_spec
+        return self.pod_spec
+
+    async def deployment_pod_spec_if_present(self, deployment: str) -> dict[str, Any] | None:
+        """None for a worker a test has taken away, which is how a Cluster with no worker
+        Deployment is described -- the case the real adapter answers with a 404."""
+        if deployment == _SETTINGS.worker_deployment_name:
+            return self.worker_pod_spec
         return self.pod_spec
 
     async def restart_deployment(self, deployment: str, reason: str) -> None:

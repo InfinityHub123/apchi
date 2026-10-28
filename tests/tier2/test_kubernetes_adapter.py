@@ -7,8 +7,14 @@ a real cluster.
 """
 
 import pytest
+from kubernetes.client.exceptions import ApiException
 
-from app.adapters.kubernetes import KubernetesAdapter, RealKubernetes
+from app.adapters.kubernetes import (
+    CREDENTIAL_FILE_MODE,
+    TRINO_GROUP,
+    KubernetesAdapter,
+    RealKubernetes,
+)
 from tests.tier2.conftest import ForwardedKubernetes, PortForward, kubectl
 
 pytestmark = pytest.mark.tier2
@@ -107,3 +113,31 @@ async def test_a_tunnel_that_cannot_be_revived_is_not_a_verdict(
     # the next poll builds a fresh one rather than failing the same way forever.
     assert state.problem is None, state.problem
     assert pod not in forwarded._forwards
+
+
+async def test_a_worker_pod_template_reads_back_restricted(
+    real_kubernetes: RealKubernetes,
+) -> None:
+    """Workers mount private keys, and §16's eighth precondition reads this template to
+    check them (#184). Proved against the live cluster rather than the render, because the
+    API server is what fills `defaultMode` in and the precondition reads what it returns."""
+    spec = await real_kubernetes.deployment_pod_spec_if_present(WORKER_DEPLOYMENT)
+
+    assert spec is not None
+    assert spec["securityContext"]["fsGroup"] == TRINO_GROUP
+    certificates = next(v for v in spec["volumes"] if v["name"] == "client-certificates")
+    assert certificates["secret"]["defaultMode"] == CREDENTIAL_FILE_MODE
+
+
+async def test_a_deployment_that_does_not_exist_is_an_answer_not_an_error(
+    real_kubernetes: RealKubernetes,
+) -> None:
+    """What makes a Cluster with no workers tolerable to the precondition. The plain read
+    raises instead, which is what Verification relies on, so both behaviours are pinned
+    here together."""
+    assert await real_kubernetes.deployment_pod_spec_if_present("trino-worker-absent") is None
+
+    with pytest.raises(ApiException) as raised:
+        await real_kubernetes.deployment_pod_spec("trino-worker-absent")
+
+    assert raised.value.status == 404

@@ -245,12 +245,12 @@ the user mapping and the resource-group rules. Apchi does not ask for a mode on 
 tightening them is harmless but pointless.
 
 **Apchi refuses to Apply when either half is missing** — §16's eighth precondition, checked
-before every Apply against the coordinator's pod template. It names the volume and the fix. The
-`fsGroup` half is checked whatever the deployment mounts, because the catalog seed always holds
-a connection password; so a cluster installed without the `securityContext` block above gets
-every Apply refused until it is added, with no Apply having reached Trino. Apchi's own
-`charts/trino` sets both halves, and `scripts/check_trino_chart.py` holds every Deployment it
-renders — workers included — to the same rule.
+before every Apply against **both** pod templates, the coordinator's and the worker's. It names
+the role, the volume and the fix. The `fsGroup` half is checked whatever the deployment mounts,
+because the catalog seed always holds a connection password; so a cluster installed without the
+`securityContext` block above gets every Apply refused until it is added, with no Apply having
+reached Trino. Apchi's own `charts/trino` sets both halves, and `scripts/check_trino_chart.py`
+checks the rendered chart before any cluster exists.
 
 ## Why `type: properties`
 

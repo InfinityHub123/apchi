@@ -285,3 +285,103 @@ def test_the_event_listener_directory_shape_carries_credentials_too(settings: Se
     )
 
     assert settings.event_listener_secret_name in credential_secrets(REGISTERED, from_deployment)
+
+
+async def test_the_dev_worker_restricts_its_certificates(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """The baseline for the second role, so the refusals below are the violations they
+    describe."""
+    await check(fake_kubernetes, pod_spec(healthy_pod_spec()), settings)
+
+
+async def test_an_exposed_key_on_a_worker_is_refused(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """#184. A connector presenting a certificate to a data source runs on a worker
+    (ADR-0005), so the chart mounts private keys there too -- and a key leaks on a worker
+    exactly as it does on a coordinator."""
+    assert fake_kubernetes.worker_pod_spec is not None
+    _volume(fake_kubernetes.worker_pod_spec, "client-certificates")["secret"]["defaultMode"] = 0o644
+
+    with pytest.raises(PreconditionFailed) as raised:
+        await check(fake_kubernetes, pod_spec(healthy_pod_spec()), settings)
+
+    assert "worker" in str(raised.value)
+    assert "client-certificates" in str(raised.value)
+
+
+async def test_a_worker_with_no_group_is_refused(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """The same half as on the coordinator, and for the same reason: the keys are
+    root-owned, so without a group the worker cannot read them whatever the mode says."""
+    assert fake_kubernetes.worker_pod_spec is not None
+    del fake_kubernetes.worker_pod_spec["securityContext"]
+
+    with pytest.raises(PreconditionFailed) as raised:
+        await check(fake_kubernetes, pod_spec(healthy_pod_spec()), settings)
+
+    assert "worker" in str(raised.value)
+    assert "fsGroup" in str(raised.value)
+
+
+async def test_both_roles_are_reported_together(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """§16 lists everything wrong rather than the first thing, and across roles too: an
+    Admin fixing one chart should not have to Apply again to discover the other half."""
+    spec = _with_volume(
+        healthy_pod_spec(),
+        {
+            "name": "client-certificates",
+            "secret": {
+                "secretName": settings.client_certificate_secret_name,
+                "defaultMode": 0o644,
+            },
+        },
+    )
+    assert fake_kubernetes.worker_pod_spec is not None
+    _volume(fake_kubernetes.worker_pod_spec, "client-certificates")["secret"]["defaultMode"] = 0o644
+
+    with pytest.raises(PreconditionFailed) as raised:
+        await check(fake_kubernetes, pod_spec(spec), settings)
+
+    assert len(raised.value.problems) == 2
+    assert {"coordinator", "worker"} == {
+        role for role in ("coordinator", "worker") if any(role in p for p in raised.value.problems)
+    }
+
+
+async def test_a_cluster_with_no_worker_deployment_is_not_refused(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """Whether the Cluster has workers at all is Verification's question, and it already
+    answers it: `ready_replicas` reads the same Deployment on every Apply and raises on a
+    name that does not resolve. A second owner for that requirement would mean two
+    different failures for one misconfiguration, and this precondition is about file
+    modes."""
+    fake_kubernetes.worker_pod_spec = None
+
+    await check(fake_kubernetes, pod_spec(healthy_pod_spec()), settings)
+
+
+async def test_nothing_on_a_worker_is_exempt_as_apchis_own(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """The coordinator's exemption exists because Apchi sets those modes during Apply, and
+    Apply patches one Deployment. Nothing Apchi writes reaches a worker's pod template, so
+    a volume named like one of Apchi's is still the Admin's here and still has to be
+    restricted."""
+    assert fake_kubernetes.worker_pod_spec is not None
+    fake_kubernetes.worker_pod_spec["volumes"].append(
+        {
+            "name": settings.event_listener_volume_name,
+            "secret": {"secretName": settings.event_listener_secret_name, "defaultMode": 0o644},
+        }
+    )
+
+    with pytest.raises(PreconditionFailed) as raised:
+        await check(fake_kubernetes, pod_spec(healthy_pod_spec()), settings)
+
+    assert settings.event_listener_volume_name in str(raised.value)
