@@ -602,6 +602,9 @@ class ForwardedKubernetes:
     async def deployment_pod_spec(self, deployment: str) -> dict[str, Any]:
         return await self._real.deployment_pod_spec(deployment)
 
+    async def deployment_pod_spec_if_present(self, deployment: str) -> dict[str, Any] | None:
+        return await self._real.deployment_pod_spec_if_present(deployment)
+
     async def create_pod(self, manifest: dict[str, Any]) -> None:
         self.created_pods.append(manifest["metadata"]["name"])
         await self._real.create_pod(manifest)

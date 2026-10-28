@@ -1869,11 +1869,28 @@ On Adoption this lands as a cutover change rather than a refusal, like every oth
 the volume and not the Secret behind it: Adoption tells the seeding change apart by the catalog
 Secret's name appearing in the problem.
 
-**What it does not cover: workers.** The precondition reads the coordinator's pod template and
-no other, because that is the only one Apchi reads at all, and a private key leaks on a worker
-exactly as it does on a coordinator. `scripts/check_trino_chart.py` holds every Deployment the
-shipped chart renders to the same rule, so Apchi's own chart cannot regress; a hand-written
-deployment's workers are the Admin's to get right.
+**It is the only precondition that reads the worker as well.** The other seven are about files
+only a coordinator reads — the seed initContainer, the access-control properties, the pointers —
+and asserting them on a worker would refuse every correct deployment. This one's subject is a
+private key, and a worker holds those: a connector presenting a certificate to a data source
+runs there ([ADR-0005](./docs/adr/0005-single-certificate-secret.md)), so both roles mount the
+certificate volume and a key leaks on a worker exactly as it does on a coordinator.
+
+Reading a second Deployment looked at first like it would make a misconfigured
+`worker_deployment_name` start refusing Applies. It does not, because that already fails:
+Verification calls `ready_replicas` on the same Deployment every Apply, and the adapter raises
+on a name that does not resolve — verified against a live cluster for both calls. Checking here
+moves an existing hard requirement earlier, to before anything is touched.
+
+A worker Deployment that is **absent** is tolerated rather than refused, and that is the one
+asymmetry. Whether the Cluster has workers at all is Verification's question and it already
+answers it; giving that requirement a second owner would mean two different failures for one
+misconfiguration. So a 404 logs and moves on, and `deployment_pod_spec_if_present` is what makes
+"no such Deployment" an answer instead of an error.
+
+Nothing on a worker is exempt as Apchi's own, either. The coordinator's exemption exists because
+Apchi sets those modes during Apply and Apply patches one Deployment — so on a worker every
+credential volume is the Admin's, and the empty exemption set is what says so.
 
 
 ## Rollout mechanics

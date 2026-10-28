@@ -118,6 +118,8 @@ class KubernetesAdapter(Protocol):
 
     async def deployment_pod_spec(self, deployment: str) -> dict[str, Any]: ...
 
+    async def deployment_pod_spec_if_present(self, deployment: str) -> dict[str, Any] | None: ...
+
     async def create_pod(self, manifest: dict[str, Any]) -> None: ...
 
     async def create_secret(
@@ -345,6 +347,24 @@ class RealKubernetes:
         )
         serialised = client.ApiClient().sanitize_for_serialization(dep.spec.template.spec)
         return dict(serialised)
+
+    async def deployment_pod_spec_if_present(self, deployment: str) -> dict[str, Any] | None:
+        """The same, with "there is no such Deployment" as an answer rather than an error.
+
+        For the caller that is asking *about* a Deployment it does not require to exist, which
+        today is the credential precondition reading the worker (#184). Only a 404 is
+        swallowed, for the reason `_read` gives: a 403 means Apchi's Role is wrong and
+        reporting that as "no workers" would turn a permissions problem into a silently
+        skipped check.
+        """
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            return await self.deployment_pod_spec(deployment)
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+            return None
 
     async def restart_deployment(self, deployment: str, reason: str) -> None:
         """Patch the pod template's annotations, which is all a rollout restart is -- so it

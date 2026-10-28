@@ -49,17 +49,29 @@ VALUES = (
 
 
 class _Cluster:
-    """Only the two reads the preconditions make. Anything else is a bug in this script."""
+    """Only the reads the preconditions make. Anything else is a bug in this script."""
 
-    def __init__(self, config_maps: dict[str, Any], secrets: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        config_maps: dict[str, Any],
+        secrets: dict[str, Any],
+        pod_specs: dict[str, Any],
+    ) -> None:
         self._config_maps = config_maps
         self._secrets = secrets
+        self._pod_specs = pod_specs
 
     async def read_config_map(self, name: str) -> dict[str, str] | None:
         return self._config_maps.get(name)
 
     async def read_secret(self, name: str) -> dict[str, str] | None:
         return self._secrets.get(name)
+
+    async def deployment_pod_spec_if_present(self, deployment: str) -> dict[str, Any] | None:
+        """The worker's template, from the same render. Served rather than refused because
+        precondition 8 reads both roles (#184), and a chart whose worker leaks keys should
+        fail here rather than on somebody's first Apply."""
+        return self._pod_specs.get(deployment)
 
     def __getattr__(self, name: str) -> Any:
         raise AssertionError(f"the preconditions must not reach the Cluster for {name!r}")
@@ -117,10 +129,12 @@ def _permission_problems(documents: list[dict[str, Any]]) -> list[str]:
     root-only and Trino -- uid 1000 -- cannot read its own private keys. A chart that
     shipped one without the other would either leak keys or fail to start. §13.2.
 
-    Kept after §16 grew precondition 8, which refuses the same thing at runtime, because
-    this covers what that cannot: **every** Deployment the chart renders, workers included.
-    The precondition reads the coordinator's pod template and no other, and a private key
-    leaks on a worker exactly as it does on a coordinator.
+    Kept after §16 grew precondition 8, which refuses the same thing at runtime on both
+    roles (#184), because this catches it a stage earlier and in a form that one cannot.
+    It reads the chart as rendered, where a volume that asks for no mode has none -- the API
+    server fills `defaultMode` in with 0644, so a pod template read back from a live cluster
+    never shows the absent case. And it needs no cluster, so a chart that would leak keys
+    fails CI rather than the first Apply after someone installs it.
     """
     problems: list[str] = []
     for document in documents:
@@ -203,6 +217,11 @@ def main() -> int:
             d["metadata"]["name"]: (d.get("stringData") or {})
             for d in documents
             if d["kind"] == "Secret"
+        },
+        {
+            d["metadata"]["name"]: d["spec"]["template"]["spec"]
+            for d in documents
+            if d["kind"] == "Deployment"
         },
     )
     try:
