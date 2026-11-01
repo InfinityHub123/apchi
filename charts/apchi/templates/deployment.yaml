@@ -22,13 +22,13 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "apchi.serviceAccountName" . }}
-      {{- if .Values.trino.tls.existingSecret }}
+      {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret }}
       # A Secret volume's files are root-owned whatever their mode, so a key restricted to
-      # 0640 is unreadable to uid 10001 without this. Only rendered when something is
-      # mounted: an fsGroup on a pod with no volumes changes nothing and would still cost
-      # every existing install a restart.
+      # 0640 is unreadable to uid 10001 without this. One securityContext however many
+      # volumes hang off it, and only rendered when something is mounted: an fsGroup on a
+      # pod with no volumes changes nothing and would still cost every install a restart.
       securityContext:
-        fsGroup: {{ .Values.trino.tls.fsGroup }}
+        fsGroup: {{ .Values.pod.fsGroup }}
       {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
@@ -105,6 +105,17 @@ spec:
               value: {{ include "apchi.mongoUri" . | quote }}
             - name: APCHI_MONGO_DATABASE
               value: {{ .Values.mongodb.database | quote }}
+            {{- $mongoTls := .Values.mongodb.tls }}
+            {{- if $mongoTls.existingSecret }}
+            {{- if $mongoTls.caKey }}
+            - name: APCHI_MONGO_CA_FILE
+              value: {{ printf "%s/%s" $mongoTls.mountPath $mongoTls.caKey | quote }}
+            {{- end }}
+            {{- if $mongoTls.certificateKeyKey }}
+            - name: APCHI_MONGO_CERTIFICATE_KEY_FILE
+              value: {{ printf "%s/%s" $mongoTls.mountPath $mongoTls.certificateKeyKey | quote }}
+            {{- end }}
+            {{- end }}
             # Apchi reads and writes only this namespace: the Cluster's own. Taken from
             # the pod rather than a value, so it cannot disagree with where it runs.
             - name: APCHI_KUBERNETES_NAMESPACE
@@ -212,20 +223,35 @@ spec:
           {{- with .Values.resources }}
           resources: {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if .Values.trino.tls.existingSecret }}
+          {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret }}
           volumeMounts:
+            {{- if .Values.trino.tls.existingSecret }}
             - name: trino-tls
               mountPath: {{ .Values.trino.tls.mountPath | quote }}
               readOnly: true
+            {{- end }}
+            {{- if .Values.mongodb.tls.existingSecret }}
+            - name: mongo-tls
+              mountPath: {{ .Values.mongodb.tls.mountPath | quote }}
+              readOnly: true
+            {{- end }}
           {{- end }}
-      {{- if .Values.trino.tls.existingSecret }}
+      {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret }}
       volumes:
+        {{- if .Values.trino.tls.existingSecret }}
         - name: trino-tls
           secret:
             secretName: {{ .Values.trino.tls.existingSecret | quote }}
-            # The key is a credential, and 0640 is the floor: the kubelet ORs 0440 into the
-            # mode of every file in a readOnly volume, so 0600 is unreachable.
-            defaultMode: {{ .Values.trino.tls.defaultMode }}
+            # A credential, and 0640 is the floor: the kubelet ORs 0440 into the mode of
+            # every file in a readOnly volume, so 0600 is unreachable.
+            defaultMode: {{ .Values.pod.credentialFileMode }}
+        {{- end }}
+        {{- if .Values.mongodb.tls.existingSecret }}
+        - name: mongo-tls
+          secret:
+            secretName: {{ .Values.mongodb.tls.existingSecret | quote }}
+            defaultMode: {{ .Values.pod.credentialFileMode }}
+        {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}

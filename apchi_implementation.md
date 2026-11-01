@@ -1994,6 +1994,30 @@ Trino reads Kubernetes Secrets, and those are untouched. What would be missing i
 record — the numbered history that Section Revert and Full Rollback aim at, and any edit
 staged but never applied.
 
+**Reaching it is Apchi's side of that boundary, and TLS belongs there.** A platform that runs
+MongoDB the way it runs its other databases is likely to require TLS of its clients and may
+authenticate them by certificate, so Apchi takes a CA and a certificate for its own
+connection (#186). Three things about that are not guesses and are worth recording:
+
+- **One PEM, not two.** PyMongo's `tlsCertificateKeyFile` holds the certificate and its key in
+  a single file, where the Trino client wants them apart (§16's ninth precondition). The two
+  settings are shaped differently because the two clients are.
+- **Either file turns TLS on.** PyMongo builds its SSL context from them and does not also
+  need `tls=true`, verified against a mongod running `--tlsMode requireTLS`. There is no
+  silently-plaintext configuration to fall into here, unlike the port-based scheme inference
+  that made the Trino client reach a TLS listener in the clear.
+- **How to authenticate stays in the URI**, as `?authMechanism=MONGODB-X509`, because that is
+  where PyMongo already reads it. x509 is worth preferring where the platform offers it: the
+  URI is a plain Helm value, so a SCRAM password in it is visible in `helm get values` and in
+  the pod spec, while an x509 URI carries no secret at all and MongoDB derives the username
+  from the certificate's subject.
+
+A missing file crashes Apchi at startup rather than degrading, because PyMongo opens these
+while validating its options and the client is built in the lifespan. That is the right
+behaviour — it is Apchi's own misconfiguration, present from the first second — but it is the
+one startup failure that does *not* surface as the 503 an unreachable MongoDB gives, so it is
+documented as its own symptom rather than left to look like one.
+
 Two things follow from that boundary rather than from a recovery plan:
 
 - **Apchi keeps exactly one number outside MongoDB**: the highest Snapshot it has ever

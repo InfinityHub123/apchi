@@ -58,6 +58,13 @@ Apchi caller, `TrinoIdentity` is whoever runs a query; a `Section` enters a Snap
 Reach for these rather than the ones most tutorials suggest:
 
 - **MongoDB** — PyMongo's Async API, optionally via Beanie. Motor is past end-of-life.
+  TLS goes in as keyword arguments, not as query parameters on the URI, so that a typo is a
+  `ConfigurationError` at startup rather than an option PyMongo silently does not recognise.
+  `tlsCertificateKeyFile` takes **one** PEM holding the certificate and its key together,
+  where the Trino client wants the two apart. Either file option turns TLS on by itself --
+  PyMongo builds its SSL context from them and does not also need `tls=true`. PyMongo opens
+  them while validating its options and `Mongo` is built in the lifespan, so a missing file
+  crashes Apchi rather than producing the 503 an unreachable MongoDB gives.
 - **SSE** — `from fastapi.sse import EventSourceResponse, ServerSentEvent`, built into
   FastAPI. `sse-starlette` is a redundant dependency.
 - **Kubernetes** — the official `kubernetes` client.
