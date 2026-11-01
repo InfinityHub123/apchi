@@ -173,13 +173,6 @@ trino:
     # Where the Secret is mounted. The env vars Apchi reads are built from this and the
     # key names above, so a file only has to be named once.
     mountPath: /etc/apchi/trino-tls
-    # The group the files are owned by, which must be the group Apchi's own process runs
-    # as: uid 10001, gid 10001, from the image's `useradd` (verified by running it).
-    # Without this a 0640 file is root-owned and Apchi cannot read its own key.
-    fsGroup: 10001
-    # 0640 and not 0600: the kubelet ORs 0440 into every file's mode in a readOnly volume,
-    # so 0600 cannot be produced. 0644 would leave the private key world-readable.
-    defaultMode: 0640
   # The identity Apchi issues DDL as, and the only identity granted `owner` on
   # catalogs -- which is what restricts catalog DDL to Apchi.
   user: apchi
@@ -196,10 +189,41 @@ trino:
   # The catalog the Verification smoke query runs against.
   verificationCatalog: system
 
+# What Apchi's own pod runs as, and how it mounts its own credentials. Shared by both the
+# `trino.tls` and `mongodb.tls` blocks, because a Secret volume's files are root-owned
+# whatever their mode -- so the group has to be one Apchi's process belongs to, and two
+# blocks each naming it separately is how the two come to disagree.
+pod:
+  # uid 10001, gid 10001, from the image's `useradd` -- read out of the built image rather
+  # than assumed, because Debian's useradd is free to pick a different gid and a mismatch
+  # here is a key the process cannot read.
+  fsGroup: 10001
+  # 0640 and not 0600: the kubelet ORs 0440 into every file's mode in a readOnly volume, so
+  # 0600 cannot be produced. 0644 would leave a private key world-readable.
+  credentialFileMode: 0640
+
 mongodb:
   # Apchi's own storage: every Snapshot and all in-flight state.
+  #
+  # With `tls` below set this may carry `?authMechanism=MONGODB-X509`, which is worth
+  # preferring where MongoDB offers it: the URI then holds no secret at all, where a SCRAM
+  # password in it sits in `helm get values` and in the pod spec.
   uri: ""
   database: apchi
+  # Reaching a MongoDB that requires TLS, and authenticating to it with a certificate.
+  tls:
+    # A Secret holding the PEM files below, mounted read-only at mountPath.
+    existingSecret: ""
+    # The CA that signed MongoDB's certificate. Leave empty when a public bundle has it.
+    caKey: ca.crt
+    # The Secret key holding one PEM with Apchi's certificate **and its key** -- hence the
+    # doubled word, not a typo: the `...Key` suffix names a Secret key, as above, and the
+    # file itself is PyMongo's `tlsCertificateKeyFile`. That is its shape, unlike the
+    # `trino.tls` settings, which want the certificate and the key apart.
+    #
+    # Either this or caKey on its own turns TLS on.
+    certificateKeyKey: ""
+    mountPath: /etc/apchi/mongo-tls
   # true deploys a single-replica MongoDB on an emptyDir alongside Apchi, for trying
   # Apchi out. It loses every Snapshot when its pod restarts. Point `uri` at a real
   # MongoDB for anything else.

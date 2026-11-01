@@ -36,11 +36,19 @@ CHART = ROOT / "charts" / "apchi"
 #: an unset one fails the render rather than producing a Deployment to inspect.
 VALUES = ("--set", "mongodb.deploy=true")
 
-#: And again with TLS to Trino configured, because those env vars are rendered only on that
-#: branch -- the default render would never see a typo in them (#188). The file paths are
-#: built by the template from a mount path and the Secret's key names, which is exactly the
-#: kind of assembly that produces a name no setting reads.
+#: And again with TLS configured to Trino and to MongoDB, because those env vars are
+#: rendered only on those branches -- the default render would never see a typo in them
+#: (#188, #186). The file paths are built by the template from a mount path and the Secret's
+#: key names, which is exactly the kind of assembly that produces a name no setting reads.
+#:
+#: Both at once, not one at a time: they share the pod's `fsGroup`, so rendering them
+#: separately would never catch the two volumes disagreeing about the mode.
 TLS_VALUES = VALUES + (
+    # An explicit URI, because mongodb.tls against the chart's own bundled MongoDB is
+    # refused -- that one serves plaintext, so the files would only produce a handshake
+    # nothing answers. The x509 form, which is the one the docs recommend.
+    "--set",
+    "mongodb.uri=mongodb://mongo-0.mongo:27017/?authMechanism=MONGODB-X509",
     "--set",
     "trino.url=https://trino:8443",
     "--set",
@@ -49,6 +57,10 @@ TLS_VALUES = VALUES + (
     "trino.tls.certificateKey=tls.crt",
     "--set",
     "trino.tls.keyKey=tls.key",
+    "--set",
+    "mongodb.tls.existingSecret=apchi-mongo-tls",
+    "--set",
+    "mongodb.tls.certificateKeyKey=client.pem",
 )
 
 #: Set from the pod rather than from a value, so there is nothing to compare.
@@ -92,10 +104,15 @@ CREDENTIAL_MODE = 0o640
 FORBIDDEN_BITS = 0o037
 
 
-def tls_mount_problems() -> list[str]:
-    """Whether the TLS volume Apchi mounts for itself is restricted and still readable.
+#: How many Secret volumes TLS_VALUES turns on. Asserted, so that adding a third and
+#: forgetting to restrict it fails here rather than mounting a key 0644 unnoticed.
+EXPECTED_TLS_VOLUMES = 2
 
-    Rendered with TLS on, because the volume does not exist otherwise. Read from the template
+
+def tls_mount_problems() -> list[str]:
+    """Whether every TLS volume Apchi mounts for itself is restricted and still readable.
+
+    Rendered with TLS on, because the volumes do not exist otherwise. Read from the template
     rather than from values, so a default that a template overrides cannot hide.
     """
     manifests = subprocess.run(
@@ -105,42 +122,40 @@ def tls_mount_problems() -> list[str]:
         check=True,
     ).stdout
 
+    def values_of(key: str) -> list[int]:
+        return [
+            int(line.split(":", 1)[1].strip())
+            for line in manifests.splitlines()
+            if line.strip().startswith(f"{key}:")
+        ]
+
     problems: list[str] = []
-    mode = next(
-        (
-            int(line.split(":", 1)[1].strip())
-            for line in manifests.splitlines()
-            if line.strip().startswith("defaultMode:")
-        ),
-        None,
-    )
-    group = next(
-        (
-            int(line.split(":", 1)[1].strip())
-            for line in manifests.splitlines()
-            if line.strip().startswith("fsGroup:")
-        ),
-        None,
-    )
-    if mode is None:
+    modes = values_of("defaultMode")
+    groups = values_of("fsGroup")
+
+    if len(modes) != EXPECTED_TLS_VOLUMES:
         problems.append(
-            "the TLS volume sets no defaultMode, so the kubelet writes its files 0644 and "
-            "Apchi's private key is readable by every process in the pod"
+            f"{len(modes)} of the {EXPECTED_TLS_VOLUMES} TLS volumes set a defaultMode. "
+            f"Without one the kubelet writes a Secret's files 0644, and a private key is "
+            f"then readable by every process in the pod"
         )
-    elif mode & FORBIDDEN_BITS:
+    for mode in modes:
+        if mode & FORBIDDEN_BITS:
+            problems.append(
+                f"a TLS volume has defaultMode {mode:#o}, which grants group-write, "
+                f"group-execute or world access to a private key"
+            )
+        elif not mode & 0o040:
+            problems.append(
+                f"a TLS volume has defaultMode {mode:#o}, which is not group-readable -- a "
+                f"Secret file is root-owned, so Apchi could not read its own key"
+            )
+    # One fsGroup for the pod, however many volumes hang off it. Two would mean the template
+    # grew a second securityContext and the later one silently wins.
+    if groups != [APCHI_GROUP]:
         problems.append(
-            f"the TLS volume has defaultMode {mode:#o}, which grants group-write, "
-            f"group-execute or world access to a private key"
-        )
-    elif not mode & 0o040:
-        problems.append(
-            f"the TLS volume has defaultMode {mode:#o}, which is not group-readable -- a "
-            f"Secret file is root-owned, so Apchi could not read its own key"
-        )
-    if group != APCHI_GROUP:
-        problems.append(
-            f"the pod sets securityContext.fsGroup {group}, not {APCHI_GROUP}, so a "
-            f"restricted file would not be owned by a group Apchi belongs to"
+            f"the pod renders securityContext.fsGroup {groups}, not exactly [{APCHI_GROUP}], "
+            f"so a restricted file would not be owned by a group Apchi belongs to"
         )
     return problems
 
@@ -154,7 +169,7 @@ def main() -> int:
         return 0
 
     fields = {f"APCHI_{name.upper()}" for name in Settings.model_fields}
-    for shape, values in (("default", VALUES), ("with TLS to Trino", TLS_VALUES)):
+    for shape, values in (("default", VALUES), ("with TLS to Trino and MongoDB", TLS_VALUES)):
         env = rendered_environment(values)
         unknown = sorted(set(env) - fields - FROM_FIELD_REF)
         if unknown:
@@ -183,7 +198,10 @@ def main() -> int:
         for problem in exposed:
             print(f"  - {problem}", file=sys.stderr)
         return 1
-    print(f"TLS mount ok (mode {CREDENTIAL_MODE:#o}, fsGroup {APCHI_GROUP})")
+    print(
+        f"TLS mounts ok ({EXPECTED_TLS_VOLUMES} volumes at mode {CREDENTIAL_MODE:#o}, "
+        f"fsGroup {APCHI_GROUP})"
+    )
     return 0
 
 

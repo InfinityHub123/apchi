@@ -59,6 +59,12 @@ rather than starting an Apchi that cannot keep a Snapshot.
 {{- if .Values.mongodb.uri -}}
 {{- .Values.mongodb.uri -}}
 {{- else if .Values.mongodb.deploy -}}
+{{- if .Values.mongodb.tls.existingSecret -}}
+{{- /* The bundled MongoDB serves plaintext, so TLS files against it would make Apchi
+       attempt a handshake nothing answers -- a crash at startup, with the cause two
+       values apart. Said here instead. */ -}}
+{{- fail "mongodb.tls is set but mongodb.deploy=true runs a plaintext MongoDB with no certificate. Point mongodb.uri at the TLS MongoDB instead, or clear mongodb.tls" -}}
+{{- end -}}
 {{- printf "mongodb://%s:27017" (include "apchi.mongoName" .) -}}
 {{- else -}}
 {{- fail "set mongodb.uri to your MongoDB, or mongodb.deploy=true to run one alongside Apchi for trying it out" -}}

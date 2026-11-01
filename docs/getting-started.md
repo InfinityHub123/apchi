@@ -447,6 +447,33 @@ its only durable copy.
 The MongoDB `mongodb.deploy` gives you is an `emptyDir`, so this discards every Snapshot
 with it.
 
+## Reaching a MongoDB that requires TLS
+
+Apchi's own storage. Give it the CA, and a certificate if MongoDB authenticates by one:
+
+```sh
+kubectl create secret generic apchi-mongo-tls -n apchi \
+  --from-file=ca.crt=ca.pem --from-file=client.pem=apchi-client.pem
+
+helm upgrade apchi charts/apchi -n apchi --reuse-values \
+  --set mongodb.uri='mongodb://mongo-0.mongo:27017/?authMechanism=MONGODB-X509&replicaSet=rs0' \
+  --set mongodb.tls.existingSecret=apchi-mongo-tls \
+  --set mongodb.tls.certificateKeyKey=client.pem
+```
+
+**`client.pem` holds the certificate and its key in one file.** That is PyMongo's
+`tlsCertificateKeyFile` shape, and it differs from `trino.tls` above, which wants the two
+apart. `cat cert.pem key.pem > client.pem` is the whole of it.
+
+**Either file turns TLS on.** There is no `tls=true` to remember — PyMongo builds its SSL
+context from these.
+
+**x509 is worth preferring where MongoDB offers it.** `mongodb.uri` is a plain value, so a
+SCRAM password in it is visible in `helm get values` and in the pod spec. An x509 URI carries
+no secret: MongoDB derives the username from the certificate's subject. Create the user in the
+`$external` database named by that subject, in RFC2253 form — `CN=apchi` for a certificate
+issued to that common name — and grant it `readWrite` and `dbAdmin` on the Apchi database.
+
 ## Reaching a coordinator over HTTPS
 
 Apchi talks to Trino over plain HTTP by default, which is right for a coordinator on the pod
@@ -498,10 +525,11 @@ rather than crashlooping, so `kubectl logs -n apchi deploy/apchi` tells you whic
 reachable at all, startup takes about a minute before it starts answering — PyMongo spends
 its own server-selection timeout first.
 
-**Apchi crashloops with `FileNotFoundError` instead of reporting `503`.** The TLS settings
-below are read at startup and not per request, so a `trino.tls` key that names a file the
-Secret does not hold stops the process rather than degrading. `kubectl logs` names the path.
-This is the one startup failure that is not a 503, because there is nothing to serve it from.
+**Apchi crashloops instead of reporting `503`.** The TLS settings above are read at startup
+and not per request, so a `trino.tls` or `mongodb.tls` key naming a file the Secret does not
+hold stops the process rather than degrading. `kubectl logs` names the path and which setting
+put it there. This is the one startup failure that is not a 503, because there is nothing left
+to serve it from — a 503 means MongoDB is unreachable, which is a different thing.
 
 **Every Apply is refused with "Trino then refuses plain HTTP from every client".** The
 coordinator authenticates its callers and Apchi is configured for `http://`. See

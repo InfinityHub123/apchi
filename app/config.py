@@ -113,6 +113,18 @@ class Settings(BaseSettings):
 
     mongo_uri: str = "mongodb://localhost:27017"
     mongo_database: str = "apchi"
+    #: The CA that signed MongoDB's certificate, when a public bundle does not contain it.
+    mongo_ca_file: str | None = None
+    #: One PEM holding the certificate Apchi authenticates with **and its key**, which is the
+    #: shape PyMongo's `tlsCertificateKeyFile` takes -- unlike the Trino client, which wants
+    #: the two apart (#188). Either file on its own turns TLS on: PyMongo builds an SSL
+    #: context from these and does not also need `tls=true`, verified against a mongod
+    #: running `--tlsMode requireTLS`.
+    #:
+    #: How to authenticate stays in `mongo_uri` -- `?authMechanism=MONGODB-X509` -- because
+    #: that is where PyMongo already reads it, and because an x509 URI carries no secret at
+    #: all, unlike the SCRAM password that otherwise sits in `helm get values`.
+    mongo_certificate_key_file: str | None = None
 
     #: The namespace Apchi reads and writes: the Cluster's own.
     kubernetes_namespace: str = "default"

@@ -102,8 +102,13 @@ secrets:
 | `trino.containerName` | `trino` | The container within those pods |
 | `trino.catalogStoreDir` | `/data/trino/catalogs` | Must match Trino's `catalog.config-dir`. Nothing read-only may be mounted here or above it |
 | `trino.verificationCatalog` | `system` | What the smoke query reads |
-| `mongodb.uri` | — | Required unless `mongodb.deploy` |
+| `mongodb.uri` | — | Required unless `mongodb.deploy`. With `mongodb.tls` set it may carry `?authMechanism=MONGODB-X509`, which is worth preferring: the URI then holds no secret at all, where a SCRAM password in it sits in `helm get values` and the pod spec |
 | `mongodb.database` | `apchi` | |
+| `mongodb.tls.existingSecret` | `""` | A Secret holding the PEM files below, mounted read-only at `mongodb.tls.mountPath`. Required to reach a MongoDB that requires TLS |
+| `mongodb.tls.caKey` | `ca.crt` | The CA that signed MongoDB's certificate. Empty when a public bundle already has it |
+| `mongodb.tls.certificateKeyKey` | `""` | One PEM holding Apchi's certificate **and its key** — PyMongo's `tlsCertificateKeyFile` shape, unlike `trino.tls`, which wants the two apart. Either key alone turns TLS on |
+| `pod.fsGroup` | `10001` | The group every mounted credential is owned by, which must be the one Apchi's process runs as. A Secret volume's files are root-owned whatever their mode, so a wrong value here is a key Apchi cannot read |
+| `pod.credentialFileMode` | `0640` | Not `0600`: the kubelet ORs `0440` into every file in a read-only volume, so `0600` cannot be produced. `0644` would leave a private key world-readable |
 | `mongodb.deploy` | `false` | A MongoDB beside Apchi, for trying it out. Loses Snapshots on restart |
 | `secrets.*` | see above | Must be what Trino mounts |
 | `volumes.*` | `apchi-*` | The volumes Apchi adds to the coordinator's pod template. Everything else there is the Admin's. The user-mapping Secret is not here: the Admin mounts it as a directory and Apchi only fills it |
