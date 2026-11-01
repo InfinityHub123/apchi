@@ -231,32 +231,29 @@ def test_plaintext_needs_no_tls_configuration_at_all() -> None:
 
 
 @pytest.fixture(scope="module")
-def tls_trino(chain: TlsChain, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Trino]:
+def tls_trino(chain: TlsChain, pem_files: dict[str, str]) -> Iterator[Trino]:
     """Trino itself, serving HTTPS and demanding a certificate.
 
     A separate container from the suite's other two because its `config.properties` is
     replaced wholesale, and the point is to prove Apchi's client against **Trino's** TLS
     stack rather than against a Python one. Rendering a chart is not installing it, and a
     handshake with `http.server` above is not a handshake with Trino.
-    """
-    directory = tmp_path_factory.mktemp("tls-trino")
-    # Trino's keystore.path takes one PEM holding the certificate and its key together.
-    (directory / "server.pem").write_bytes(chain.server + chain.server_key)
-    (directory / "ca.pem").write_bytes(chain.ca)
-    (directory / "client.pem").write_bytes(chain.client)
-    (directory / "client-key.pem").write_bytes(chain.client_key)
-    (directory / "config.properties").write_text(_TLS_CONFIG)
-    # The container runs as a non-root user and reads all of these.
-    for path in directory.iterdir():
-        path.chmod(0o644)
 
+    The server's files are **copied in** rather than bind-mounted. A bind mount needs the
+    container's uid to traverse the host directory, and pytest's temporary directories are
+    0700 and owned by whoever runs the suite -- which works only where that uid happens to
+    equal the image's. It did locally and did not in CI, where the four tests below were the
+    whole of the failure. `with_copy_into_container` takes the bytes and lands them before
+    the container's process starts, so no host directory is involved at all. Apchi's own
+    certificate still comes from `pem_files`, because that one is read by this process.
+    """
     container = (
         DockerContainer(TRINO_IMAGE)
         .with_exposed_ports(8443)
-        .with_volume_mapping(str(directory), "/etc/trino/tls", "ro")
-        .with_volume_mapping(
-            str(directory / "config.properties"), "/etc/trino/config.properties", "ro"
-        )
+        .with_copy_into_container(_TLS_CONFIG.encode(), "/etc/trino/config.properties")
+        .with_copy_into_container(chain.ca, "/etc/trino/tls/ca.pem")
+        # Trino's keystore.path takes one PEM holding the certificate and its key together.
+        .with_copy_into_container(chain.server + chain.server_key, "/etc/trino/tls/server.pem")
         .waiting_for(LogMessageWaitStrategy("SERVER STARTED"))
     )
     with container as started:
@@ -270,9 +267,9 @@ def tls_trino(chain: TlsChain, tmp_path_factory: pytest.TempPathFactory) -> Iter
         yield Trino(
             url=f"https://localhost:{started.get_exposed_port(8443)}",
             user="apchi",
-            ca_file=str(directory / "ca.pem"),
-            auth_certificate_file=str(directory / "client.pem"),
-            auth_key_file=str(directory / "client-key.pem"),
+            ca_file=pem_files["ca"],
+            auth_certificate_file=pem_files["client"],
+            auth_key_file=pem_files["client_key"],
         )
 
 
