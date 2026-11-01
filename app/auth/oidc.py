@@ -49,6 +49,7 @@ from joserfc.jwk import KeySet, KeySetSerialization
 from app.auth.identity import Role
 from app.auth.logins import PendingLogin
 from app.config import Settings
+from app.trust import verification
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +105,11 @@ class OidcProvider:
 
     def __init__(self, settings: Settings, http: httpx.AsyncClient | None = None) -> None:
         self._settings = settings
-        self._http = http or httpx.AsyncClient(timeout=10.0)
+        # An internal provider signs with a private CA, and this is the destination where
+        # trusting *only* that CA would bite: a provider's JWKS can sit on a different host
+        # with a public certificate, so app.trust adds to the public store rather than
+        # replacing it (#187).
+        self._http = http or httpx.AsyncClient(timeout=10.0, verify=verification(settings.ca_file))
         self._owns_http = http is None
         self._discovered: Discovered | None = None
         self._keys: KeySet | None = None

@@ -60,6 +60,7 @@ Reach for these rather than the ones most tutorials suggest:
 - **MongoDB** — PyMongo's Async API, optionally via Beanie. Motor is past end-of-life.
   TLS goes in as keyword arguments, not as query parameters on the URI, so that a typo is a
   `ConfigurationError` at startup rather than an option PyMongo silently does not recognise.
+  The CA comes from `app.trust`, not from a setting read here.
   `tlsCertificateKeyFile` takes **one** PEM holding the certificate and its key together,
   where the Trino client wants the two apart. Either file option turns TLS on by itself --
   PyMongo builds its SSL context from them and does not also need `tls=true`. PyMongo opens
@@ -74,13 +75,27 @@ Reach for these rather than the ones most tutorials suggest:
   The coordinator is configured as a **URL**, never a host and a port: the client infers
   `https` from the port at *exactly* 443, so 8443 — Trino's own documented HTTPS port — came
   out as plaintext against a TLS listener and said nothing. It accepts a URL in place of
-  `host`, which removes the inference entirely. And the two libraries reach one coordinator
-  with different trust configuration: the Trino client is `requests` underneath, which reads
-  `REQUESTS_CA_BUNDLE` and ignores `SSL_CERT_FILE`, while `httpx` does the opposite and
-  deprecates both a path-valued `verify` and `cert` in favour of an `ssl.SSLContext`. Apchi
-  passes a CA and a client certificate to both explicitly rather than through the
-  environment. §16's ninth precondition.
+  `host`, which removes the inference entirely. Trust configuration goes through
+  `app.trust`, never per client: see **Outbound TLS** below.
 - **Trino in tests** — `testcontainers.community.trino`.
+
+## Outbound TLS
+
+Four destinations — the Trino coordinator, MongoDB, the OIDC provider, the alert webhook —
+through three HTTP libraries. **All trust goes through `app/trust.py`; no client reads
+`ca_file` itself.**
+
+The reason is one measured fact: a CA *path* handed to PyMongo or to the Trino client's
+`requests` session makes them trust that CA **alone** — 1 CA, against 147 for a default
+context with the same CA loaded into it. Only httpx takes a context built the additive way.
+So `app.trust` concatenates the public store with the configured CA once and hands every
+client the result, which keeps one meaning of "trust this CA" across all four.
+
+Without it, an internal OIDC provider would stop a public alert webhook verifying, and
+Trino — one destination reached through two libraries — would have its liveness check and its
+queries disagree. `requests` also reads `REQUESTS_CA_BUNDLE` while httpx reads
+`SSL_CERT_FILE`, so none of this is left to the environment. httpx additionally deprecates
+both a path-valued `verify` and `cert` in favour of an `ssl.SSLContext`.
 
 ## Deployment shapes
 

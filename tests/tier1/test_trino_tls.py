@@ -23,6 +23,7 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
 from app.adapters.trino import Trino
+from app.trust import bundled_ca
 from tests.certificates import TlsChain, tls_chain
 from tests.conftest import TRINO_IMAGE
 
@@ -183,7 +184,10 @@ def test_the_query_session_carries_the_ca_and_the_certificate(
 ) -> None:
     """Queries go through the Trino client's `requests` session, not httpx, and `requests`
     ignores SSL_CERT_FILE -- it reads REQUESTS_CA_BUNDLE. So both are passed explicitly
-    rather than left to the environment, and this asserts they arrive."""
+    rather than left to the environment, and this asserts they arrive. The CA that arrives is
+    the *concatenated* bundle, not the configured file: `requests` replaces its trust store
+    with whatever path it is given, so handing it the raw CA would make queries distrust
+    everything the liveness check still trusted (#187)."""
     trino_adapter = Trino(
         url="https://trino:8443",
         ca_file=pem_files["ca"],
@@ -193,11 +197,11 @@ def test_the_query_session_carries_the_ca_and_the_certificate(
     connection = trino.dbapi.connect(
         host=trino_adapter._base,
         user="apchi",
-        verify=trino_adapter._ca_file,
+        verify=trino_adapter._ca_bundle,
         auth=trino.auth.CertificateAuthentication(pem_files["client"], pem_files["client_key"]),
     )
     session = connection._create_request()._http_session
-    assert session.verify == pem_files["ca"]
+    assert session.verify == bundled_ca(pem_files["ca"])
     assert session.cert == (pem_files["client"], pem_files["client_key"])
 
 
@@ -219,10 +223,22 @@ def test_a_certificate_over_plaintext_is_refused_at_startup(pem_files: dict[str,
 
 def test_a_missing_pem_stops_apchi_rather_than_reporting_a_down_cluster() -> None:
     """`is_starting` swallows every exception, so a path typo inside it would read as a
-    coordinator that is down. The context is built in the constructor to keep that
-    distinguishable."""
-    with pytest.raises(FileNotFoundError):
+    coordinator that is down. Both the bundle and the context are built in the constructor to
+    keep that distinguishable.
+
+    A `RuntimeError` naming `ca_file` rather than a bare FileNotFoundError, because the CA is
+    shared with every other destination now and `app.trust` is the one place that can say so
+    (#187)."""
+    with pytest.raises(RuntimeError, match="ca_file"):
         Trino(url="https://trino:8443", ca_file="/nonexistent/ca.pem")
+
+    # The client certificate is still Trino's own, so its own error still comes from here.
+    with pytest.raises(FileNotFoundError):
+        Trino(
+            url="https://trino:8443",
+            auth_certificate_file="/nonexistent/client.pem",
+            auth_key_file="/nonexistent/client-key.pem",
+        )
 
 
 def test_plaintext_needs_no_tls_configuration_at_all() -> None:
@@ -295,11 +311,13 @@ async def test_the_adapters_own_queries_work_over_certificate_authentication(
     assert await tls_trino.active_worker_count() == 0
 
 
-async def test_a_real_trino_refuses_apchi_without_the_certificate(tls_trino: Trino) -> None:
+async def test_a_real_trino_refuses_apchi_without_the_certificate(
+    tls_trino: Trino, pem_files: dict[str, str]
+) -> None:
     """401, not a TLS error: the handshake succeeds and Trino then declines. This is why
     precondition 9 checks for the certificate separately from the scheme."""
     import trino.exceptions
 
-    unauthenticated = Trino(url=tls_trino._base, user="apchi", ca_file=tls_trino._ca_file)
+    unauthenticated = Trino(url=tls_trino._base, user="apchi", ca_file=pem_files["ca"])
     with pytest.raises(trino.exceptions.HttpError, match="401"):
         await unauthenticated.query("SELECT 1")

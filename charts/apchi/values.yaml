@@ -157,11 +157,6 @@ trino:
     # /etc/apchi/trino-tls and restricts the key, which is why it is a Secret and not a
     # ConfigMap even though the CA half is public.
     existingSecret: ""
-    # The CA that signed the coordinator's certificate. Leave empty when a public bundle
-    # already contains it. Both of Apchi's HTTP clients are pointed at this explicitly:
-    # queries go through the Trino client's `requests` session and /v1/info through httpx,
-    # and the two honour different environment variables.
-    caKey: ca.crt
     # The certificate Apchi authenticates with, where the coordinator sets
     # http-server.authentication.type=CERTIFICATE and so demands one of every client.
     # Both keys or neither: a certificate without its key cannot be presented.
@@ -201,6 +196,21 @@ pod:
   # 0640 and not 0600: the kubelet ORs 0440 into every file's mode in a readOnly volume, so
   # 0600 cannot be produced. 0644 would leave a private key world-readable.
   credentialFileMode: 0640
+  # A CA to trust **in addition to** the public store, for every outbound TLS connection
+  # Apchi makes: the Trino coordinator, MongoDB, the OIDC provider and the alert webhook.
+  #
+  # One bundle and not one per destination, because an organisation with an internal PKI has
+  # one root for all four. Added to the public store rather than replacing it, which Apchi
+  # does by concatenating the two itself -- a CA path handed to PyMongo or to the Trino
+  # client's `requests` session makes them trust that CA *alone*, so an internal OIDC
+  # provider would otherwise stop a public alert webhook from verifying.
+  #
+  # Deliberately not restricted and given no fsGroup: this is a list of public certificates,
+  # so the kubelet's own 0644 is right and there is no key here to protect.
+  caBundle:
+    existingSecret: ""
+    key: ca.crt
+    mountPath: /etc/apchi/ca
 
 mongodb:
   # Apchi's own storage: every Snapshot and all in-flight state.
@@ -214,8 +224,6 @@ mongodb:
   tls:
     # A Secret holding the PEM files below, mounted read-only at mountPath.
     existingSecret: ""
-    # The CA that signed MongoDB's certificate. Leave empty when a public bundle has it.
-    caKey: ca.crt
     # The Secret key holding one PEM with Apchi's certificate **and its key** -- hence the
     # doubled word, not a typo: the `...Key` suffix names a Secret key, as above, and the
     # file itself is PyMongo's `tlsCertificateKeyFile`. That is its shape, unlike the

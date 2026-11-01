@@ -8,12 +8,13 @@ Cluster membership comes from the system.runtime.nodes system table rather than
 
 import logging
 import re
-import ssl
 import time
 from typing import Any, NamedTuple
 
 import httpx
 from fastapi.concurrency import run_in_threadpool
+
+from app.trust import bundled_ca, verification
 
 #: What Apchi's own queries report as their source. The client would otherwise send
 #: "trino-python-client", which says nothing about who is asking. Named so that an Operator
@@ -73,26 +74,6 @@ class Query(NamedTuple):
     query_id: str
 
 
-def _httpx_verification(
-    ca_file: str | None, certificate_file: str | None, key_file: str | None
-) -> ssl.SSLContext | bool:
-    """What httpx verifies the coordinator with, or True for the default trust store.
-
-    A context rather than paths because httpx 0.28 deprecated both `verify=<path>` and
-    `cert=` in favour of one built here. The Trino client takes the paths themselves, so
-    the same two settings arrive in two shapes -- which is the whole reason this exists
-    (#188).
-    """
-    if ca_file is None and certificate_file is None:
-        return True
-    # cafile=None still loads the default CAs, so a client certificate presented to a
-    # coordinator with a publicly signed one needs no bundle.
-    context = ssl.create_default_context(cafile=ca_file)
-    if certificate_file is not None:
-        context.load_cert_chain(certificate_file, key_file)
-    return context
-
-
 class Trino:
     def __init__(
         self,
@@ -123,12 +104,15 @@ class Trino:
         # reads https from a port only when the port is exactly 443, so Trino's documented
         # 8443 came out as plaintext.
         self._base = url.rstrip("/")
-        self._ca_file = ca_file
+        # The concatenated bundle, not the configured file: `requests` replaces its trust
+        # store with whatever path it is given, so handing it the raw CA would make queries
+        # distrust everything `is_starting` still trusted. See app.trust.
+        self._ca_bundle = bundled_ca(ca_file)
         self._auth_certificate_file = auth_certificate_file
         self._auth_key_file = auth_key_file
         # Built once, at startup: a path that does not exist should stop Apchi here rather
         # than inside `is_starting`, which reports every failure as "unreachable".
-        self._verification = _httpx_verification(ca_file, auth_certificate_file, auth_key_file)
+        self._verification = verification(ca_file, auth_certificate_file, auth_key_file)
         self._connectors: frozenset[str] | None = None
         self._connectors_read_at: float | None = None
 
@@ -153,7 +137,7 @@ class Trino:
             # A path, where httpx needed a context. `requests` ignores SSL_CERT_FILE and
             # reads REQUESTS_CA_BUNDLE, so leaving this to the environment would mean two
             # variables for one coordinator.
-            **({"verify": self._ca_file} if self._ca_file else {}),
+            **({"verify": self._ca_bundle} if self._ca_bundle else {}),
             **(patience._asdict() if patience else {}),
         )
         try:
