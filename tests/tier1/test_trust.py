@@ -28,6 +28,15 @@ from tests.certificates import tls_chain
 
 
 def _subjects(context: ssl.SSLContext) -> list[str]:
+    """The CAs a context has loaded, by common name.
+
+    Only valid on a context built with an explicit `cafile`. A platform that hands OpenSSL a
+    hashed CA **directory** instead loads its certificates on demand, and `get_ca_certs()`
+    then reports an empty list however many are installed -- 0 for `capath=/etc/ssl/certs`
+    against 146 for `cafile=/etc/ssl/cert.pem` on the same machine. So this must never be
+    used to measure the *platform default* store, which is what failed in CI while passing
+    locally.
+    """
     return [entry["subject"][-1][0][1] for entry in context.get_ca_certs()]
 
 
@@ -109,22 +118,34 @@ def test_every_destination_reads_the_same_setting(private_ca: str) -> None:
     assert isinstance(verification(settings.ca_file), ssl.SSLContext)
 
 
-def test_a_client_certificate_without_a_ca_still_uses_the_public_store(
-    private_ca: str,
+def test_a_client_certificate_without_a_ca_still_verifies_against_the_default_store(
+    tmp_path: Path,
 ) -> None:
-    """`cafile=None` loads the default CAs, so a certificate presented to a publicly signed
-    destination needs no bundle of its own."""
+    """`cafile=None` loads the platform's own CAs, so a certificate presented to a publicly
+    signed destination needs no bundle of its own.
+
+    Asserted through `verify_mode` and not by counting `get_ca_certs()`, which cannot see a
+    default store at all when the platform hands OpenSSL a **hashed CA directory** rather
+    than a bundle file: those certificates are loaded on demand and never enumerated.
+    `create_default_context(capath=...)` reports 0 where `cafile=...` reports 146, and that
+    difference is the platform's, not the behaviour's -- it is why the first version of this
+    test passed locally and failed in CI.
+    """
     chain = tls_chain()
-    directory = Path(str(bundled_ca(private_ca))).parent
-    certificate = directory / "client.pem"
-    key = directory / "client-key.pem"
+    certificate = tmp_path / "client.pem"
     certificate.write_bytes(chain.client)
+    key = tmp_path / "client-key.pem"
     key.write_bytes(chain.client_key)
 
     context = verification(None, str(certificate), str(key))
 
     assert isinstance(context, ssl.SSLContext)
-    assert len(_subjects(context)) > 1
+    # A verifying context, which is what distinguishes this from the `verify=False` shape:
+    # a client certificate must never be the thing that turns verification off.
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+    # And no bundle was built for it, so nothing replaced the platform's store.
+    assert bundled_ca(None) is None
 
 
 class _Collector(http.server.BaseHTTPRequestHandler):
