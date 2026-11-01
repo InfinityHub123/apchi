@@ -92,7 +92,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.trino = Trino(
             url=settings.trino_url,
             user=settings.trino_user,
-            ca_file=settings.trino_ca_file,
+            ca_file=settings.ca_file,
             auth_certificate_file=settings.trino_auth_certificate_file,
             auth_key_file=settings.trino_auth_key_file,
         )

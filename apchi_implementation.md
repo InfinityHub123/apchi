@@ -1944,9 +1944,11 @@ host, which removes the inference from the path entirely.
 **Two HTTP libraries reach one coordinator.** Queries go through the official client's
 `requests` session and `/v1/info` through `httpx`. `requests` ignores `SSL_CERT_FILE` and reads
 `REQUESTS_CA_BUNDLE`; `httpx` does the opposite, and in its current version deprecates both a
-path-valued `verify` and `cert` in favour of an `ssl.SSLContext`. So the same two settings are
-handed to the two clients in two shapes, explicitly, rather than left to the environment where
-one coordinator would need both variables set.
+path-valued `verify` and `cert` in favour of an `ssl.SSLContext`. So the certificate Apchi
+presents is handed to the two clients in two shapes, explicitly, rather than left to the
+environment where one coordinator would need both variables set. What Apchi *trusts* is not
+configured here at all: §18's one `ca_file` covers every destination, for the reason given
+there.
 
 
 ## Rollout mechanics
@@ -2001,7 +2003,8 @@ connection (#186). Three things about that are not guesses and are worth recordi
 
 - **One PEM, not two.** PyMongo's `tlsCertificateKeyFile` holds the certificate and its key in
   a single file, where the Trino client wants them apart (§16's ninth precondition). The two
-  settings are shaped differently because the two clients are.
+  settings are shaped differently because the two clients are. What Apchi *trusts* is one
+  setting for all four destinations, below.
 - **Either file turns TLS on.** PyMongo builds its SSL context from them and does not also
   need `tls=true`, verified against a mongod running `--tlsMode requireTLS`. There is no
   silently-plaintext configuration to fall into here, unlike the port-based scheme inference
@@ -2011,6 +2014,30 @@ connection (#186). Three things about that are not guesses and are worth recordi
   URI is a plain Helm value, so a SCRAM password in it is visible in `helm get values` and in
   the pod spec, while an x509 URI carries no secret at all and MongoDB derives the username
   from the certificate's subject.
+
+**One CA bundle, for every outbound connection Apchi makes**, and added to the public trust
+store rather than substituted for it (#187). Both halves of that are deliberate.
+
+*One*, rather than one per destination, because a CA bundle is conventionally a single thing —
+`SSL_CERT_FILE` and the system store both work that way — and an organisation with an internal
+PKI has one root for its Trino, its MongoDB, its identity provider and its webhook. Several
+CAs concatenate into the one file.
+
+*Added*, because none of the three libraries involved does that on its own. A CA path given to
+PyMongo, or to the Trino client's `requests` session, yields a context trusting exactly that
+one CA: measured at 1, against 147 for a default context with the same CA loaded into it. Only
+httpx accepts a context built the other way. So `app/trust.py` concatenates the public store
+with the configured CA once and hands every client the result. Two things go wrong otherwise.
+An internal OIDC provider with a private CA would stop a public alert webhook from verifying,
+which is a TLS failure against a host nobody configured. And Trino, which is one destination
+reached through two libraries, would have its liveness check trust the public store while its
+queries did not.
+
+The concatenation is Apchi's rather than an initContainer's: a few lines against a container
+on every pod, covered by tier 1, and it works for a deployment that does not use the chart.
+The result is a list of public certificates with no key in it, so the bundle is written 0644
+and the chart mounts the CA volume with no mode and no `fsGroup` — unlike the certificates
+Apchi presents, which are keys and are restricted.
 
 A missing file crashes Apchi at startup rather than degrading, because PyMongo opens these
 while validating its options and the client is built in the lifespan. That is the right

@@ -7,6 +7,7 @@ from pymongo import AsyncMongoClient
 from pymongo.asynchronous.database import AsyncDatabase
 
 from app.config import Settings
+from app.trust import bundled_ca
 
 
 def _tls_options(settings: Settings) -> dict[str, Any]:
@@ -20,8 +21,11 @@ def _tls_options(settings: Settings) -> dict[str, Any]:
     # Any, not str: PyMongo declares its first few options by name and the rest as **kwargs,
     # so a dict[str, str] expanded into it is checked against `tz_aware: bool | None`.
     options: dict[str, Any] = {}
-    if settings.mongo_ca_file:
-        options["tlsCAFile"] = settings.mongo_ca_file
+    # The concatenated bundle, for the reason app.trust gives: PyMongo replaces its trust
+    # store with whatever path it is handed.
+    bundle = bundled_ca(settings.ca_file)
+    if bundle:
+        options["tlsCAFile"] = bundle
     if settings.mongo_certificate_key_file:
         options["tlsCertificateKeyFile"] = settings.mongo_certificate_key_file
     return options
@@ -41,8 +45,9 @@ class Mongo:
             # the path was assembled by the chart from a mount point and a Secret key.
             raise RuntimeError(
                 f"Apchi cannot start: {missing.filename} does not exist. It comes from "
-                "mongo_ca_file or mongo_certificate_key_file -- under Helm, a "
-                "mongodb.tls key naming a file that Secret does not hold."
+                "mongo_certificate_key_file -- under Helm, mongodb.tls.certificateKeyKey "
+                "naming a key that Secret does not hold. A missing CA is reported by "
+                "app.trust instead, since that one is shared with every other destination."
             ) from missing
         self._database = self._client[settings.mongo_database]
 

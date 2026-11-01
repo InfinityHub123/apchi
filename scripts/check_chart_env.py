@@ -61,6 +61,8 @@ TLS_VALUES = VALUES + (
     "mongodb.tls.existingSecret=apchi-mongo-tls",
     "--set",
     "mongodb.tls.certificateKeyKey=client.pem",
+    "--set",
+    "pod.caBundle.existingSecret=apchi-ca",
 )
 
 #: Set from the pod rather than from a value, so there is nothing to compare.
@@ -104,8 +106,14 @@ CREDENTIAL_MODE = 0o640
 FORBIDDEN_BITS = 0o037
 
 
-#: How many Secret volumes TLS_VALUES turns on. Asserted, so that adding a third and
-#: forgetting to restrict it fails here rather than mounting a key 0644 unnoticed.
+#: How many of the volumes TLS_VALUES turns on hold a **key**, and so must be restricted.
+#: Asserted, so that adding another and forgetting to restrict it fails here rather than
+#: mounting a key 0644 unnoticed.
+#:
+#: Three volumes are mounted and only two are counted: the CA bundle is a list of public
+#: certificates with no key in it, so it deliberately sets no mode and takes the kubelet's
+#: 0644 (#187). If it ever grew a defaultMode this number would stop matching, which is the
+#: right way round -- a surprise here is cheaper than a surprise in a cluster.
 EXPECTED_TLS_VOLUMES = 2
 
 
@@ -169,7 +177,7 @@ def main() -> int:
         return 0
 
     fields = {f"APCHI_{name.upper()}" for name in Settings.model_fields}
-    for shape, values in (("default", VALUES), ("with TLS to Trino and MongoDB", TLS_VALUES)):
+    for shape, values in (("default", VALUES), ("with TLS and a CA bundle", TLS_VALUES)):
         env = rendered_environment(values)
         unknown = sorted(set(env) - fields - FROM_FIELD_REF)
         if unknown:

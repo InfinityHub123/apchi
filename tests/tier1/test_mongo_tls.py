@@ -18,6 +18,7 @@ from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
 from app.adapters.mongo import Mongo
 from app.config import Environment, Settings
+from app.trust import bundled_ca
 from tests.certificates import TlsChain, tls_chain
 
 MONGO_IMAGE = "mongo:7"
@@ -118,7 +119,7 @@ def tls_mongo(chain: TlsChain, pem_files: dict[str, str]) -> Iterator[Settings]:
             # username and no password: that is the point.
             mongo_uri=f"mongodb://localhost:{port}/?authMechanism=MONGODB-X509",
             mongo_database="apchi",
-            mongo_ca_file=pem_files["ca"],
+            ca_file=pem_files["ca"],
             mongo_certificate_key_file=pem_files["client"],
         )
 
@@ -167,7 +168,7 @@ async def test_without_the_certificate_the_server_is_unreachable(
     plaintext = tls_mongo.model_copy(
         update={
             "mongo_uri": tls_mongo.mongo_uri.split("/?")[0],
-            "mongo_ca_file": None,
+            "ca_file": None,
             "mongo_certificate_key_file": None,
         }
     )
@@ -185,15 +186,15 @@ def test_either_file_alone_turns_tls_on(tls_mongo: Settings) -> None:
     from app.adapters.mongo import _tls_options
 
     assert _tls_options(tls_mongo) == {
-        "tlsCAFile": tls_mongo.mongo_ca_file,
+        "tlsCAFile": bundled_ca(tls_mongo.ca_file),
         "tlsCertificateKeyFile": tls_mongo.mongo_certificate_key_file,
     }
-    assert _tls_options(tls_mongo.model_copy(update={"mongo_ca_file": None})) == {
+    assert _tls_options(tls_mongo.model_copy(update={"ca_file": None})) == {
         "tlsCertificateKeyFile": tls_mongo.mongo_certificate_key_file
     }
     assert (
         _tls_options(
-            tls_mongo.model_copy(update={"mongo_ca_file": None, "mongo_certificate_key_file": None})
+            tls_mongo.model_copy(update={"ca_file": None, "mongo_certificate_key_file": None})
         )
         == {}
     )

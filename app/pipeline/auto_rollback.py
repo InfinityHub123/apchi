@@ -23,6 +23,7 @@ from app.pipeline.verification import verify
 from app.sections import SectionName
 from app.sections.base import Cluster, Resources
 from app.sections.registry import REGISTERED
+from app.trust import verification
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,7 @@ async def _alert(apply_id: str, reason: str, settings: Settings) -> None:
     if not settings.alert_webhook_url:
         return
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, verify=verification(settings.ca_file)) as client:
             response = await client.post(
                 settings.alert_webhook_url,
                 json={

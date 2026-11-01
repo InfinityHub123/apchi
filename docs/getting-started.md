@@ -447,13 +447,39 @@ its only durable copy.
 The MongoDB `mongodb.deploy` gives you is an `emptyDir`, so this discards every Snapshot
 with it.
 
+## Trusting a private CA
+
+Apchi makes four outbound TLS connections — to the Trino coordinator, to MongoDB, to an OIDC
+provider and to the alert webhook. One bundle covers all four:
+
+```sh
+kubectl create secret generic apchi-ca -n apchi --from-file=ca.crt=internal-ca.pem
+
+helm upgrade apchi charts/apchi -n apchi --reuse-values \
+  --set pod.caBundle.existingSecret=apchi-ca
+```
+
+**It is added to the public trust store, not substituted for it.** That matters more than it
+sounds. A CA path handed to PyMongo, or to the Trino client's `requests` session, makes those
+libraries trust that CA *alone* — so naming your internal CA would stop a public Slack webhook
+verifying, and would leave Trino's liveness check and its queries disagreeing about what they
+trust. Apchi concatenates the public store with your CA itself so that cannot happen, and your
+file does not need to be a complete bundle.
+
+**One bundle and not one per destination**, because an organisation with an internal PKI has
+one root for all four. If you need several — an internal CA and a partner's — concatenate them
+into the one file.
+
+This is separate from `trino.tls` and `mongodb.tls` below, which are the certificates Apchi
+*presents* rather than the ones it trusts.
+
 ## Reaching a MongoDB that requires TLS
 
 Apchi's own storage. Give it the CA, and a certificate if MongoDB authenticates by one:
 
 ```sh
 kubectl create secret generic apchi-mongo-tls -n apchi \
-  --from-file=ca.crt=ca.pem --from-file=client.pem=apchi-client.pem
+  --from-file=client.pem=apchi-client.pem
 
 helm upgrade apchi charts/apchi -n apchi --reuse-values \
   --set mongodb.uri='mongodb://mongo-0.mongo:27017/?authMechanism=MONGODB-X509&replicaSet=rs0' \
@@ -488,7 +514,7 @@ Give Apchi the URL and the PEM files:
 
 ```sh
 kubectl create secret generic apchi-trino-tls -n apchi \
-  --from-file=ca.crt=ca.pem --from-file=tls.crt=apchi.pem --from-file=tls.key=apchi-key.pem
+  --from-file=tls.crt=apchi.pem --from-file=tls.key=apchi-key.pem
 
 helm upgrade apchi charts/apchi -n apchi --reuse-values \
   --set trino.url=https://trino:8443 \
@@ -503,11 +529,9 @@ Three things are worth knowing before you do:
 plaintext requests against a TLS listener and reported nothing. `trino.url` carries the
 scheme so that cannot happen.
 
-**`ca.crt` is only needed for a private CA.** Leave `trino.tls.caKey` empty and Apchi uses the
-default trust store. It is passed to both of Apchi's HTTP clients explicitly, because queries
-go through the Trino client's `requests` session and `/v1/info` through `httpx`, and the two
-honour *different* environment variables — so leaving it to the environment would mean setting
-both for one coordinator.
+**A private CA goes in `pod.caBundle`, not here.** One bundle covers every outbound
+connection Apchi makes — see *Trusting a private CA* below. `trino.tls` is only the
+certificate Apchi presents.
 
 **The certificate is only needed for `http-server.authentication.type=CERTIFICATE`.** Trino
 then demands one from every client, Apchi included, and the subject must be one the Cluster's

@@ -111,10 +111,18 @@ class Settings(BaseSettings):
     #: a network and an unreachable catalog should stop a release.
     catalog_connectivity_blocks_apply: bool = False
 
+    #: A CA to trust **in addition to** the public store, for every outbound TLS connection
+    #: Apchi makes: the Trino coordinator, MongoDB, the OIDC provider and the alert webhook.
+    #:
+    #: One setting and not one per destination, because a CA bundle is conventionally one
+    #: thing and an organisation with an internal PKI has one root for all four. Passed to
+    #: every client explicitly rather than left to the environment: Apchi reaches those four
+    #: through three libraries, and `requests` reads `REQUESTS_CA_BUNDLE` while httpx reads
+    #: `SSL_CERT_FILE`, so one destination could need two variables set. See `app.trust`.
+    ca_file: str | None = None
+
     mongo_uri: str = "mongodb://localhost:27017"
     mongo_database: str = "apchi"
-    #: The CA that signed MongoDB's certificate, when a public bundle does not contain it.
-    mongo_ca_file: str | None = None
     #: One PEM holding the certificate Apchi authenticates with **and its key**, which is the
     #: shape PyMongo's `tlsCertificateKeyFile` takes -- unlike the Trino client, which wants
     #: the two apart (#188). Either file on its own turns TLS on: PyMongo builds an SSL
@@ -135,12 +143,6 @@ class Settings(BaseSettings):
     #: nowhere else -- so `8443`, the port Trino's own documentation uses for HTTPS, produced
     #: plaintext requests against a TLS listener and said nothing (#188).
     trino_url: str = "http://trino:8080"
-    #: The CA that signed the coordinator's certificate, when a public bundle does not
-    #: contain it. Passed to both of Apchi's HTTP clients explicitly rather than left to the
-    #: environment: queries reach Trino through the official client's `requests` session and
-    #: `/v1/info` through httpx, and the two honour different variables --
-    #: `REQUESTS_CA_BUNDLE` and `SSL_CERT_FILE` -- so one destination would need both set.
-    trino_ca_file: str | None = None
     #: The certificate Apchi authenticates to Trino with, where the coordinator sets
     #: `http-server.authentication.type=CERTIFICATE`. Trino then requires one of every
     #: client, Apchi included.

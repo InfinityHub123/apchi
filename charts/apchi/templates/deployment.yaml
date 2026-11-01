@@ -101,16 +101,19 @@ spec:
             # `quote` alone renders it as 1.572864e+07, which the settings parser rejects.
             - name: APCHI_CANDIDATE_MAX_BYTES
               value: {{ .Values.candidateMaxBytes | int | quote }}
+            {{- $ca := .Values.pod.caBundle }}
+            {{- if $ca.existingSecret }}
+            # One CA for every destination below -- MongoDB, the coordinator, the OIDC
+            # provider and the alert webhook -- so it is set before any of them.
+            - name: APCHI_CA_FILE
+              value: {{ printf "%s/%s" $ca.mountPath $ca.key | quote }}
+            {{- end }}
             - name: APCHI_MONGO_URI
               value: {{ include "apchi.mongoUri" . | quote }}
             - name: APCHI_MONGO_DATABASE
               value: {{ .Values.mongodb.database | quote }}
             {{- $mongoTls := .Values.mongodb.tls }}
             {{- if $mongoTls.existingSecret }}
-            {{- if $mongoTls.caKey }}
-            - name: APCHI_MONGO_CA_FILE
-              value: {{ printf "%s/%s" $mongoTls.mountPath $mongoTls.caKey | quote }}
-            {{- end }}
             {{- if $mongoTls.certificateKeyKey }}
             - name: APCHI_MONGO_CERTIFICATE_KEY_FILE
               value: {{ printf "%s/%s" $mongoTls.mountPath $mongoTls.certificateKeyKey | quote }}
@@ -128,10 +131,6 @@ spec:
             {{- if $tls.existingSecret }}
             # Each path is the mount point plus the Secret's own key, so a file is named
             # once in values and nothing has to agree with a literal twice.
-            {{- if $tls.caKey }}
-            - name: APCHI_TRINO_CA_FILE
-              value: {{ printf "%s/%s" $tls.mountPath $tls.caKey | quote }}
-            {{- end }}
             {{- if $tls.certificateKey }}
             - name: APCHI_TRINO_AUTH_CERTIFICATE_FILE
               value: {{ printf "%s/%s" $tls.mountPath $tls.certificateKey | quote }}
@@ -223,8 +222,13 @@ spec:
           {{- with .Values.resources }}
           resources: {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret }}
+          {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret .Values.pod.caBundle.existingSecret }}
           volumeMounts:
+            {{- if .Values.pod.caBundle.existingSecret }}
+            - name: ca-bundle
+              mountPath: {{ .Values.pod.caBundle.mountPath | quote }}
+              readOnly: true
+            {{- end }}
             {{- if .Values.trino.tls.existingSecret }}
             - name: trino-tls
               mountPath: {{ .Values.trino.tls.mountPath | quote }}
@@ -236,8 +240,15 @@ spec:
               readOnly: true
             {{- end }}
           {{- end }}
-      {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret }}
+      {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret .Values.pod.caBundle.existingSecret }}
       volumes:
+        {{- if .Values.pod.caBundle.existingSecret }}
+        - name: ca-bundle
+          # No defaultMode and no fsGroup needed: a list of public certificates, so the
+          # kubelet's own 0644 is correct and there is no key here to protect.
+          secret:
+            secretName: {{ .Values.pod.caBundle.existingSecret | quote }}
+        {{- end }}
         {{- if .Values.trino.tls.existingSecret }}
         - name: trino-tls
           secret:

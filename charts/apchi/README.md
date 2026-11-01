@@ -94,7 +94,6 @@ secrets:
 | `logging.level`, `logging.json` | `null` | Override the above. An explicit level can be raised during an incident without a rebuild |
 | `trino.url` | `http://trino:8080` | The coordinator, scheme included. Apchi issues catalog DDL and the smoke query through it. A URL and not a host plus a port because the Trino client reads `https` from a port only at exactly 443, so `8443` silently meant plaintext |
 | `trino.tls.existingSecret` | `""` | A Secret holding the PEM files below, mounted read-only at `trino.tls.mountPath`. Required to reach a coordinator that serves HTTPS |
-| `trino.tls.caKey` | `ca.crt` | The CA that signed the coordinator's certificate. Empty when a public bundle already has it |
 | `trino.tls.certificateKey`, `trino.tls.keyKey` | `""`, `""` | The certificate Apchi authenticates with, where the coordinator sets `http-server.authentication.type=CERTIFICATE`. Both or neither |
 | `trino.user` | `apchi` | The identity Apchi issues DDL as, and the only one granted `owner` on catalogs |
 | `trino.coordinatorDeployment` | `trino-coordinator` | Patched by a Rollout; Validation reads its image so the probe matches the Cluster |
@@ -105,8 +104,8 @@ secrets:
 | `mongodb.uri` | — | Required unless `mongodb.deploy`. With `mongodb.tls` set it may carry `?authMechanism=MONGODB-X509`, which is worth preferring: the URI then holds no secret at all, where a SCRAM password in it sits in `helm get values` and the pod spec |
 | `mongodb.database` | `apchi` | |
 | `mongodb.tls.existingSecret` | `""` | A Secret holding the PEM files below, mounted read-only at `mongodb.tls.mountPath`. Required to reach a MongoDB that requires TLS |
-| `mongodb.tls.caKey` | `ca.crt` | The CA that signed MongoDB's certificate. Empty when a public bundle already has it |
 | `mongodb.tls.certificateKeyKey` | `""` | One PEM holding Apchi's certificate **and its key** — PyMongo's `tlsCertificateKeyFile` shape, unlike `trino.tls`, which wants the two apart. Either key alone turns TLS on |
+| `pod.caBundle.existingSecret`, `pod.caBundle.key` | `""`, `ca.crt` | A CA to trust **in addition to** the public store, for every outbound TLS connection Apchi makes — the coordinator, MongoDB, the OIDC provider and the alert webhook. One bundle, because an org with an internal PKI has one root for all four. Mounted unrestricted and with no `fsGroup`: public certificates, no key |
 | `pod.fsGroup` | `10001` | The group every mounted credential is owned by, which must be the one Apchi's process runs as. A Secret volume's files are root-owned whatever their mode, so a wrong value here is a key Apchi cannot read |
 | `pod.credentialFileMode` | `0640` | Not `0600`: the kubelet ORs `0440` into every file in a read-only volume, so `0600` cannot be produced. `0644` would leave a private key world-readable |
 | `mongodb.deploy` | `false` | A MongoDB beside Apchi, for trying it out. Loses Snapshots on restart |
