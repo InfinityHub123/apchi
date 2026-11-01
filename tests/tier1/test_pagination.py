@@ -41,7 +41,7 @@ async def http(settings: Settings, fake_kubernetes: FakeKubernetes) -> AsyncIter
     app = create_app(settings.model_copy(update={"auth_mode": AuthMode.PASSWORD}))
     app.dependency_overrides[caller] = lambda: JO
     app.state.kubernetes = fake_kubernetes
-    app.state.trino = Trino(host="127.0.0.1", port=1)
+    app.state.trino = Trino(url="http://127.0.0.1:1")
     async with (
         AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as client,
         app.router.lifespan_context(app),

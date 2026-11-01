@@ -65,7 +65,7 @@ async def test_a_cluster_mid_migration_serves_every_preserved_pattern(
         ("CN=bob,OU=data,O=acme", "bob"),
         ("Carol.clients.internal", "carol"),
     ):
-        client = Trino(host="127.0.0.1", port=forward.port, user=presented)
+        client = Trino(url=f"http://127.0.0.1:{forward.port}", user=presented)
         with pytest.raises(TrinoUserError, match=f"User {mapped} cannot impersonate"):
             await client.query("SELECT current_user")
 
@@ -86,6 +86,6 @@ async def test_an_admin_apply_delivers_them_and_commits_no_snapshot(
     assert record["snapshot"] is None
     assert (await e2e_client.get("/api/v1/snapshots")).json()["items"] == before
     forward.restart()
-    bob = Trino(host="127.0.0.1", port=forward.port, user="CN=bob,OU=data,O=acme")
+    bob = Trino(url=f"http://127.0.0.1:{forward.port}", user="CN=bob, OU=data, O=acme")
     with pytest.raises(TrinoUserError, match="User bob cannot impersonate"):
         await bob.query("SELECT current_user")

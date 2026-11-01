@@ -51,7 +51,7 @@ async def _serving(
     app = create_app(settings.model_copy(update={"auth_mode": AuthMode.PASSWORD}))
     app.dependency_overrides[caller] = lambda: who
     app.state.kubernetes = fake
-    app.state.trino = Trino(host="127.0.0.1", port=1)
+    app.state.trino = Trino(url="http://127.0.0.1:1")
     async with (
         AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as http,
         app.router.lifespan_context(app),

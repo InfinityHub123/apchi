@@ -64,6 +64,15 @@ Reach for these rather than the ones most tutorials suggest:
 - **Trino** — the official `trino` package; `httpx` for `/v1/info`, `/v1/status` and
   `/v1/query`, which are not part of Trino's documented API. Cluster membership comes from the
   `system.runtime.nodes` system table, not `/v1/node` — that endpoint 404s on Trino 483.
+  The coordinator is configured as a **URL**, never a host and a port: the client infers
+  `https` from the port at *exactly* 443, so 8443 — Trino's own documented HTTPS port — came
+  out as plaintext against a TLS listener and said nothing. It accepts a URL in place of
+  `host`, which removes the inference entirely. And the two libraries reach one coordinator
+  with different trust configuration: the Trino client is `requests` underneath, which reads
+  `REQUESTS_CA_BUNDLE` and ignores `SSL_CERT_FILE`, while `httpx` does the opposite and
+  deprecates both a path-valued `verify` and `cert` in favour of an `ssl.SSLContext`. Apchi
+  passes a CA and a client certificate to both explicitly rather than through the
+  environment. §16's ninth precondition.
 - **Trino in tests** — `testcontainers.community.trino`.
 
 ## Deployment shapes

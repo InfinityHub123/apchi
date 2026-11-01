@@ -50,7 +50,7 @@ async def test_a_revert_drops_a_catalog_for_real_and_the_drop_survives_a_restart
     record = await _apply(e2e_client)
 
     assert record["snapshot"] == 3
-    live = await Trino(host="127.0.0.1", port=forward.port).catalogs()
+    live = await Trino(url=f"http://127.0.0.1:{forward.port}").catalogs()
     assert "alpha" in live
     assert "beta" not in live
     assert set(await real_kubernetes.read_secret(CATALOG_SEED_SECRET)) == {"alpha.properties"}
@@ -58,7 +58,7 @@ async def test_a_revert_drops_a_catalog_for_real_and_the_drop_survives_a_restart
     restart_coordinator()
     forward.restart()
 
-    after_restart = await Trino(host="127.0.0.1", port=forward.port).catalogs()
+    after_restart = await Trino(url=f"http://127.0.0.1:{forward.port}").catalogs()
     assert "alpha" in after_restart
     assert "beta" not in after_restart
 
@@ -118,4 +118,4 @@ async def test_a_full_rollback_restores_a_snapshot_without_modifying_it(
     restored = (await e2e_client.get("/api/v1/snapshots/3")).json()
     assert restored["sections"] == original["sections"]
     assert original["apply_id"] != restored["apply_id"]
-    assert "beta" not in await Trino(host="127.0.0.1", port=forward.port).catalogs()
+    assert "beta" not in await Trino(url=f"http://127.0.0.1:{forward.port}").catalogs()

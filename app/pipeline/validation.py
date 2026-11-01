@@ -289,7 +289,10 @@ async def _await_serving(
                 ]
             )
         if state.host is not None:
-            probe = Trino(host=state.host, port=state.port)
+            # Plaintext, and deliberately: the probe is Apchi's own ephemeral pod on the pod
+            # network, reached by IP. It has no certificate and needs none, so #188's TLS
+            # settings are about the Cluster's coordinator and never this one.
+            probe = Trino(url=f"http://{state.host}:{state.port}")
             if await probe.is_starting() is False:
                 logger.info("validation coordinator serving", extra={"pod": name})
                 return probe

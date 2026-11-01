@@ -373,7 +373,7 @@ def _live_catalogs(settings: Settings, within: float = 180.0) -> set[str] | None
         try:
             tunnel.start()
             return _off_the_loop(
-                Trino(host="127.0.0.1", port=tunnel.port, user=settings.trino_user).catalogs
+                Trino(url=f"http://127.0.0.1:{tunnel.port}", user=settings.trino_user).catalogs
             )
         except Exception:
             time.sleep(5)
@@ -761,7 +761,7 @@ async def cluster_state(
     originals = {name: await real_kubernetes.read_secret(name) for name in secrets}
 
     def cluster() -> Trino:
-        return Trino(host="127.0.0.1", port=forward.port, user=settings.trino_user)
+        return Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
 
     baseline = await cluster().catalogs()
     try:
@@ -862,7 +862,7 @@ async def running_apchi(
     """
     app = create_app(settings)
     app.state.kubernetes = kubernetes
-    app.state.trino = Trino(host="127.0.0.1", port=forward.port, user=settings.trino_user)
+    app.state.trino = Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
     async with (
         AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as client,
         app.router.lifespan_context(app),
@@ -885,7 +885,7 @@ async def e2e_client(
     kubernetes = forwarded_kubernetes
     app = create_app(settings)
     app.state.kubernetes = kubernetes
-    app.state.trino = Trino(host="127.0.0.1", port=forward.port, user=settings.trino_user)
+    app.state.trino = Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
     try:
         async with (
             AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as http_client,

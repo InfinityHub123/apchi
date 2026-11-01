@@ -106,4 +106,4 @@ async def test_the_coordinator_comes_back_on_the_restored_configuration(
     kubectl("rollout", "status", "deploy/trino-coordinator", "--timeout=600s")
     forward.restart()
 
-    assert await Trino(host="127.0.0.1", port=forward.port).is_starting() is False
+    assert await Trino(url=f"http://127.0.0.1:{forward.port}").is_starting() is False

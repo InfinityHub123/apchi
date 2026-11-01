@@ -74,7 +74,7 @@ async def test_closing_the_cluster_enforces_the_grants(
     record = await _apply(e2e_client)
     assert record["stage"] == "succeeded", record
 
-    alice = Trino(host="127.0.0.1", port=forward.port, user="alice")
+    alice = Trino(url=f"http://127.0.0.1:{forward.port}", user="alice")
     # Open: she can read a table nobody granted her.
     assert await _until(alice, "SELECT count(*) FROM bench.tiny.region", allowed=True)
 
@@ -86,7 +86,7 @@ async def test_closing_the_cluster_enforces_the_grants(
     assert await _until(alice, "SELECT count(*) FROM bench.tiny.region", allowed=False)
     assert await _allowed(alice, "SELECT count(*) FROM bench.tiny.nation")
     # And Apchi, which is what makes this recoverable rather than a one-way door.
-    apchi = Trino(host="127.0.0.1", port=forward.port, user=settings.trino_user)
+    apchi = Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
     assert await _allowed(apchi, "SELECT 1 FROM system.runtime.nodes LIMIT 1")
     assert await _allowed(apchi, "SELECT count(*) FROM system.runtime.queries")
 
@@ -101,7 +101,7 @@ async def test_an_identity_with_no_grant_at_all_is_denied(
     record = await _apply(e2e_client)
 
     assert record["stage"] == "succeeded", record
-    stranger = Trino(host="127.0.0.1", port=forward.port, user="nobody")
+    stranger = Trino(url=f"http://127.0.0.1:{forward.port}", user="nobody")
     assert await _until(stranger, "SELECT count(*) FROM bench.tiny.nation", allowed=False)
     # Still able to run a query at all -- the queries block grants execute to everyone.
     assert await _allowed(stranger, "SELECT 1")
@@ -115,7 +115,7 @@ async def test_reopening_the_cluster_restores_what_was_there(
     await e2e_client.post("/api/v1/catalogs", json=BENCH)
     await e2e_client.put(ENFORCEMENT, json={"enforced": True})
     await _apply(e2e_client)
-    stranger = Trino(host="127.0.0.1", port=forward.port, user="nobody")
+    stranger = Trino(url=f"http://127.0.0.1:{forward.port}", user="nobody")
     assert await _until(stranger, "SELECT count(*) FROM bench.tiny.nation", allowed=False)
 
     await e2e_client.put(ENFORCEMENT, json={"enforced": False})

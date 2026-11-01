@@ -22,6 +22,14 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "apchi.serviceAccountName" . }}
+      {{- if .Values.trino.tls.existingSecret }}
+      # A Secret volume's files are root-owned whatever their mode, so a key restricted to
+      # 0640 is unreadable to uid 10001 without this. Only rendered when something is
+      # mounted: an fsGroup on a pod with no volumes changes nothing and would still cost
+      # every existing install a restart.
+      securityContext:
+        fsGroup: {{ .Values.trino.tls.fsGroup }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -103,10 +111,23 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: APCHI_TRINO_HOST
-              value: {{ .Values.trino.host | quote }}
-            - name: APCHI_TRINO_PORT
-              value: {{ .Values.trino.port | int64 | quote }}
+            - name: APCHI_TRINO_URL
+              value: {{ .Values.trino.url | quote }}
+            {{- $tls := .Values.trino.tls }}
+            {{- if $tls.existingSecret }}
+            # Each path is the mount point plus the Secret's own key, so a file is named
+            # once in values and nothing has to agree with a literal twice.
+            {{- if $tls.caKey }}
+            - name: APCHI_TRINO_CA_FILE
+              value: {{ printf "%s/%s" $tls.mountPath $tls.caKey | quote }}
+            {{- end }}
+            {{- if $tls.certificateKey }}
+            - name: APCHI_TRINO_AUTH_CERTIFICATE_FILE
+              value: {{ printf "%s/%s" $tls.mountPath $tls.certificateKey | quote }}
+            - name: APCHI_TRINO_AUTH_KEY_FILE
+              value: {{ printf "%s/%s" $tls.mountPath (required "trino.tls.keyKey is required when trino.tls.certificateKey is set" $tls.keyKey) | quote }}
+            {{- end }}
+            {{- end }}
             - name: APCHI_TRINO_USER
               value: {{ .Values.trino.user | quote }}
             - name: APCHI_COORDINATOR_DEPLOYMENT_NAME
@@ -191,6 +212,21 @@ spec:
           {{- with .Values.resources }}
           resources: {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- if .Values.trino.tls.existingSecret }}
+          volumeMounts:
+            - name: trino-tls
+              mountPath: {{ .Values.trino.tls.mountPath | quote }}
+              readOnly: true
+          {{- end }}
+      {{- if .Values.trino.tls.existingSecret }}
+      volumes:
+        - name: trino-tls
+          secret:
+            secretName: {{ .Values.trino.tls.existingSecret | quote }}
+            # The key is a credential, and 0640 is the floor: the kubelet ORs 0440 into the
+            # mode of every file in a readOnly volume, so 0600 is unreachable.
+            defaultMode: {{ .Values.trino.tls.defaultMode }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}

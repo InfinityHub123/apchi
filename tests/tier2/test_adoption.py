@@ -64,7 +64,7 @@ def _settings(base: Settings) -> Settings:
     """
     return base.model_copy(
         update=dict(
-            trino_host="adopted",
+            trino_url="http://adopted:8080",
             coordinator_deployment_name="adopted-coordinator",
             worker_deployment_name="adopted-worker",
             catalog_secret_name="adopted-catalog-seed",

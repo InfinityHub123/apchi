@@ -58,7 +58,7 @@ async def test_a_selector_routing_apchi_is_verified_on_the_real_cluster(
 
     assert record["stage"] == "succeeded", record
     forward.restart()
-    trino = Trino(host="127.0.0.1", port=forward.port, user=settings.trino_user)
+    trino = Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
     ran = await trino.run("SELECT 1")
     group = await trino.query(
         f"SELECT resource_group_id FROM system.runtime.queries WHERE query_id = '{ran.query_id}'"
@@ -87,7 +87,7 @@ async def test_another_identity_falls_through_to_the_operators_own_rule(
 
     assert record["stage"] == "succeeded", record
     forward.restart()
-    other = Trino(host="127.0.0.1", port=forward.port, user="someone")
+    other = Trino(url=f"http://127.0.0.1:{forward.port}", user="someone")
     ran = await other.run("SELECT 1")
     group = await other.query(
         f"SELECT resource_group_id FROM system.runtime.queries WHERE query_id = '{ran.query_id}'"

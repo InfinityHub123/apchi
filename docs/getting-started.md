@@ -447,6 +447,49 @@ its only durable copy.
 The MongoDB `mongodb.deploy` gives you is an `emptyDir`, so this discards every Snapshot
 with it.
 
+## Reaching a coordinator over HTTPS
+
+Apchi talks to Trino over plain HTTP by default, which is right for a coordinator on the pod
+network with no authenticator. It is not an option on a cluster that authenticates its
+callers: **every authentication type Trino supports requires TLS**, and with an authenticator
+enabled Trino refuses plain HTTP from every client unless
+`http-server.authentication.allow-insecure-over-http` is true — which it calls not
+recommended. So on such a cluster Apchi does not get a worse connection, it gets none, and
+§16 refuses the Apply rather than letting every query time out.
+
+Give Apchi the URL and the PEM files:
+
+```sh
+kubectl create secret generic apchi-trino-tls -n apchi \
+  --from-file=ca.crt=ca.pem --from-file=tls.crt=apchi.pem --from-file=tls.key=apchi-key.pem
+
+helm upgrade apchi charts/apchi -n apchi --reuse-values \
+  --set trino.url=https://trino:8443 \
+  --set trino.tls.existingSecret=apchi-trino-tls \
+  --set trino.tls.certificateKey=tls.crt --set trino.tls.keyKey=tls.key
+```
+
+Three things are worth knowing before you do:
+
+**It is a URL, not a port.** The Trino client reads `https` from a port only when the port is
+*exactly* 443, so setting a port of 8443 — the one Trino's own documentation uses — produced
+plaintext requests against a TLS listener and reported nothing. `trino.url` carries the
+scheme so that cannot happen.
+
+**`ca.crt` is only needed for a private CA.** Leave `trino.tls.caKey` empty and Apchi uses the
+default trust store. It is passed to both of Apchi's HTTP clients explicitly, because queries
+go through the Trino client's `requests` session and `/v1/info` through `httpx`, and the two
+honour *different* environment variables — so leaving it to the environment would mean setting
+both for one coordinator.
+
+**The certificate is only needed for `http-server.authentication.type=CERTIFICATE`.** Trino
+then demands one from every client, Apchi included, and the subject must be one the Cluster's
+truststore accepts. It is not a Client Certificate in Apchi's sense — that term means a
+certificate *Trino* presents when it connects outward to a data source, and points the other
+way. Apchi mounts this one `0640` with an `fsGroup` matching the user it runs as, which is the
+only combination that is both restricted and readable — a Secret volume's files are root-owned
+whatever their mode, so `0600` would lock Apchi out of its own key.
+
 ## If something goes wrong
 
 **Everything times out, or `apchi` never becomes ready.** Check that it is MongoDB and not
@@ -454,6 +497,15 @@ Apchi: `/api/v1/health` reports `503` while MongoDB is unreachable, and Apchi st
 rather than crashlooping, so `kubectl logs -n apchi deploy/apchi` tells you which it is. With nothing
 reachable at all, startup takes about a minute before it starts answering — PyMongo spends
 its own server-selection timeout first.
+
+**Apchi crashloops with `FileNotFoundError` instead of reporting `503`.** The TLS settings
+below are read at startup and not per request, so a `trino.tls` key that names a file the
+Secret does not hold stops the process rather than degrading. `kubectl logs` names the path.
+This is the one startup failure that is not a 503, because there is nothing to serve it from.
+
+**Every Apply is refused with "Trino then refuses plain HTTP from every client".** The
+coordinator authenticates its callers and Apchi is configured for `http://`. See
+*Reaching a coordinator over HTTPS* below.
 
 **A validation fails with "the validation coordinator was not serving within 300s".** Either
 Apchi is running outside the cluster, where it cannot reach the probe's pod IP, or the node is

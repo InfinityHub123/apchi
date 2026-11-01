@@ -23,7 +23,7 @@ from app.config import Settings
 from app.main import create_app
 from app.pipeline.applies import TERMINAL
 from app.pipeline.auto_rollback import INCIDENT_MESSAGE
-from tests.conftest import FakeKubernetes
+from tests.conftest import FakeKubernetes, container_url
 
 KEPT = {"name": "kept", "connector": "memory", "properties": {}}
 ADDED = {"name": "added", "connector": "memory", "properties": {}}
@@ -48,7 +48,7 @@ async def _apply(client: AsyncClient) -> dict:
 
 
 def _cluster(container: DockerContainer) -> Trino:
-    return Trino(host=container.get_container_host_ip(), port=int(container.get_exposed_port(8080)))
+    return Trino(url=container_url(container))
 
 
 @asynccontextmanager
@@ -65,11 +65,7 @@ async def _unverifiable(
     broken = settings.model_copy(update={"verification_catalog": "no_such_catalog"})
     app = create_app(broken)
     app.state.kubernetes = kubernetes
-    app.state.trino = Trino(
-        host=cluster.get_container_host_ip(),
-        port=int(cluster.get_exposed_port(8080)),
-        user=broken.trino_user,
-    )
+    app.state.trino = Trino(url=container_url(cluster), user=broken.trino_user)
     baseline = await app.state.trino.catalogs()
     try:
         async with (

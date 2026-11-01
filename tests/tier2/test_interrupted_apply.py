@@ -39,7 +39,7 @@ async def _apchi(
     """One run of Apchi against the real cluster. Leaving and re-entering is a restart."""
     app = create_app(settings)
     app.state.kubernetes = kubernetes
-    app.state.trino = Trino(host="127.0.0.1", port=forward.port, user=settings.trino_user)
+    app.state.trino = Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
     async with (
         AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as client,
         app.router.lifespan_context(app),
@@ -99,6 +99,6 @@ async def test_a_restart_mid_apply_leaves_nothing_behind_for_the_next_pod(
     restart_coordinator()
     forward.restart()
 
-    live = await Trino(host="127.0.0.1", port=forward.port).catalogs()
+    live = await Trino(url=f"http://127.0.0.1:{forward.port}").catalogs()
     assert "kept" in live
     assert "added" not in live

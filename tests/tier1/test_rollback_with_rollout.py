@@ -20,7 +20,7 @@ from app.main import create_app
 from app.pipeline.applies import TERMINAL
 from app.pipeline.auto_rollback import INCIDENT_MESSAGE
 from app.sections.event_listeners.generator import FILE_KEY, MOUNT_PATH
-from tests.conftest import FakeKubernetes
+from tests.conftest import FakeKubernetes, container_url
 
 LISTENER_SECRET = "trino-event-listener"
 VOLUME = "apchi-event-listener"
@@ -62,11 +62,7 @@ async def _running(
     kubernetes.attach_cluster(cluster)
     app = create_app(settings)
     app.state.kubernetes = kubernetes
-    app.state.trino = Trino(
-        host=cluster.get_container_host_ip(),
-        port=int(cluster.get_exposed_port(8080)),
-        user=settings.trino_user,
-    )
+    app.state.trino = Trino(url=container_url(cluster), user=settings.trino_user)
     baseline = await app.state.trino.catalogs()
     try:
         async with (
@@ -124,10 +120,7 @@ async def test_both_sections_are_restored_together_in_one_attempt(
     record = await _apply(snapshot_one)
 
     assert record["rollback"] == "succeeded", record.get("failure_reason")
-    live = await Trino(
-        host=trino_cluster.get_container_host_ip(),
-        port=int(trino_cluster.get_exposed_port(8080)),
-    ).catalogs()
+    live = await Trino(url=container_url(trino_cluster)).catalogs()
     assert "kept" in live
     assert "added" not in live
     assert "http://first:8080/e" in fake_kubernetes.secrets[LISTENER_SECRET][FILE_KEY]

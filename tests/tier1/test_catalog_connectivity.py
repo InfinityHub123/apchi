@@ -22,7 +22,7 @@ from app.adapters.trino import Trino
 from app.config import Settings
 from app.main import create_app
 from app.pipeline.applies import TERMINAL
-from tests.conftest import FakeKubernetes
+from tests.conftest import FakeKubernetes, container_url
 
 CATALOGS = "/api/v1/catalogs"
 
@@ -61,11 +61,7 @@ async def blocking_client(
     fake_kubernetes.attach_cluster(trino_cluster)
     app = create_app(settings.model_copy(update={"catalog_connectivity_blocks_apply": True}))
     app.state.kubernetes = fake_kubernetes
-    app.state.trino = Trino(
-        host=trino_cluster.get_container_host_ip(),
-        port=int(trino_cluster.get_exposed_port(8080)),
-        user=settings.trino_user,
-    )
+    app.state.trino = Trino(url=container_url(trino_cluster), user=settings.trino_user)
     baseline = await app.state.trino.catalogs()
     try:
         async with (

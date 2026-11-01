@@ -118,8 +118,25 @@ class Settings(BaseSettings):
     kubernetes_namespace: str = "default"
 
     # The one Trino Cluster this Apchi manages.
-    trino_host: str = "trino"
-    trino_port: int = 8080
+    #: The coordinator's address, scheme included. A URL rather than a host and a port
+    #: because the Trino client infers the scheme from the port at **exactly 443** and
+    #: nowhere else -- so `8443`, the port Trino's own documentation uses for HTTPS, produced
+    #: plaintext requests against a TLS listener and said nothing (#188).
+    trino_url: str = "http://trino:8080"
+    #: The CA that signed the coordinator's certificate, when a public bundle does not
+    #: contain it. Passed to both of Apchi's HTTP clients explicitly rather than left to the
+    #: environment: queries reach Trino through the official client's `requests` session and
+    #: `/v1/info` through httpx, and the two honour different variables --
+    #: `REQUESTS_CA_BUNDLE` and `SSL_CERT_FILE` -- so one destination would need both set.
+    trino_ca_file: str | None = None
+    #: The certificate Apchi authenticates to Trino with, where the coordinator sets
+    #: `http-server.authentication.type=CERTIFICATE`. Trino then requires one of every
+    #: client, Apchi included.
+    #:
+    #: Not a Client Certificate, which is the glossary's term for a certificate *Trino*
+    #: presents when it connects outward (ADR-0005). This one points the other way.
+    trino_auth_certificate_file: str | None = None
+    trino_auth_key_file: str | None = None
     #: The identity Apchi issues DDL as. It is the only identity granted `owner`
     #: on catalogs, which is what restricts catalog DDL to Apchi.
     trino_user: str = "apchi"

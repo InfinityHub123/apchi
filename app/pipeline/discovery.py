@@ -71,6 +71,12 @@ ProblemKind = Literal[
     #: after the seed and a precondition that blocked the seed would block the step that has
     #: to happen first.
     "cutover",
+    #: A §16 precondition that fails on Apchi's own configuration rather than the
+    #: deployment's -- the ninth, which compares the two. Unlike a cutover change there may
+    #: be nothing in the Trino manifest to fix, so it is **not** excluded from completeness:
+    #: when it fires Apchi cannot reach Trino at all, and a discovery made without Trino is
+    #: not the whole truth by definition.
+    "apchi_configuration",
     #: Trino is serving a catalog Apchi can name and cannot reconstruct. The Operator has
     #: to supply its properties; Apchi will not invent them.
     "incomplete",
@@ -209,7 +215,10 @@ async def _precondition_problems(
     except preconditions.PreconditionFailed as failed:
         return [
             Problem(
-                kind="cutover",
+                # Membership of the list the exception carries, not a substring search:
+                # #182 shipped a message that matched the catalog Secret's name by accident
+                # and arrived labelled with an ordering it did not have.
+                kind=("apchi_configuration" if problem in failed.own_configuration else "cutover"),
                 detail=(
                     f"{problem} This one must come after the seed: adding the initContainer "
                     "first copies an empty Secret over the catalog store and loses every "

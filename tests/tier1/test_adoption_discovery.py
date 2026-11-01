@@ -15,7 +15,7 @@ from httpx import AsyncClient
 from testcontainers.core.container import DockerContainer
 
 from app.adapters.trino import Trino
-from tests.conftest import FakeKubernetes
+from tests.conftest import FakeKubernetes, container_url
 
 BASE = "/api/v1/admin/adoption"
 PG = {
@@ -253,10 +253,7 @@ async def test_supplying_an_incomplete_catalogs_properties_resolves_it(
     properties, so supplying them is what turns an unanswerable discovery into one that can
     be adopted.
     """
-    cluster = Trino(
-        host=trino_cluster.get_container_host_ip(),
-        port=int(trino_cluster.get_exposed_port(8080)),
-    )
+    cluster = Trino(url=container_url(trino_cluster))
     await cluster.create_catalog("legacy", "tpch", {})
 
     view = (await applying_client.post(f"{BASE}/discoveries")).json()

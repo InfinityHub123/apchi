@@ -73,7 +73,7 @@ async def test_the_manifest_produces_a_coordinator_that_serves_and_accepts_ddl(
     try:
         await _await_host(real_kubernetes, name)
         forward.start()
-        probe = Trino(host="127.0.0.1", port=forward.port)
+        probe = Trino(url=f"http://127.0.0.1:{forward.port}")
 
         # `memory` is one of the image's example catalogs. Creating a catalog by that
         # name proves the empty volume really hid them.

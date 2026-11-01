@@ -18,6 +18,7 @@ from httpx import AsyncClient
 from testcontainers.core.container import DockerContainer
 
 from app.adapters.trino import Trino
+from tests.conftest import container_url
 
 CATALOGS = "/api/v1/catalogs"
 
@@ -28,10 +29,7 @@ def _catalog(connector: str, name: str = "finance_pg") -> dict[str, Any]:
 
 @pytest.fixture
 def cluster_trino(trino_cluster: DockerContainer) -> Trino:
-    return Trino(
-        host=trino_cluster.get_container_host_ip(),
-        port=int(trino_cluster.get_exposed_port(8080)),
-    )
+    return Trino(url=container_url(trino_cluster))
 
 
 async def test_the_connector_list_comes_from_the_coordinator(cluster_trino: Trino) -> None:
