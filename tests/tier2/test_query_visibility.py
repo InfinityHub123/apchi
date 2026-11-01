@@ -41,7 +41,7 @@ async def _apply(client: AsyncClient, timeout: float = 900.0) -> dict:
 
 
 async def _visible_to(port: int, user: str) -> set[str]:
-    trino = Trino(host="127.0.0.1", port=port, user=user)
+    trino = Trino(url=f"http://127.0.0.1:{port}", user=user)
     return {row[0] for row in await trino.query("SELECT query_id FROM system.runtime.queries")}
 
 
@@ -55,7 +55,7 @@ async def test_end_users_can_still_run_queries(
     record = await _apply(e2e_client)
 
     assert record["stage"] == "succeeded", record
-    alice = Trino(host="127.0.0.1", port=forward.port, user="alice")
+    alice = Trino(url=f"http://127.0.0.1:{forward.port}", user="alice")
     assert await alice.query("SELECT 1") == [[1]]
 
 
@@ -67,8 +67,8 @@ async def test_one_end_user_cannot_see_anothers_query(
     record = await _apply(e2e_client)
     assert record["stage"] == "succeeded", record
 
-    alice = Trino(host="127.0.0.1", port=forward.port, user="alice")
-    bob = Trino(host="127.0.0.1", port=forward.port, user="bob")
+    alice = Trino(url=f"http://127.0.0.1:{forward.port}", user="alice")
+    bob = Trino(url=f"http://127.0.0.1:{forward.port}", user="bob")
     hers = (await alice.run("SELECT 'alice ran this'")).query_id
     his = (await bob.run("SELECT 'bob ran this'")).query_id
 
@@ -85,7 +85,7 @@ async def test_apchi_sees_every_query_so_the_running_count_is_honest(
     await e2e_client.post("/api/v1/permissions", json=GRANT)
     await _apply(e2e_client)
 
-    alice = Trino(host="127.0.0.1", port=forward.port, user="alice")
+    alice = Trino(url=f"http://127.0.0.1:{forward.port}", user="alice")
     hers = (await alice.run("SELECT 'alice ran this'")).query_id
 
     assert hers in await _visible_to(forward.port, settings.trino_user)
@@ -108,10 +108,10 @@ async def test_an_identity_apchi_knows_can_kill_its_own_query_and_nobody_elses(
     assert created.status_code == 201, created.json()
     await _apply(e2e_client)
 
-    alice = Trino(host="127.0.0.1", port=forward.port, user="alice")
+    alice = Trino(url=f"http://127.0.0.1:{forward.port}", user="alice")
     long_query = asyncio.create_task(alice.query("SELECT count(*) FROM bench.sf100.lineitem"))
     await asyncio.sleep(8)
-    running = await Trino(host="127.0.0.1", port=forward.port).query(
+    running = await Trino(url=f"http://127.0.0.1:{forward.port}").query(
         "SELECT query_id FROM system.runtime.queries WHERE \"user\" = 'alice' AND state = 'RUNNING'"
     )
     assert running, "alice's query should still be running"

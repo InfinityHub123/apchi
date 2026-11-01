@@ -177,7 +177,7 @@ async def sso_apchi(
     configured = _sso_settings(settings, admin_groups).model_copy(update={"oidc_issuer": dex})
     app = create_app(configured)
     app.state.kubernetes = forwarded_kubernetes
-    app.state.trino = Trino(host="127.0.0.1", port=forward.port, user=configured.trino_user)
+    app.state.trino = Trino(url=f"http://127.0.0.1:{forward.port}", user=configured.trino_user)
     async with (
         AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as http,
         app.router.lifespan_context(app),

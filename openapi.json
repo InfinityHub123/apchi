@@ -1760,6 +1760,7 @@
               "lossy",
               "unreadable_section",
               "cutover",
+              "apchi_configuration",
               "incomplete",
               "not_loaded"
             ],

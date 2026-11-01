@@ -37,7 +37,7 @@ async def test_the_mounted_rules_are_what_apchi_generates(
 
 async def test_a_non_apchi_identity_cannot_create_a_catalog(forward: PortForward) -> None:
     """The restriction itself. `owner` is what checkCanCreateCatalog gates on."""
-    other = Trino(host="127.0.0.1", port=forward.port, user="notapchi")
+    other = Trino(url=f"http://127.0.0.1:{forward.port}", user="notapchi")
 
     with pytest.raises(Exception) as raised:
         await other.create_catalog(f"forbidden_{uuid.uuid4().hex[:6]}", "memory", {})
@@ -48,7 +48,7 @@ async def test_a_non_apchi_identity_cannot_create_a_catalog(forward: PortForward
 async def test_apchis_identity_can_create_and_drop_a_catalog(forward: PortForward) -> None:
     """The other half: the rule has to grant as well as deny, and an anchored pattern
     must still match the identity it names."""
-    apchi = Trino(host="127.0.0.1", port=forward.port, user=Settings().trino_user)
+    apchi = Trino(url=f"http://127.0.0.1:{forward.port}", user=Settings().trino_user)
     name = f"allowed_{uuid.uuid4().hex[:6]}"
 
     await apchi.create_catalog(name, "memory", {})
@@ -64,10 +64,10 @@ async def test_a_non_apchi_identity_keeps_full_access_to_existing_catalogs(
     """`all` is full access without `owner`. Restricting DDL must not cost End Users the
     ability to use the catalogs Apchi creates for them."""
     name = f"shared_{uuid.uuid4().hex[:6]}"
-    apchi = Trino(host="127.0.0.1", port=forward.port, user=Settings().trino_user)
+    apchi = Trino(url=f"http://127.0.0.1:{forward.port}", user=Settings().trino_user)
     await apchi.create_catalog(name, "memory", {})
     try:
-        other = Trino(host="127.0.0.1", port=forward.port, user="notapchi")
+        other = Trino(url=f"http://127.0.0.1:{forward.port}", user="notapchi")
 
         assert name in await other.catalogs()
         await other.query(f'CREATE SCHEMA "{name}".probe')

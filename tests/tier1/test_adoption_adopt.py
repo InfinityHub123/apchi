@@ -16,17 +16,14 @@ from httpx import AsyncClient
 from testcontainers.core.container import DockerContainer
 
 from app.adapters.trino import Trino
-from tests.conftest import FakeKubernetes
+from tests.conftest import FakeKubernetes, container_url
 
 BASE = "/api/v1/admin/adoption"
 TERMINAL = {"succeeded", "failed", "incident"}
 
 
 def _cluster(container: DockerContainer) -> Trino:
-    return Trino(
-        host=container.get_container_host_ip(),
-        port=int(container.get_exposed_port(8080)),
-    )
+    return Trino(url=container_url(container))
 
 
 async def _settled(client: AsyncClient, apply_id: str) -> dict:

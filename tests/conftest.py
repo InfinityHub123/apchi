@@ -114,6 +114,16 @@ def bootstrap_secrets() -> dict[str, dict[str, str]]:
     }
 
 
+def container_url(container: DockerContainer, port: int = 8080) -> str:
+    """The URL a testcontainer's Trino answers on.
+
+    A URL rather than a host and a port because that is what the adapter takes: the Trino
+    client reads `https` from a port only at exactly 443, so the scheme has to be carried
+    explicitly (#188).
+    """
+    return f"http://{container.get_container_host_ip()}:{int(container.get_exposed_port(port))}"
+
+
 def healthy_pod_spec() -> dict[str, Any]:
     """A coordinator spec that meets §16's preconditions.
 
@@ -356,10 +366,7 @@ class FakeKubernetes:
         if self.stall_rollout_from is not None and len(self.restarts) >= self.stall_rollout_from:
             return RolloutState(generation=2, observed_generation=1, replicas=1)
         if self.restarts_for_real and self._cluster is not None and self.restarts:
-            probe = Trino(
-                host=self._cluster.get_container_host_ip(),
-                port=int(self._cluster.get_exposed_port(8080)),
-            )
+            probe = Trino(url=container_url(self._cluster))
             if await probe.is_starting() is not False:
                 return RolloutState(
                     generation=2, observed_generation=2, replicas=1, updated=1, unavailable=1
@@ -434,10 +441,7 @@ class FakeKubernetes:
 
     def _probe(self) -> Trino:
         assert self._validation is not None
-        return Trino(
-            host=self._validation.get_container_host_ip(),
-            port=int(self._validation.get_exposed_port(8080)),
-        )
+        return Trino(url=container_url(self._validation))
 
     async def create_secret(self, name: str, data: dict[str, str], labels: dict[str, str]) -> None:
         self.secrets[name] = dict(data)
@@ -572,7 +576,7 @@ async def client(settings: Settings, fake_kubernetes: FakeKubernetes) -> AsyncIt
     """
     app = create_app(settings)
     app.state.kubernetes = fake_kubernetes
-    app.state.trino = Trino(host="127.0.0.1", port=1)
+    app.state.trino = Trino(url="http://127.0.0.1:1")
     async with (
         AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as http_client,
         app.router.lifespan_context(app),
@@ -598,11 +602,7 @@ async def applying_client(
     fake_kubernetes.attach_cluster(trino_cluster)
     app = create_app(settings)
     app.state.kubernetes = fake_kubernetes
-    app.state.trino = Trino(
-        host=trino_cluster.get_container_host_ip(),
-        port=int(trino_cluster.get_exposed_port(8080)),
-        user=settings.trino_user,
-    )
+    app.state.trino = Trino(url=container_url(trino_cluster), user=settings.trino_user)
     baseline = await app.state.trino.catalogs()
     try:
         async with (

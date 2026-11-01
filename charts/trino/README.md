@@ -5,7 +5,7 @@ A Trino cluster Apchi can configure.
 ```sh
 # Apchi first: it creates the Secrets Trino mounts, and Trino will not boot without two.
 helm install apchi oci://ghcr.io/infinityhub123/charts/apchi -n trino \
-  --set trino.host=trino \
+  --set trino.url=http://trino:8080 \
   --set trino.coordinatorDeployment=trino-coordinator \
   --set trino.workerDeployment=trino-worker \
   --set mongodb.uri=mongodb://your-mongo:27017

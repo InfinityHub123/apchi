@@ -8,13 +8,11 @@ returns 404 on Trino 483. This is the documented replacement.
 from testcontainers.community.trino import TrinoContainer
 
 from app.adapters.trino import Trino
+from tests.conftest import container_url
 
 
 def _adapter(container: TrinoContainer) -> Trino:
-    return Trino(
-        host=container.get_container_host_ip(),
-        port=int(container.get_exposed_port(8080)),
-    )
+    return Trino(url=container_url(container))
 
 
 async def test_adapter_reaches_a_real_trino(trino_cluster: TrinoContainer) -> None:
@@ -22,7 +20,7 @@ async def test_adapter_reaches_a_real_trino(trino_cluster: TrinoContainer) -> No
 
 
 async def test_adapter_reports_unreachable_as_none() -> None:
-    assert await Trino(host="127.0.0.1", port=1).is_starting() is None
+    assert await Trino(url="http://127.0.0.1:1").is_starting() is None
 
 
 async def test_worker_count_comes_from_the_system_table(trino_cluster: TrinoContainer) -> None:

@@ -1731,10 +1731,11 @@ anyone remembering to add it.
 
 **The fifth precondition: `security.refresh-period` is set.** Without it Trino reads the
 access control rules once at startup and never again, so Apchi would write a permission
-change, report success, and the Cluster would never see it (§13.4). This is the one
+change, report success, and the Cluster would never see it (§13.4). This is the first
 precondition that reads the Admin's Trino configuration rather than their pod template: Apchi
 follows whatever is mounted at `access-control.properties` back to its ConfigMap or Secret and
-reads the property out of it.
+reads the property out of it. The seventh does the same for a pointer the deployment claims to
+provide, and the ninth for `config.properties` on every Apply.
 
 **The sixth precondition: no read-only directory volume covers a path Apchi mounts a single
 file at.** A `subPath` mount of one key at a path inside a ConfigMap or Secret directory mount
@@ -1891,6 +1892,61 @@ misconfiguration. So a 404 logs and moves on, and `deployment_pod_spec_if_presen
 Nothing on a worker is exempt as Apchi's own, either. The coordinator's exemption exists because
 Apchi sets those modes during Apply and Apply patches one Deployment — so on a worker every
 credential volume is the Admin's, and the empty exemption set is what says so.
+
+**The ninth precondition: Trino will accept the connection Apchi is configured to make.**
+Every authentication type Trino supports requires TLS, and with an authenticator enabled
+alongside HTTPS Trino refuses plain HTTP from *every* client unless
+`http-server.authentication.allow-insecure-over-http` is true — which Trino's own documentation
+calls not recommended. So a Cluster that authenticates its callers does not answer an Apchi
+configured for `http://` at all, and the symptom is every query in the Apply timing out with
+nothing to read. That is this section's criterion for a precondition exactly (#188).
+
+Like the fifth and the seventh, this reads the Admin's Trino configuration rather than their
+pod template, and for the same reason: the answer is in `config.properties`, which is Admin
+territory (§15), so it is read and not inferred.
+
+It has three parts, and the third is a deliberate omission:
+
+- **An authenticator, HTTPS, no insecure override, and an `http://` URL** is refused. The rule
+  is conjunctive on purpose: an authenticator *without* HTTPS is a coordinator that refuses to
+  start, which Verification reports and this would only mislabel.
+- **`CERTIFICATE` authentication with no certificate given to Apchi** is refused too. Reaching
+  the coordinator is not the same as being let in; Trino demands a certificate from every client
+  under that authenticator, Apchi included.
+- **An `https://` URL against a coordinator that does not set `http-server.https.enabled` is
+  logged, not refused.** TLS terminated in front of Trino — a sidecar, a service mesh — is a
+  real deployment in which that property is absent and Apchi's URL is still correct. Refusing
+  there would reject a working Cluster, and this section refuses only what it knows is broken.
+
+It is also the one precondition that can hold having missed something, and says so: when
+`config.properties` cannot be read it reports nothing rather than guessing. A deployment that
+keeps its configuration somewhere Apchi's Role cannot reach gets no opinion.
+
+**Adoption does not call this a cutover change**, and it is the first precondition that is not
+one. §15 turns every other failure here into a deployment change on the grounds that §16 is the
+list of what the *deployment* must provide; this one compares the deployment's configuration
+against Apchi's own, so it can fail with nothing in the Trino manifest to fix. It is reported
+as `apchi_configuration` instead, and unlike a cutover change it does count against a
+discovery's completeness — when it fires Apchi cannot query Trino at all, and a discovery made
+without Trino is not the whole truth by definition.
+
+The distinction is carried structurally, as a second list on `PreconditionFailed`, rather than
+by matching the message text. #182 shipped a message that contained the catalog Secret's name
+incidentally and so arrived labelled with a seeding order it did not have; a substring test is
+how that happens.
+
+**Why the setting is a URL and not a host and a port.** The official Trino client infers the
+scheme from the port at **exactly 443** and nowhere else, so `trino_port: 8443` — the port
+Trino's own documentation uses for HTTPS — produced plaintext requests against a TLS listener
+and reported nothing at all. A URL carries the scheme, and the client takes one in place of a
+host, which removes the inference from the path entirely.
+
+**Two HTTP libraries reach one coordinator.** Queries go through the official client's
+`requests` session and `/v1/info` through `httpx`. `requests` ignores `SSL_CERT_FILE` and reads
+`REQUESTS_CA_BUNDLE`; `httpx` does the opposite, and in its current version deprecates both a
+path-valued `verify` and `cert` in favour of an `ssl.SSLContext`. So the same two settings are
+handed to the two clients in two shapes, explicitly, rather than left to the environment where
+one coordinator would need both variables set.
 
 
 ## Rollout mechanics

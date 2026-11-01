@@ -360,7 +360,7 @@ async def test_trino_reads_the_rules_from_the_directory_the_deployment_pointed_a
 
     assert LISTENER_KEY in kubectl("exec", "deploy/trino-coordinator", "--", "ls", LISTENER_DIR)
 
-    trino = Trino(host="127.0.0.1", port=forward.port, user="apchi")
+    trino = Trino(url=f"http://127.0.0.1:{forward.port}", user="apchi")
     assert await trino.query("SELECT 1") == [[1]]
     groups = await trino.query(
         "SELECT DISTINCT resource_group_id FROM system.runtime.queries "
@@ -408,7 +408,7 @@ async def test_emptying_resource_groups_leaves_a_cluster_that_still_serves(
 
     # The part that matters: queries still run, and land in the fallback group.
     forward.restart()
-    trino = Trino(host="127.0.0.1", port=forward.port, user="apchi")
+    trino = Trino(url=f"http://127.0.0.1:{forward.port}", user="apchi")
     assert await trino.query("SELECT 1") == [[1]]
     groups = await trino.query(
         "SELECT DISTINCT resource_group_id FROM system.runtime.queries "

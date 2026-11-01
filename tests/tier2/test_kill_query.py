@@ -69,10 +69,10 @@ async def test_an_identity_can_kill_its_own_query_through_sql(
     record = await _apply(e2e_client)
     assert record["stage"] == "succeeded", record
 
-    alice = Trino(host="127.0.0.1", port=forward.port, user="alice")
+    alice = Trino(url=f"http://127.0.0.1:{forward.port}", user="alice")
     # sf1000 so the query cannot finish before the test has looked at it.
     long_query = asyncio.create_task(alice.query("SELECT count(*) FROM bench.sf1000.lineitem"))
-    apchi = Trino(host="127.0.0.1", port=forward.port, user=settings.trino_user)
+    apchi = Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
     query_id = await _running_query_of(apchi, "alice")
     assert query_id, "alice's query should still be running"
 
@@ -94,14 +94,14 @@ async def test_one_identity_cannot_kill_anothers_query_through_sql(
     record = await _apply(e2e_client)
     assert record["stage"] == "succeeded", record
 
-    alice = Trino(host="127.0.0.1", port=forward.port, user="alice")
+    alice = Trino(url=f"http://127.0.0.1:{forward.port}", user="alice")
     # sf1000 so the query cannot finish before the test has looked at it.
     long_query = asyncio.create_task(alice.query("SELECT count(*) FROM bench.sf1000.lineitem"))
-    apchi = Trino(host="127.0.0.1", port=forward.port, user=settings.trino_user)
+    apchi = Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
     query_id = await _running_query_of(apchi, "alice")
     assert query_id, "alice's query should still be running"
 
-    bob = Trino(host="127.0.0.1", port=forward.port, user="bob")
+    bob = Trino(url=f"http://127.0.0.1:{forward.port}", user="bob")
     with pytest.raises(Exception, match="(?i)cannot kill"):
         await bob.query(
             f"CALL system.runtime.kill_query(query_id => '{query_id}', message => 'not his')"

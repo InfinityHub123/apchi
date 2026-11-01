@@ -134,7 +134,7 @@ async def pointed_client(
 ) -> AsyncIterator[AsyncClient]:
     app = create_app(pointed)
     app.state.kubernetes = pointing_kubernetes
-    app.state.trino = Trino(host="127.0.0.1", port=1)
+    app.state.trino = Trino(url="http://127.0.0.1:1")
     async with (
         AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as http,
         app.router.lifespan_context(app),
@@ -380,7 +380,7 @@ def _cluster(settings: Settings, kubernetes: FakeKubernetes) -> object:
     from app.sections.base import Cluster
 
     return Cluster(
-        trino=Trino(host="127.0.0.1", port=1),
+        trino=Trino(url="http://127.0.0.1:1"),
         kubernetes=kubernetes,
         settings=settings,
         admin=AdminValues(),

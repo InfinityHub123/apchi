@@ -63,7 +63,7 @@ async def as_operator(
     app = create_app(settings)
     app.dependency_overrides[caller] = lambda: OPERATOR
     app.state.kubernetes = fake_kubernetes
-    app.state.trino = Trino(host="127.0.0.1", port=1)
+    app.state.trino = Trino(url="http://127.0.0.1:1")
     async with (
         AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as http,
         app.router.lifespan_context(app),

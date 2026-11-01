@@ -92,7 +92,10 @@ secrets:
 | `candidateMaxBytes` | `15728640` | The most the Configuration Candidate may occupy. It is **one** MongoDB document, which MongoDB caps at 16MB, so this is a ceiling on all six Sections together rather than a per-Section quota. Below 16MB to leave room for BSON overhead and the Snapshot an Apply makes of the same content |
 | `environment` | `np` | `np`/`test`/`prep`/`prod`. Decides the log level and format: DEBUG and console in np and test, INFO and JSON in prep and prod |
 | `logging.level`, `logging.json` | `null` | Override the above. An explicit level can be raised during an incident without a rebuild |
-| `trino.host`, `trino.port` | `trino`, `8080` | The coordinator's Service. Apchi issues catalog DDL and the smoke query through it |
+| `trino.url` | `http://trino:8080` | The coordinator, scheme included. Apchi issues catalog DDL and the smoke query through it. A URL and not a host plus a port because the Trino client reads `https` from a port only at exactly 443, so `8443` silently meant plaintext |
+| `trino.tls.existingSecret` | `""` | A Secret holding the PEM files below, mounted read-only at `trino.tls.mountPath`. Required to reach a coordinator that serves HTTPS |
+| `trino.tls.caKey` | `ca.crt` | The CA that signed the coordinator's certificate. Empty when a public bundle already has it |
+| `trino.tls.certificateKey`, `trino.tls.keyKey` | `""`, `""` | The certificate Apchi authenticates with, where the coordinator sets `http-server.authentication.type=CERTIFICATE`. Both or neither |
 | `trino.user` | `apchi` | The identity Apchi issues DDL as, and the only one granted `owner` on catalogs |
 | `trino.coordinatorDeployment` | `trino-coordinator` | Patched by a Rollout; Validation reads its image so the probe matches the Cluster |
 | `trino.workerDeployment` | `trino-worker` | Its ready replica count is what Verification expects to register |

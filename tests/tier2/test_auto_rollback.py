@@ -141,4 +141,4 @@ async def test_a_failed_rollback_ends_in_an_incident_and_engages_maintenance_mod
 async def _live_catalogs(forward: PortForward) -> set[str]:
     from app.adapters.trino import Trino
 
-    return await Trino(host="127.0.0.1", port=forward.port).catalogs()
+    return await Trino(url=f"http://127.0.0.1:{forward.port}").catalogs()

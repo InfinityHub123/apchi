@@ -90,7 +90,7 @@ async def test_the_coordinator_serves_queries_after_the_rollout(
     assert record["stage"] == "succeeded", record.get("failure_reason")
 
     forward.restart()
-    trino = Trino(host="127.0.0.1", port=forward.port)
+    trino = Trino(url=f"http://127.0.0.1:{forward.port}")
 
     assert "kept" in await trino.catalogs()
     assert await trino.query("SELECT 1 FROM system.runtime.nodes LIMIT 1")
@@ -116,7 +116,7 @@ async def test_removing_the_listener_unmounts_it_and_the_coordinator_still_start
     ]
 
     forward.restart()
-    assert await Trino(host="127.0.0.1", port=forward.port).is_starting() is False
+    assert await Trino(url=f"http://127.0.0.1:{forward.port}").is_starting() is False
 
 
 async def test_a_catalogs_only_apply_does_not_restart_the_coordinator(

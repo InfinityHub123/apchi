@@ -18,7 +18,7 @@ from app.config import Settings
 from app.main import create_app
 from app.pipeline.applies import TERMINAL
 from app.pipeline.validation import ROLE_LABEL, VALIDATION_ROLE
-from tests.conftest import FakeKubernetes
+from tests.conftest import FakeKubernetes, container_url
 
 MEMORY = {"name": "scratch", "connector": "memory", "properties": {}}
 #: Passes static validation and is then rejected by a real Trino, which is exactly the gap
@@ -75,11 +75,7 @@ async def _running(
     different validation timeout than production would use."""
     app = create_app(settings)
     app.state.kubernetes = kubernetes
-    app.state.trino = Trino(
-        host=cluster.get_container_host_ip(),
-        port=int(cluster.get_exposed_port(8080)),
-        user=settings.trino_user,
-    )
+    app.state.trino = Trino(url=container_url(cluster), user=settings.trino_user)
     async with (
         AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as client,
         app.router.lifespan_context(app),
@@ -107,10 +103,7 @@ async def test_a_validation_failure_leaves_the_cluster_untouched(
 
     await _apply(applying_client)
 
-    cluster = Trino(
-        host=trino_cluster.get_container_host_ip(),
-        port=int(trino_cluster.get_exposed_port(8080)),
-    )
+    cluster = Trino(url=container_url(trino_cluster))
     assert "imaginary" not in await cluster.catalogs()
     assert SECRET not in fake_kubernetes.secrets
 
@@ -224,10 +217,7 @@ async def test_the_validate_action_does_not_apply(
 
     assert verdict["outcome"] == "passed"
     assert verdict["failures"] == []
-    cluster = Trino(
-        host=trino_cluster.get_container_host_ip(),
-        port=int(trino_cluster.get_exposed_port(8080)),
-    )
+    cluster = Trino(url=container_url(trino_cluster))
     assert "scratch" not in await cluster.catalogs()
     assert SECRET not in fake_kubernetes.secrets
     assert (await applying_client.get("/api/v1/snapshots")).json()["items"] == []

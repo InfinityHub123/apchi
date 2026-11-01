@@ -90,7 +90,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.kubernetes = RealKubernetes(namespace=settings.kubernetes_namespace)
     if not hasattr(app.state, "trino"):
         app.state.trino = Trino(
-            host=settings.trino_host, port=settings.trino_port, user=settings.trino_user
+            url=settings.trino_url,
+            user=settings.trino_user,
+            ca_file=settings.trino_ca_file,
+            auth_certificate_file=settings.trino_auth_certificate_file,
+            auth_key_file=settings.trino_auth_key_file,
         )
 
     def build(engine: type[Engine], apply_id: str) -> ApplyEngine:

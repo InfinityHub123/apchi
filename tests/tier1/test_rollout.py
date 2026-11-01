@@ -21,7 +21,7 @@ from app.config import Settings
 from app.main import create_app
 from app.pipeline.applies import TERMINAL
 from app.sections.event_listeners.generator import FILE_KEY, MOUNT_PATH
-from tests.conftest import FakeKubernetes
+from tests.conftest import FakeKubernetes, container_url
 
 LISTENER_SECRET = "trino-event-listener"
 VOLUME = "apchi-event-listener"
@@ -61,11 +61,7 @@ async def _running(
     kubernetes.attach_cluster(cluster)
     app = create_app(settings)
     app.state.kubernetes = kubernetes
-    app.state.trino = Trino(
-        host=cluster.get_container_host_ip(),
-        port=int(cluster.get_exposed_port(8080)),
-        user=settings.trino_user,
-    )
+    app.state.trino = Trino(url=container_url(cluster), user=settings.trino_user)
     baseline = await app.state.trino.catalogs()
     try:
         async with (

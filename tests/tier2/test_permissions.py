@@ -86,7 +86,7 @@ async def test_a_grant_is_enforced_without_restarting_the_coordinator(
     after = await real_kubernetes.rollout_state("trino-coordinator")
     assert after.generation == before.generation, "the pod template was never touched"
 
-    alice = Trino(host="127.0.0.1", port=forward.port, user="alice")
+    alice = Trino(url=f"http://127.0.0.1:{forward.port}", user="alice")
     assert await _until(alice, "SELECT count(*) FROM bench.tiny.nation", allowed=True)
 
 
@@ -101,13 +101,13 @@ async def test_the_generated_file_is_one_a_real_trino_enforces_as_written(
     record = await _apply(e2e_client)
 
     assert record["stage"] == "succeeded", record
-    alice = Trino(host="127.0.0.1", port=forward.port, user="alice")
+    alice = Trino(url=f"http://127.0.0.1:{forward.port}", user="alice")
     assert await _until(alice, "SELECT count(*) FROM bench.tiny.nation", allowed=True)
     # Still allowed on everything else, because the catch-all is still there: staging a
     # grant records intent, it does not revoke anyone's access.
     assert await _answers(alice, "SELECT count(*) FROM bench.tiny.region")
     # And Apchi can still read what Verification needs, which is the reserved rule's job.
-    apchi = Trino(host="127.0.0.1", port=forward.port, user=settings.trino_user)
+    apchi = Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
     assert await _answers(apchi, "SELECT 1 FROM system.runtime.nodes LIMIT 1")
 
 

@@ -14,6 +14,7 @@ from testcontainers.core.container import DockerContainer
 from app.adapters.trino import Trino
 from app.pipeline.applies import TERMINAL
 from app.sections.registry import SECTIONS
+from tests.conftest import container_url
 
 ALPHA = {"name": "alpha", "connector": "memory", "properties": {}}
 BETA = {"name": "beta", "connector": "memory", "properties": {}}
@@ -66,10 +67,7 @@ async def test_a_revert_does_not_touch_the_cluster(
 
     await applying_client.post("/api/v1/catalogs/revert", json={"snapshot": 1})
 
-    live = await Trino(
-        host=trino_cluster.get_container_host_ip(),
-        port=int(trino_cluster.get_exposed_port(8080)),
-    ).catalogs()
+    live = await Trino(url=container_url(trino_cluster)).catalogs()
     assert {"alpha", "beta"} <= live
 
 
@@ -122,10 +120,7 @@ async def test_a_revert_needs_an_ordinary_apply_to_take_effect(
     record = await _apply(applying_client)
 
     assert record["snapshot"] == 3
-    live = await Trino(
-        host=trino_cluster.get_container_host_ip(),
-        port=int(trino_cluster.get_exposed_port(8080)),
-    ).catalogs()
+    live = await Trino(url=container_url(trino_cluster)).catalogs()
     assert "alpha" in live
     assert "beta" not in live
 

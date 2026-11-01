@@ -139,10 +139,47 @@ logging:
   json: null
 
 trino:
-  # The coordinator's Service. Apchi issues catalog DDL and the Verification smoke
+  # The coordinator, scheme included. Apchi issues catalog DDL and the Verification smoke
   # query through it.
-  host: trino
-  port: 8080
+  #
+  # A URL and not a host plus a port: the Trino client reads https from a port only when the
+  # port is exactly 443, so `port: 8443` -- the port Trino's own documentation uses for
+  # HTTPS -- sent plaintext at a TLS listener and reported nothing.
+  url: http://trino:8080
+  # Reaching a coordinator that serves HTTPS.
+  #
+  # Trino requires TLS under every authentication type it supports, and with an
+  # authenticator enabled it refuses plain HTTP from every client. So a Cluster that
+  # authenticates its callers -- which is the Cluster the Certificate Mapping Section exists
+  # for -- is reachable only with these set.
+  tls:
+    # A Secret holding the PEM files below. Apchi mounts it read-only at
+    # /etc/apchi/trino-tls and restricts the key, which is why it is a Secret and not a
+    # ConfigMap even though the CA half is public.
+    existingSecret: ""
+    # The CA that signed the coordinator's certificate. Leave empty when a public bundle
+    # already contains it. Both of Apchi's HTTP clients are pointed at this explicitly:
+    # queries go through the Trino client's `requests` session and /v1/info through httpx,
+    # and the two honour different environment variables.
+    caKey: ca.crt
+    # The certificate Apchi authenticates with, where the coordinator sets
+    # http-server.authentication.type=CERTIFICATE and so demands one of every client.
+    # Both keys or neither: a certificate without its key cannot be presented.
+    #
+    # Not a Client Certificate, which is the certificate *Trino* presents when connecting
+    # outward to a data source. This one points the other way.
+    certificateKey: ""
+    keyKey: ""
+    # Where the Secret is mounted. The env vars Apchi reads are built from this and the
+    # key names above, so a file only has to be named once.
+    mountPath: /etc/apchi/trino-tls
+    # The group the files are owned by, which must be the group Apchi's own process runs
+    # as: uid 10001, gid 10001, from the image's `useradd` (verified by running it).
+    # Without this a 0640 file is root-owned and Apchi cannot read its own key.
+    fsGroup: 10001
+    # 0640 and not 0600: the kubelet ORs 0440 into every file's mode in a readOnly volume,
+    # so 0600 cannot be produced. 0644 would leave the private key world-readable.
+    defaultMode: 0640
   # The identity Apchi issues DDL as, and the only identity granted `owner` on
   # catalogs -- which is what restricts catalog DDL to Apchi.
   user: apchi

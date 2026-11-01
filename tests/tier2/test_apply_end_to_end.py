@@ -47,7 +47,7 @@ async def test_an_apply_reaches_a_real_coordinator_and_commits_a_snapshot(
     record = await _apply(e2e_client)
 
     assert record["snapshot"] == 1
-    live = await Trino(host="127.0.0.1", port=forward.port).catalogs()
+    live = await Trino(url=f"http://127.0.0.1:{forward.port}").catalogs()
     assert "scratch" in live
 
 
@@ -64,7 +64,7 @@ async def test_an_applied_catalog_survives_a_coordinator_restart(
     restart_coordinator()
     forward.restart()
 
-    live = await Trino(host="127.0.0.1", port=forward.port).catalogs()
+    live = await Trino(url=f"http://127.0.0.1:{forward.port}").catalogs()
     assert "scratch" in live
 
 
@@ -83,7 +83,7 @@ async def test_a_dropped_catalog_does_not_come_back_after_a_restart(
     restart_coordinator()
     forward.restart()
 
-    live = await Trino(host="127.0.0.1", port=forward.port).catalogs()
+    live = await Trino(url=f"http://127.0.0.1:{forward.port}").catalogs()
     assert "scratch" not in live
 
 

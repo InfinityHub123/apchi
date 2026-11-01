@@ -17,7 +17,7 @@ from httpx import AsyncClient
 from testcontainers.core.container import DockerContainer
 
 from app.adapters.trino import Trino
-from tests.conftest import FakeKubernetes
+from tests.conftest import FakeKubernetes, container_url
 
 BASE = "/api/v1/admin/adoption"
 
@@ -25,10 +25,7 @@ BASE = "/api/v1/admin/adoption"
 def _cluster(container: DockerContainer) -> Trino:
     """A client for the container standing in for the Cluster, to create a catalog the way a
     real one appears: by DDL, going round Apchi."""
-    return Trino(
-        host=container.get_container_host_ip(),
-        port=int(container.get_exposed_port(8080)),
-    )
+    return Trino(url=container_url(container))
 
 
 async def _complete_discovery(applying_client: AsyncClient) -> dict:

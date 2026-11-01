@@ -60,7 +60,7 @@ async def test_an_exported_snapshot_imports_and_applies_to_a_real_cluster(
 
     assert (await e2e_client.delete("/api/v1/catalogs/scratch")).status_code == 204
     emptied = await _apply(e2e_client)
-    assert "scratch" not in await Trino(host="127.0.0.1", port=forward.port).catalogs()
+    assert "scratch" not in await Trino(url=f"http://127.0.0.1:{forward.port}").catalogs()
 
     imported = await e2e_client.put("/api/v1/candidate", json=exported.json())
     assert imported.status_code == 200, imported.json()
@@ -72,4 +72,4 @@ async def test_an_exported_snapshot_imports_and_applies_to_a_real_cluster(
     assert restored["snapshot"] == emptied["snapshot"] + 1, (
         "an import produces a new Snapshot rather than rewriting the one it came from"
     )
-    assert "scratch" in await Trino(host="127.0.0.1", port=forward.port).catalogs()
+    assert "scratch" in await Trino(url=f"http://127.0.0.1:{forward.port}").catalogs()

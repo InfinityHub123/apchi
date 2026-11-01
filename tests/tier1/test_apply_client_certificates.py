@@ -115,7 +115,7 @@ async def test_an_upload_that_would_outgrow_the_secret_is_refused(
     tiny = settings.model_copy(update={"client_certificate_max_bytes": 1024})
     app = create_app(tiny)
     app.state.kubernetes = fake_kubernetes
-    app.state.trino = Trino(host="127.0.0.1", port=1)
+    app.state.trino = Trino(url="http://127.0.0.1:1")
     async with (
         AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as client,
         app.router.lifespan_context(app),

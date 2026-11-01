@@ -8,6 +8,7 @@ Cluster membership comes from the system.runtime.nodes system table rather than
 
 import logging
 import re
+import ssl
 import time
 from typing import Any, NamedTuple
 
@@ -72,23 +73,87 @@ class Query(NamedTuple):
     query_id: str
 
 
+def _httpx_verification(
+    ca_file: str | None, certificate_file: str | None, key_file: str | None
+) -> ssl.SSLContext | bool:
+    """What httpx verifies the coordinator with, or True for the default trust store.
+
+    A context rather than paths because httpx 0.28 deprecated both `verify=<path>` and
+    `cert=` in favour of one built here. The Trino client takes the paths themselves, so
+    the same two settings arrive in two shapes -- which is the whole reason this exists
+    (#188).
+    """
+    if ca_file is None and certificate_file is None:
+        return True
+    # cafile=None still loads the default CAs, so a client certificate presented to a
+    # coordinator with a publicly signed one needs no bundle.
+    context = ssl.create_default_context(cafile=ca_file)
+    if certificate_file is not None:
+        context.load_cert_chain(certificate_file, key_file)
+    return context
+
+
 class Trino:
-    def __init__(self, host: str, port: int = 8080, user: str = "apchi") -> None:
-        self._host = host
-        self._port = port
+    def __init__(
+        self,
+        url: str,
+        user: str = "apchi",
+        ca_file: str | None = None,
+        auth_certificate_file: str | None = None,
+        auth_key_file: str | None = None,
+    ) -> None:
+        if (auth_certificate_file is None) != (auth_key_file is None):
+            raise ValueError(
+                "trino_auth_certificate_file and trino_auth_key_file go together: a "
+                "certificate without its key cannot be presented, and a key without its "
+                "certificate names nobody"
+            )
+        if auth_certificate_file is not None and not url.startswith("https://"):
+            # The client raises TrinoAuthError for this at connect time, which is once per
+            # query inside an Apply. Trino requires TLS under every authenticator it has, so
+            # the combination is wrong from the first second and is worth saying so then.
+            raise ValueError(
+                f"trino_url is {url!r}, but Apchi was given a certificate to authenticate "
+                "with and Trino requires TLS under every authentication type it supports. "
+                "Use an https:// URL"
+            )
         self._user = user
-        self._base = f"http://{host}:{port}"
+        # Passed to the client as its `host`, which takes a URL and derives the scheme, the
+        # host and the port from it. That is the fix for #188: the client's own inference
+        # reads https from a port only when the port is exactly 443, so Trino's documented
+        # 8443 came out as plaintext.
+        self._base = url.rstrip("/")
+        self._ca_file = ca_file
+        self._auth_certificate_file = auth_certificate_file
+        self._auth_key_file = auth_key_file
+        # Built once, at startup: a path that does not exist should stop Apchi here rather
+        # than inside `is_starting`, which reports every failure as "unreachable".
+        self._verification = _httpx_verification(ca_file, auth_certificate_file, auth_key_file)
         self._connectors: frozenset[str] | None = None
         self._connectors_read_at: float | None = None
 
     def _query_sync(self, sql: str, patience: _Patience | None = None) -> Query:
         import trino
+        import trino.auth
 
+        # The constructor refuses one without the other, so the key is known to be present
+        # wherever the certificate is.
+        auth = (
+            trino.auth.CertificateAuthentication(
+                self._auth_certificate_file, str(self._auth_key_file)
+            )
+            if self._auth_certificate_file is not None
+            else None
+        )
         conn = trino.dbapi.connect(
-            host=self._host,
-            port=self._port,
+            host=self._base,
             user=self._user,
             source=SOURCE,
+            auth=auth,
+            # A path, where httpx needed a context. `requests` ignores SSL_CERT_FILE and
+            # reads REQUESTS_CA_BUNDLE, so leaving this to the environment would mean two
+            # variables for one coordinator.
+            **({"verify": self._ca_file} if self._ca_file else {}),
             **(patience._asdict() if patience else {}),
         )
         try:
@@ -109,7 +174,7 @@ class Trino:
     async def is_starting(self) -> bool | None:
         """None when the coordinator cannot be reached at all."""
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
+            async with httpx.AsyncClient(timeout=5, verify=self._verification) as client:
                 response = await client.get(f"{self._base}/v1/info")
                 response.raise_for_status()
                 return bool(response.json().get("starting", True))

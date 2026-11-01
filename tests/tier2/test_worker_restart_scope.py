@@ -126,7 +126,7 @@ async def test_events_arrive_while_the_workers_are_never_restarted(
 
     # A query the coordinator completes is what produces an event.
     forward.restart()
-    trino = Trino(host="127.0.0.1", port=forward.port)
+    trino = Trino(url=f"http://127.0.0.1:{forward.port}")
     await trino.query("SELECT 1 FROM system.runtime.nodes LIMIT 1")
 
     deadline = asyncio.get_running_loop().time() + 120

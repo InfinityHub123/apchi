@@ -23,7 +23,7 @@ from app.config import Settings
 from app.main import create_app
 from app.pipeline.applies import TERMINAL
 from app.pipeline.auto_rollback import INCIDENT_MESSAGE
-from tests.conftest import FakeKubernetes
+from tests.conftest import FakeKubernetes, container_url
 
 KEPT = {"name": "kept", "connector": "memory", "properties": {}}
 ADDED = {"name": "added", "connector": "memory", "properties": {}}
@@ -38,10 +38,7 @@ async def clean_cluster(trino_cluster: DockerContainer) -> AsyncIterator[None]:
     so cleanup cannot live in the app fixture: it would drop the catalogs recovery is
     supposed to have left in place.
     """
-    cluster = Trino(
-        host=trino_cluster.get_container_host_ip(),
-        port=int(trino_cluster.get_exposed_port(8080)),
-    )
+    cluster = Trino(url=container_url(trino_cluster))
     baseline = await cluster.catalogs()
     try:
         yield
@@ -61,11 +58,7 @@ async def _apchi(
     kubernetes.attach_validation(validation)
     app = create_app(settings)
     app.state.kubernetes = kubernetes
-    app.state.trino = Trino(
-        host=cluster.get_container_host_ip(),
-        port=int(cluster.get_exposed_port(8080)),
-        user=settings.trino_user,
-    )
+    app.state.trino = Trino(url=container_url(cluster), user=settings.trino_user)
     async with (
         AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as client,
         app.router.lifespan_context(app),
@@ -117,12 +110,7 @@ async def _kill_mid_apply(
     # two Trino containers on it took longer than thirty seconds to get through Validation.
     deadline = asyncio.get_running_loop().time() + 180
     probe = (
-        Trino(
-            host=cluster.get_container_host_ip(),
-            port=int(cluster.get_exposed_port(8080)),
-        )
-        if cluster is not None and catalog is not None
-        else None
+        Trino(url=container_url(cluster)) if cluster is not None and catalog is not None else None
     )
     while asyncio.get_running_loop().time() < deadline:
         written = key in kubernetes.secrets.get(SECRET, {})
@@ -158,10 +146,7 @@ async def test_the_cluster_is_restored_after_a_restart_mid_apply(
 
     assert record["interrupted"] is True
     assert record["rollback"] == "succeeded"
-    cluster = Trino(
-        host=trino_cluster.get_container_host_ip(),
-        port=int(trino_cluster.get_exposed_port(8080)),
-    )
+    cluster = Trino(url=container_url(trino_cluster))
     live = await cluster.catalogs()
     assert "kept" in live
     assert "added" not in live

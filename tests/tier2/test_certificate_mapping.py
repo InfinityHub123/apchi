@@ -89,7 +89,7 @@ async def test_an_applied_pattern_maps_a_principal_on_the_real_cluster(
 
     assert record["stage"] == "succeeded", record
     forward.restart()
-    alice = Trino(host="127.0.0.1", port=forward.port, user="Alice@example.com")
+    alice = Trino(url=f"http://127.0.0.1:{forward.port}", user="Alice@example.com")
     with pytest.raises(TrinoUserError, match="User alice cannot impersonate"):
         await alice.query("SELECT current_user")
 
@@ -106,7 +106,7 @@ async def test_apchi_can_still_reach_a_cluster_whose_pattern_excludes_it(
 
     assert record["stage"] == "succeeded", record
     forward.restart()
-    apchi = Trino(host="127.0.0.1", port=forward.port, user=settings.trino_user)
+    apchi = Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
     assert await apchi.query("SELECT current_user") == [[settings.trino_user]]
 
 
@@ -121,5 +121,5 @@ async def test_a_principal_no_pattern_matches_keeps_the_name_it_presented(
 
     assert record["stage"] == "succeeded", record
     forward.restart()
-    stranger = Trino(host="127.0.0.1", port=forward.port, user="nobody")
+    stranger = Trino(url=f"http://127.0.0.1:{forward.port}", user="nobody")
     assert await stranger.query("SELECT current_user") == [["nobody"]]

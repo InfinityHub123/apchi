@@ -80,7 +80,7 @@ async def test_a_real_coordinator_comes_back_on_the_generated_file(
 
     assert record["stage"] == "succeeded", record
     forward.restart()
-    trino = Trino(host="127.0.0.1", port=forward.port)
+    trino = Trino(url=f"http://127.0.0.1:{forward.port}")
     assert await trino.query("SELECT 1") == [[1]]
     assert "SERVER STARTED" in coordinator_log(400)
 
@@ -93,7 +93,7 @@ async def test_the_queries_land_somewhere_the_coordinator_reports(
     await _apply(e2e_client)
     forward.restart()
 
-    trino = Trino(host="127.0.0.1", port=forward.port)
+    trino = Trino(url=f"http://127.0.0.1:{forward.port}")
     await trino.query("SELECT 1")
     groups = await trino.query(
         "SELECT DISTINCT resource_group_id FROM system.runtime.queries "
@@ -137,5 +137,5 @@ async def test_emptying_the_section_leaves_a_coordinator_that_still_starts(
 
     assert record["stage"] == "succeeded", record
     forward.restart()
-    trino = Trino(host="127.0.0.1", port=forward.port)
+    trino = Trino(url=f"http://127.0.0.1:{forward.port}")
     assert await trino.query("SELECT 1") == [[1]]

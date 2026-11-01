@@ -46,8 +46,16 @@ logger = logging.getLogger(__name__)
 class PreconditionFailed(Exception):
     """The deployment cannot support what Apchi is about to do."""
 
-    def __init__(self, problems: list[str]) -> None:
+    def __init__(self, problems: list[str], own_configuration: list[str] | None = None) -> None:
         self.problems = problems
+        #: The subset whose fix is a setting on Apchi's own release rather than a change to
+        #: the Trino deployment. Adoption turns every other precondition failure into a
+        #: cutover change, on the grounds that §16 is the list of what the *deployment* must
+        #: provide -- and the ninth is the first that is not: it compares the deployment's
+        #: configuration against Apchi's own, so it can fail with nothing in the Trino
+        #: manifest to change. Labelling it a cutover change would send an Admin looking
+        #: for something that is not there (#188).
+        self.own_configuration = own_configuration or []
         super().__init__(" ".join(problems))
 
 
@@ -173,8 +181,16 @@ async def check(kubernetes: KubernetesAdapter, spec: PodSpec, settings: Settings
     #    because it is the only one whose subject is on both Deployments (#184).
     problems.extend(await _credential_exposure_problems(kubernetes, spec, settings))
 
+    # 9. Trino must be willing to accept the connection Apchi is configured to make. Every
+    #    authentication type Trino supports requires TLS, and with an authenticator enabled
+    #    alongside HTTPS it disables plain HTTP for all clients -- so a Cluster that
+    #    authenticates its callers does not answer Apchi on http at all, and the symptom is
+    #    every query timing out with nothing to read (#188).
+    own_configuration = await _unreachable_coordinator_problems(kubernetes, spec, settings)
+    problems.extend(own_configuration)
+
     if problems:
-        raise PreconditionFailed(problems)
+        raise PreconditionFailed(problems, own_configuration)
     logger.debug("deployment preconditions hold")
 
 
@@ -463,6 +479,68 @@ async def _pointer_problem(
         f"Nothing provides {holder}, but Apchi is configured with {setting} and depends on "
         f"the deployment setting {prop} there. Mount it, or turn {setting} off."
     ]
+
+
+#: The properties that decide whether Trino will talk to Apchi at all. All three live in
+#: `config.properties`, which is the Admin's file (§15), so reading it is the only way to
+#: know.
+_AUTHENTICATION_TYPE = "http-server.authentication.type"
+_ALLOW_INSECURE_OVER_HTTP = "http-server.authentication.allow-insecure-over-http"
+_HTTPS_ENABLED = "http-server.https.enabled"
+
+
+async def _unreachable_coordinator_problems(
+    kubernetes: KubernetesAdapter, spec: PodSpec, settings: Settings
+) -> list[str]:
+    """Whether the coordinator will refuse the scheme `trino_url` names.
+
+    Silent when `config.properties` cannot be read. A deployment that keeps it somewhere
+    Apchi cannot see gets no opinion here rather than a guess, which is why this is the one
+    precondition that can hold and still have missed something.
+    """
+    content = await content_at(kubernetes, spec, _CONFIG_PROPERTIES)
+    if content is None:
+        return []
+
+    def enabled(prop: str) -> bool:
+        return (_property_in(content, prop) or "false").strip().lower() == "true"
+
+    authenticator = _property_in(content, _AUTHENTICATION_TYPE)
+    apchi_uses_tls = settings.trino_url.startswith("https://")
+
+    if apchi_uses_tls and not enabled(_HTTPS_ENABLED):
+        # Logged, not refused. TLS terminated in front of Trino -- a sidecar, a mesh -- is a
+        # legitimate shape in which this property is absent and Apchi's https URL is still
+        # correct, so refusing here would reject a working Cluster. §16 refuses only what it
+        # knows is broken.
+        logger.warning(
+            "trino_url is https but the coordinator does not set %s; assuming TLS is "
+            "terminated in front of Trino",
+            _HTTPS_ENABLED,
+            extra={"trino_url": settings.trino_url},
+        )
+        return []
+
+    # The documented rule is conjunctive: HTTP is disabled when an authenticator is enabled
+    # *alongside HTTPS*. An authenticator without HTTPS is a coordinator that refuses to
+    # start, which is Verification's to report and not a scheme problem.
+    if authenticator and enabled(_HTTPS_ENABLED) and not enabled(_ALLOW_INSECURE_OVER_HTTP):
+        if not apchi_uses_tls:
+            return [
+                f"{_CONFIG_PROPERTIES} sets {_AUTHENTICATION_TYPE}={authenticator} with "
+                f"{_HTTPS_ENABLED}=true, and Trino then refuses plain HTTP from every client "
+                f"unless {_ALLOW_INSECURE_OVER_HTTP} is true -- which it is not. Apchi's "
+                f"trino_url is {settings.trino_url!r}, so no query it issues would be "
+                f"answered. Point trino_url at the coordinator's https:// URL."
+            ]
+        if settings.trino_auth_certificate_file is None and authenticator.upper() == "CERTIFICATE":
+            return [
+                f"{_CONFIG_PROPERTIES} sets {_AUTHENTICATION_TYPE}=CERTIFICATE, so Trino "
+                f"requires a certificate from every client including Apchi, and Apchi has "
+                f"none: trino_auth_certificate_file is unset. Give Apchi a certificate this "
+                f"Cluster's truststore accepts."
+            ]
+    return []
 
 
 def _property_in(content: str, prop: str) -> str | None:

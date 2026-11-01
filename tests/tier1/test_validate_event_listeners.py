@@ -19,7 +19,7 @@ from app.main import create_app
 from app.pipeline.applies import TERMINAL
 from app.pipeline.validation import ROLE_LABEL, VALIDATION_ROLE, probe_secret
 from app.sections.event_listeners.generator import FILE_KEY, MOUNT_PATH
-from tests.conftest import FakeKubernetes
+from tests.conftest import FakeKubernetes, container_url
 
 HTTP = {
     "name": "audit",
@@ -65,11 +65,7 @@ async def _running(
     kubernetes.attach_cluster(cluster)
     app = create_app(settings)
     app.state.kubernetes = kubernetes
-    app.state.trino = Trino(
-        host=cluster.get_container_host_ip(),
-        port=int(cluster.get_exposed_port(8080)),
-        user=settings.trino_user,
-    )
+    app.state.trino = Trino(url=container_url(cluster), user=settings.trino_user)
     async with (
         AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as client,
         app.router.lifespan_context(app),
