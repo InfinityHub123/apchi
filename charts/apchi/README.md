@@ -75,16 +75,17 @@ secrets:
 | --- | --- | --- |
 | `image.repository` | `ghcr.io/infinityhub123/apchi` | Published on every release for `linux/amd64` and `linux/arm64` |
 | `image.tag` | `""` | Empty means the chart's `appVersion`, so an install gets the image that chart version was released with rather than whatever `latest` is today |
+| `image.pullPolicy`, `imagePullSecrets` | `IfNotPresent`, `[]` | |
 | `replicaCount` | `1` | Leave it. An Apply is in-process state, so a second Apchi runs a second pipeline against one Trino |
 | `auth.mode` | `none` | `none`/`password`/`sso`. **`none` means every caller is treated as an Admin**, which is what Apchi has always done |
 | `auth.initialAdmin.username` | `admin` | The one Admin a new install starts with, in `password` mode |
 | `auth.initialAdmin.passwordHash` | `""` | An Argon2id **hash**, never the password. Applied only when Apchi has no users, so it cannot resurrect a deleted account or reset a changed password |
-| `auth.initialAdmin.existingSecret` | `""` | A Secret holding that hash, preferred over the value above: the hash is offline-crackable, so it is worth keeping out of the release |
+| `auth.initialAdmin.existingSecret`, `.existingSecretKey` | `""`, `password-hash` | A Secret holding that hash, preferred over the value above: the hash is offline-crackable, so it is worth keeping out of the release |
 | `auth.sessionHours` | `12` | How long an untouched session lasts. Logout and disabling a user take effect at once regardless |
 | `auth.oidc.issuer` | `""` | Required in `sso` mode. Every endpoint is discovered from here, so a provider that rotates keys or moves an endpoint keeps working |
 | `auth.oidc.clientId` | `""` | Required in `sso` mode |
 | `auth.oidc.redirectUrl` | `""` | Required in `sso` mode, and the one value nothing can guess: the URL a **browser** reaches Apchi on, registered with the provider verbatim. A wrong one is a login loop with no error anywhere |
-| `auth.oidc.existingSecret` | `""` | A Secret holding the client secret, preferred over `auth.oidc.clientSecret`, which puts it in the release and in `helm get values` |
+| `auth.oidc.existingSecret`, `.existingSecretKey` | `""`, `client-secret` | A Secret holding the client secret, preferred over `auth.oidc.clientSecret`, which puts it in the release and in `helm get values` |
 | `auth.oidc.scopes` | `openid profile email groups` | `groups` is not a standard OIDC scope and some providers reject one they do not know. Trim it if yours does |
 | `auth.oidc.usernameClaim` | `preferred_username` | The person's Apchi username. Not `sub`, which providers routinely make an opaque blob, and the audit records an actor somebody must be able to read. It follows that a provider which *changes* a login name produces a new Apchi user |
 | `auth.oidc.roleClaim`, `auth.oidc.adminGroups` | `groups`, `""` | Everyone who authenticates is an Operator; a member of one of `adminGroups` is an Admin. Empty means **nobody** is an Admin, which closes `/admin/*` rather than opening it |
@@ -105,14 +106,15 @@ secrets:
 | `mongodb.database` | `apchi` | |
 | `mongodb.tls.existingSecret` | `""` | A Secret holding the PEM files below, mounted read-only at `mongodb.tls.mountPath`. Required to reach a MongoDB that requires TLS |
 | `mongodb.tls.certificateKeyKey` | `""` | One PEM holding Apchi's certificate **and its key** — PyMongo's `tlsCertificateKeyFile` shape, unlike `trino.tls`, which wants the two apart. Either key alone turns TLS on |
-| `pod.caBundle.existingSecret`, `pod.caBundle.key` | `""`, `ca.crt` | A CA to trust **in addition to** the public store, for every outbound TLS connection Apchi makes — the coordinator, MongoDB, the OIDC provider and the alert webhook. One bundle, because an org with an internal PKI has one root for all four. Mounted unrestricted and with no `fsGroup`: public certificates, no key |
+| `pod.caBundle.existingSecret`, `.key`, `.mountPath` | `""`, `ca.crt`, `/etc/apchi/ca` | A CA to trust **in addition to** the public store, for every outbound TLS connection Apchi makes — the coordinator, MongoDB, the OIDC provider and the alert webhook. One bundle, because an org with an internal PKI has one root for all four. Mounted unrestricted and with no `fsGroup`: public certificates, no key |
 | `pod.fsGroup` | `10001` | The group every mounted credential is owned by, which must be the one Apchi's process runs as. A Secret volume's files are root-owned whatever their mode, so a wrong value here is a key Apchi cannot read |
 | `pod.credentialFileMode` | `0640` | Not `0600`: the kubelet ORs `0440` into every file in a read-only volume, so `0600` cannot be produced. `0644` would leave a private key world-readable |
-| `mongodb.deploy` | `false` | A MongoDB beside Apchi, for trying it out. Loses Snapshots on restart |
+| `mongodb.deploy`, `mongodb.image` | `false`, `mongo:7` | A MongoDB beside Apchi, for trying it out. Loses Snapshots on restart |
 | `secrets.*` | see above | Must be what Trino mounts |
 | `volumes.*` | `apchi-*` | The volumes Apchi adds to the coordinator's pod template. Everything else there is the Admin's. The user-mapping Secret is not here: the Admin mounts it as a directory and Apchi only fills it |
 | `deployment.providesResourceGroupsProperties` | `false` | Set on a coordinator that mounts the whole of `/etc/trino`, where Apchi cannot mount `resource-groups.properties` itself. The deployment then provides it, pointing `resource-groups.config-file` at `/etc/trino/resource-groups/` |
 | `deployment.setsEventListenerConfigFiles` | `false` | The same, for `event-listener.config-files` naming a file in `/etc/trino/event-listener/`. Costs the ability to empty that Section, because Trino refuses to start without the file the property names |
+| `validation.catalogConnectivityBlocksApply` | `false` | Whether a Catalog the validation probe cannot reach **fails** the Apply rather than warning on it. Off by default because the probe's network is not the coordinator's: a firewall between the probe and a database would otherwise block every Apply for a configuration that works. Turn it on where the two are known to reach the same places (§6) |
 | `timeouts.rolloutSeconds` | `600` | A coordinator that never comes back fails the Apply rather than hanging it |
 | `timeouts.validationSeconds` | `300` | The hard limit on Validation. Also sets the liveness budget, so a Validation is never killed mid-Apply |
 | `certificates.expiringWithinDays` | `30` | When Apchi starts calling a certificate expiring. Both a Client Certificate, where it sets the status an Operator filters on, and the certificates Apchi itself presents, which the Apply path then warns about in the log. Renewal is manual |
