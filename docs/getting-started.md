@@ -572,6 +572,18 @@ Each restart logs what it loaded and when it expires, which is worth reading:
 loaded certificate from /etc/apchi/trino-tls/tls.crt, subject CN=apchi, expires 2027-04-18T09:12:00+00:00
 ```
 
+**You will also be reminded before it expires.** Every Apply checks the certificates Apchi
+loaded and warns about any inside `certificates.expiringWithinDays` (30 by default), at
+`ERROR` once one is actually past it:
+
+```
+the certificate at /etc/apchi/trino-tls/tls.crt expires on 2026-11-20T09:12:00+00:00, in 18 days
+```
+
+The limit is worth knowing: that check runs during an Apply, so a cluster you have not
+changed in two months will not have told you anything in two months. There is no background
+timer. Until there is, a log alert on `app.trust` is the way to be sure.
+
 ## If something goes wrong
 
 **Everything times out, or `apchi` never becomes ready.** Check that it is MongoDB and not

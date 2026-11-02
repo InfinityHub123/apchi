@@ -186,7 +186,11 @@ class Settings(BaseSettings):
     #: exists: no pod spec change and no restart (ADR-0005).
     client_certificate_secret_name: str = "trino-client-certificates"
     #: How close to expiry a certificate has to be before Apchi calls it expiring. Renewal
-    #: is manual for now, so this is the warning an Operator acts on.
+    #: is manual for now, so this is the warning an Operator acts on. It covers both a Client
+    #: Certificate, where it decides the `expiring` status an Operator filters on, and the
+    #: certificates Apchi itself presents, where it decides what the Apply path warns about
+    #: in the log (#196) -- one window, because an organisation that renews on a schedule
+    #: renews everything on it.
     certificate_expiring_within_days: int = 30
     #: What a Kubernetes Secret may hold. An upload that would exceed it is refused with
     #: that reason rather than as a rejected write from the API server.

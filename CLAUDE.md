@@ -105,8 +105,11 @@ identities. Reloading was rejected: PyMongo keeps the context it builds with the
 MongoDB cannot follow without being rebuilt, and a CA reloaded for Trino alone splits trust
 across destinations. So a rotation needs a pod restart — logged with the file's name, and
 never a refusal, because what Apchi loaded still works until the destination stops accepting
-it. A certificate's subject and expiry are logged as it loads, since the restart is the only
-moment there is to say so. See §18 and #193.
+it. A certificate's subject and expiry are logged as it loads, and the Apply path warns again
+when one is inside `certificate_expiring_within_days` — of what was *loaded*, never of what is
+mounted, since a rotation makes those two different certificates. An Apply rather than a timer
+because there is no periodic task in this codebase, which leaves a Cluster nobody applies to
+hearing nothing between restarts (#196). See §18, #193.
 
 ## Deployment shapes
 

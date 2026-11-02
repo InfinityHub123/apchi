@@ -134,11 +134,15 @@ class Engine:
     async def _assert_preconditions(self) -> None:
         """Before every Apply, not once at startup: a chart change can reintroduce a
         violation silently, and the resulting failure never looks like its cause."""
-        # Logged here and never added to the problems below. A certificate Apchi has not
-        # reread is still a working certificate until the destination stops accepting it, so
-        # refusing would block an Apply that would have succeeded -- and would do it in the
-        # middle of a correct rotation (#193).
+        # Both logged here and never added to the problems below. A certificate Apchi has
+        # not reread is still a working certificate until the destination stops accepting
+        # it, so refusing would block an Apply that would have succeeded -- and would do it
+        # in the middle of a correct rotation (#193). An approaching expiry is the same:
+        # there is nothing wrong with the Cluster, and nothing an Operator could do here.
+        # This is where they are said because Apchi has no periodic task to say them on
+        # (#196), which leaves a Cluster nobody applies to hearing nothing until a restart.
         trust.log_rotations()
+        trust.log_expiring(self._settings.certificate_expiring_within_days)
         spec = preconditions.pod_spec(
             await self._kubernetes.deployment_pod_spec(self._settings.coordinator_deployment_name)
         )
