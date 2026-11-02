@@ -1,0 +1,53 @@
+name: Docs
+
+# Published from main, not from a tag. Apchi has no release yet, and documentation that
+# waits for one would describe nothing: the site says which branch it is built from in its
+# own banner (overrides/main.html) rather than implying an installable version exists.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mkdocs.yml"
+      - "overrides/**"
+      - "docs/**"
+      - "scripts/mkdocs_hooks.py"
+      - "openapi.json"
+      - "README.md"
+      - "CONTEXT.md"
+      - "apchi_implementation.md"
+      - "charts/*/README.md"
+      - "deploy/*/README.md"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+# Pages wants exactly one deployment at a time, and a second push while one is in flight
+# should supersede it rather than queue behind it.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build and publish to GitHub Pages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --extra docs
+
+      - uses: actions/configure-pages@v5
+      - run: uv run mkdocs build --strict
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

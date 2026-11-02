@@ -1,0 +1,95 @@
+site_name: Apchi
+site_description: Control plane for configuring one Trino cluster
+site_url: https://infinityhub123.github.io/apchi/
+repo_url: https://github.com/InfinityHub123/apchi
+repo_name: InfinityHub123/apchi
+copyright: Apache-2.0
+
+# The prose stays where it is read. README.md, CONTEXT.md and apchi_implementation.md are
+# at the repo root because CLAUDE.md and docs/agents/domain.md point agents at those exact
+# paths, and the chart READMEs sit beside the charts they document. This site includes them
+# from there; it does not own a copy of any of them.
+docs_dir: docs
+
+exclude_docs: |
+  agents/
+
+theme:
+  name: material
+  custom_dir: overrides
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - toc.follow
+    - search.suggest
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+
+plugins:
+  - search
+  - include-markdown
+  - swagger-ui-tag
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+# A doc file that is in the tree but not in the nav is invisible on the site, which is how
+# a docs site rots. `omitted_files` makes that a warning, and CI builds with --strict, so
+# it fails the build instead.
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+  links:
+    not_found: warn
+    anchors: warn
+    unrecognized_links: warn
+
+# Serves the committed openapi.json, which lives at the repo root.
+hooks:
+  - scripts/mkdocs_hooks.py
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Concepts: concepts.md
+  - Glossary: glossary.md
+  - Deploying:
+      - The official Trino chart: official-trino-chart.md
+      - A development cluster: deploying/trino-dev.md
+      - Adopting a running cluster: deploying/trino-adopted.md
+  - Reference:
+      - HTTP API: reference/api.md
+      - Apchi chart: reference/apchi-chart.md
+      - Trino chart: reference/trino-chart.md
+  - Design:
+      - Specification: design/specification.md
+      - Decisions:
+          - design/decisions.md
+          - adr/0001-dynamic-catalogs-via-ddl.md
+          - adr/0002-configuration-candidate.md
+          - adr/0003-coordinator-rollout.md
+          - adr/0004-non-atomic-apply.md
+          - adr/0005-single-certificate-secret.md
+          - adr/0006-validation-pod-is-a-probe-apchi-connects-to.md
+          - adr/0007-the-deployment-owns-the-pinned-pointers.md

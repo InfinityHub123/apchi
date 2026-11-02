@@ -63,6 +63,23 @@ jobs:
         # genuinely restarts a Trino container.
         run: uv run pytest tests/tier1 -q --timeout=300 --timeout-method=signal
 
+  docs:
+    name: The documentation site builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --extra docs
+
+      # --strict fails the build on a warning, and mkdocs.yml turns two things into
+      # warnings that are otherwise silent: a link whose target moved, and a doc file
+      # that is in the tree but in no nav entry. The second is how a docs site rots --
+      # the page still exists, nothing links to it, and nobody notices for a year.
+      - name: Build
+        run: uv run mkdocs build --strict
+
   image:
     name: The image docs/getting-started.md tells you to build
     runs-on: ubuntu-latest
