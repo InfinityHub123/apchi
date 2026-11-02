@@ -7,24 +7,33 @@ context built the other way. So the bundle is concatenated once and every client
 result, and these tests hold that property rather than the implementation.
 """
 
+import asyncio
 import http.server
 import json
+import logging
 import ssl
 import threading
 from collections.abc import Iterator
 from pathlib import Path
+from typing import NamedTuple
 
 import certifi
+import httpx
 import pytest
+import requests
+from cryptography import x509
 from pymongo.ssl_support import get_ssl_context
 from urllib3.util.ssl_ import create_urllib3_context
 
+from app import trust
 from app.adapters.mongo import _tls_options
+from app.adapters.trino import Trino
 from app.auth.oidc import OidcError, OidcProvider
 from app.config import Environment, Settings
+from app.pipeline.applies import TERMINAL
 from app.pipeline.auto_rollback import _alert
-from app.trust import bundled_ca, verification
-from tests.certificates import tls_chain
+from app.trust import bundled_ca, presented, verification
+from tests.certificates import TlsChain, tls_chain
 
 
 def _subjects(context: ssl.SSLContext) -> list[str]:
@@ -325,3 +334,277 @@ def test_a_missing_ca_names_the_setting_rather_than_only_the_path() -> None:
 
     assert "/nonexistent/ca.pem" in str(raised.value)
     assert "pod.caBundle" in str(raised.value)
+
+
+# --------------------------------------------------------------------------------------
+# Rotation: everything above is read once, at startup, and these hold that it is read
+# once by *both* libraries that reach the coordinator (#193).
+# --------------------------------------------------------------------------------------
+
+
+class _Identifier(http.server.BaseHTTPRequestHandler):
+    """Reports the common name of the certificate the client presented.
+
+    The only answer worth asserting on. Inspecting a client's own options says which path it
+    was handed, never which bytes it put on the wire -- and the whole defect here was two
+    libraries reading different bytes from the same path.
+    """
+
+    def do_GET(self) -> None:
+        peer = self.connection.getpeercert() or {}
+        common_name = "none"
+        for rdn in peer.get("subject", ()):
+            for attribute, value in rdn:
+                if attribute == "commonName":
+                    common_name = value
+        body = common_name.encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args: object) -> None:
+        """Silent."""
+
+
+class _Mount(NamedTuple):
+    """A server that demands a certificate, and the mounted files Apchi is pointed at."""
+
+    url: str
+    ca: str
+    certificate: str
+    key: str
+    chain: TlsChain
+
+    def rotate(self) -> None:
+        """Replace the mounted bytes in place, as the kubelet does on a Secret update."""
+        Path(self.certificate).write_bytes(self.chain.rotated_client or b"")
+        Path(self.key).write_bytes(self.chain.rotated_client_key or b"")
+
+
+@pytest.fixture
+def mount(tmp_path: Path) -> Iterator[_Mount]:
+    chain = tls_chain(rotated_client_name="apchi-rotated")
+    server_certificate = tmp_path / "server.pem"
+    server_certificate.write_bytes(chain.server)
+    server_key = tmp_path / "server-key.pem"
+    server_key.write_bytes(chain.server_key)
+    ca = tmp_path / "ca.pem"
+    ca.write_bytes(chain.ca)
+    certificate = tmp_path / "client.pem"
+    certificate.write_bytes(chain.client)
+    key = tmp_path / "client-key.pem"
+    key.write_bytes(chain.client_key)
+
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(str(server_certificate), str(server_key))
+    context.load_verify_locations(cafile=str(ca))
+    context.verify_mode = ssl.CERT_REQUIRED
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Identifier)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield _Mount(
+            url=f"https://localhost:{server.server_address[1]}/",
+            ca=str(ca),
+            certificate=str(certificate),
+            key=str(key),
+            chain=chain,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def _presented_over_requests(certificate: str | None, key: str | None, mount: _Mount) -> str:
+    """What the Trino client's session shows, built the way the adapter builds it."""
+    session = requests.Session()
+    session.verify = bundled_ca(mount.ca)
+    session.cert = (str(certificate), str(key))
+    return session.get(mount.url).text
+
+
+async def _presented_over_httpx(context: ssl.SSLContext | bool, mount: _Mount) -> str:
+    """What the liveness check shows, from the context `verification` built."""
+    async with httpx.AsyncClient(verify=context) as client:
+        return (await client.get(mount.url)).text
+
+
+async def test_the_mounted_paths_alone_would_diverge_on_a_rotation(mount: _Mount) -> None:
+    """Not a test of Apchi but of the premise it is built on, like the trust-store counts
+    above. `requests` is handed the two paths and reopens them at every handshake; httpx is
+    handed a context with the bytes already in it. So the same rotation moves one and not the
+    other, and this says so rather than leaving the copying in `presented` unjustified."""
+    context = verification(mount.ca, mount.certificate, mount.key)
+    assert _presented_over_requests(mount.certificate, mount.key, mount) == "apchi"
+    assert await _presented_over_httpx(context, mount) == "apchi"
+
+    mount.rotate()
+
+    assert _presented_over_requests(mount.certificate, mount.key, mount) == "apchi-rotated"
+    assert await _presented_over_httpx(context, mount) == "apchi"
+
+
+async def test_both_halves_of_one_destination_agree_across_a_rotation(mount: _Mount) -> None:
+    """The regression #193 is about. One coordinator reached through two libraries must not
+    present two identities, so the adapter hands both of them copies `app.trust` owns.
+
+    The certificate that wins is the one loaded at startup, deliberately: rotating needs a
+    pod restart, which is what keeps MongoDB -- whose context cannot be rebuilt without
+    rebuilding the client -- from being left behind trusting an older CA.
+    """
+    adapter = Trino(
+        url=mount.url.rstrip("/"),
+        ca_file=mount.ca,
+        auth_certificate_file=mount.certificate,
+        auth_key_file=mount.key,
+    )
+    assert (
+        _presented_over_requests(adapter._auth_certificate_file, adapter._auth_key_file, mount)
+        == "apchi"
+    )
+    assert await _presented_over_httpx(adapter._verification, mount) == "apchi"
+
+    mount.rotate()
+
+    assert (
+        _presented_over_requests(adapter._auth_certificate_file, adapter._auth_key_file, mount)
+        == "apchi"
+    )
+    assert await _presented_over_httpx(adapter._verification, mount) == "apchi"
+
+
+def test_the_presented_certificate_is_a_copy_apchi_owns(mount: _Mount) -> None:
+    """0600, which the mount cannot be: the kubelet ORs 0440 into every file's mode in a
+    readOnly volume, so 0640 is the floor there (§13.2). A copy Apchi writes itself is the
+    one place the key can be as closed as it should be."""
+    certificate, key = presented(mount.certificate, mount.key)
+
+    assert certificate is not None and key is not None
+    assert (certificate, key) != (mount.certificate, mount.key)
+    assert Path(certificate).read_bytes() == Path(mount.certificate).read_bytes()
+    assert Path(key).read_bytes() == Path(mount.key).read_bytes()
+    assert Path(certificate).stat().st_mode & 0o777 == 0o600
+    assert Path(key).stat().st_mode & 0o777 == 0o600
+
+
+def test_nothing_is_copied_when_no_certificate_is_configured() -> None:
+    """The default shape. Plaintext Apchi writes no files and reads none."""
+    assert presented(None, None) == (None, None)
+
+
+def test_a_rotation_is_reported_and_not_refused(
+    mount: _Mount, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Reported, because a certificate Apchi has not reread is still a working certificate
+    until the destination stops accepting it. Refusing the Apply would block work that would
+    have succeeded, and would do it in the middle of a correct rotation."""
+    monkeypatch.setattr(trust, "_loaded", {})
+    presented.cache_clear()
+    presented(mount.certificate, mount.key)
+    assert trust.rotated() == []
+
+    mount.rotate()
+
+    assert sorted(trust.rotated()) == sorted([mount.certificate, mount.key])
+    with caplog.at_level(logging.WARNING, logger="app.trust"):
+        trust.log_rotations()
+    assert "restart Apchi" in caplog.text
+    assert mount.certificate in caplog.text
+
+
+def test_a_vanished_file_counts_as_a_rotation(
+    mount: _Mount, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Secret key removed, or a volume no longer mounted. Unreadable is a change: Apchi is
+    still presenting something the deployment no longer describes."""
+    monkeypatch.setattr(trust, "_loaded", {})
+    presented.cache_clear()
+    presented(mount.certificate, mount.key)
+    Path(mount.certificate).unlink()
+
+    assert mount.certificate in trust.rotated()
+
+
+def test_mongodbs_pem_is_remembered_without_being_copied(
+    mount: _Mount, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PyMongo loads this into a context while validating its options, so it is already read
+    exactly once and a copy would buy nothing -- while costing the error message that names
+    the path the chart assembled."""
+    monkeypatch.setattr(trust, "_loaded", {})
+    combined = Path(mount.certificate).with_name("mongo.pem")
+    combined.write_bytes(Path(mount.certificate).read_bytes() + Path(mount.key).read_bytes())
+    settings = Settings(
+        environment=Environment.TEST,
+        ca_file=mount.ca,
+        mongo_certificate_key_file=str(combined),
+    )
+
+    assert _tls_options(settings)["tlsCertificateKeyFile"] == str(combined)
+    assert trust.rotated() == []
+
+    combined.write_bytes(b"rotated")
+    assert trust.rotated() == [str(combined)]
+
+
+def test_a_missing_mongodb_pem_is_left_to_pymongo(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`recorded` must not raise first. PyMongo's own failure names the setting that put the
+    path there, and an error from here would only arrive before it and say less."""
+    monkeypatch.setattr(trust, "_loaded", {})
+
+    assert trust.recorded("/nonexistent/mongo.pem") == "/nonexistent/mongo.pem"
+    assert trust.rotated() == []
+
+
+def test_the_expiry_of_a_presented_certificate_is_logged(
+    mount: _Mount, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """On a deployment that rotates by restarting, the restart is the only moment an Admin
+    can be told what was loaded and when it dies."""
+    monkeypatch.setattr(trust, "_loaded", {})
+    presented.cache_clear()
+    with caplog.at_level(logging.INFO, logger="app.trust"):
+        presented(mount.certificate, mount.key)
+
+    expiry = x509.load_pem_x509_certificate(mount.chain.client).not_valid_after_utc
+    assert "CN=apchi" in caplog.text
+    assert expiry.isoformat() in caplog.text
+    # The key file holds no certificate, so it says nothing rather than warning.
+    assert "could not parse" not in caplog.text
+
+
+async def test_an_apply_says_so_when_a_mounted_certificate_has_changed(
+    applying_client: httpx.AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The wiring, through a real Apply rather than by calling `log_rotations` directly.
+
+    Before every Apply and not once at startup, for the same reason §16's preconditions are:
+    a Secret can be rewritten under a long-lived pod at any moment, and the Apply is the
+    operation whose failure would otherwise be attributed to the Cluster.
+    """
+    mounted = tmp_path / "mounted.pem"
+    mounted.write_bytes(b"what Apchi read")
+    monkeypatch.setattr(trust, "_loaded", {})
+    trust.recorded(str(mounted))
+    mounted.write_bytes(b"what the kubelet put there since")
+
+    with caplog.at_level(logging.WARNING, logger="app.trust"):
+        apply_id = (await applying_client.post("/api/v1/applies")).json()["id"]
+        deadline = asyncio.get_running_loop().time() + 30.0
+        while asyncio.get_running_loop().time() < deadline:
+            record = (await applying_client.get(f"/api/v1/applies/{apply_id}")).json()
+            if record["stage"] in TERMINAL:
+                break
+            await asyncio.sleep(0.02)
+
+    # Warned, and the Apply still ran: what Apchi loaded works until the destination stops
+    # accepting it, so refusing here would block an Apply that would have succeeded.
+    assert record["stage"] == "succeeded"
+    assert str(mounted) in caplog.text
+    assert "restart Apchi" in caplog.text

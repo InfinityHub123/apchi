@@ -7,7 +7,7 @@ from pymongo import AsyncMongoClient
 from pymongo.asynchronous.database import AsyncDatabase
 
 from app.config import Settings
-from app.trust import bundled_ca
+from app.trust import bundled_ca, recorded
 
 
 def _tls_options(settings: Settings) -> dict[str, Any]:
@@ -27,7 +27,10 @@ def _tls_options(settings: Settings) -> dict[str, Any]:
     if bundle:
         options["tlsCAFile"] = bundle
     if settings.mongo_certificate_key_file:
-        options["tlsCertificateKeyFile"] = settings.mongo_certificate_key_file
+        # The mounted path, not a copy: PyMongo loads it into a context while validating its
+        # options, so it is already read exactly once (#193). `recorded` only remembers what
+        # it held, so a later rotation can be reported.
+        options["tlsCertificateKeyFile"] = recorded(settings.mongo_certificate_key_file)
     return options
 
 

@@ -43,16 +43,26 @@ def key_pair(
     return certificate, key
 
 
-#: A certificate authority and the two certificates it issues, as PEM bytes.
+#: A certificate authority and the certificates it issues, as PEM bytes.
 class TlsChain(NamedTuple):
     ca: bytes
     server: bytes
     server_key: bytes
     client: bytes
     client_key: bytes
+    #: A second client certificate from the same CA, present only when `tls_chain` was asked
+    #: for one. A rotation is the one case a single client certificate cannot express: the
+    #: replacement has to be a different identity the same CA vouches for, or a server
+    #: accepting it proves nothing about which file was read.
+    rotated_client: bytes | None = None
+    rotated_client_key: bytes | None = None
 
 
-def tls_chain(server_name: str = "localhost", client_name: str = "apchi") -> TlsChain:
+def tls_chain(
+    server_name: str = "localhost",
+    client_name: str = "apchi",
+    rotated_client_name: str | None = None,
+) -> TlsChain:
     """A CA, a server certificate for `server_name` and a client certificate.
 
     Unlike `key_pair`, these are built to survive a real TLS handshake, which took three
@@ -122,12 +132,20 @@ def tls_chain(server_name: str = "localhost", client_name: str = "apchi") -> Tls
 
     server_certificate, server_key = issued(server_name, server=True)
     client_certificate, client_key = issued(client_name, server=False)
+    rotated_client = rotated_client_key = None
+    if rotated_client_name is not None:
+        # Issued only on request: every certificate here costs an RSA key generation, and
+        # most callers want one client identity.
+        certificate, key = issued(rotated_client_name, server=False)
+        rotated_client, rotated_client_key = certificate_pem(certificate), key_pem(key)
     return TlsChain(
         ca=certificate_pem(ca),
         server=certificate_pem(server_certificate),
         server_key=key_pem(server_key),
         client=certificate_pem(client_certificate),
         client_key=key_pem(client_key),
+        rotated_client=rotated_client,
+        rotated_client_key=rotated_client_key,
     )
 
 

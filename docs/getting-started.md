@@ -541,6 +541,37 @@ way. Apchi mounts this one `0640` with an `fsGroup` matching the user it runs as
 only combination that is both restricted and readable — a Secret volume's files are root-owned
 whatever their mode, so `0600` would lock Apchi out of its own key.
 
+## Rotating any of it
+
+Apchi reads every certificate and CA above **once, when it starts**, so replacing the
+contents of a Secret changes nothing by itself:
+
+```sh
+kubectl create secret generic apchi-trino-tls -n apchi \
+  --from-file=tls.crt=new.pem --from-file=tls.key=new-key.pem \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl rollout restart -n apchi deploy/apchi
+```
+
+The restart is the part that matters, and Apchi will tell you if you forget: the next Apply
+logs a warning naming the file that changed. It is a warning and not a refusal on purpose —
+the certificate Apchi is still presenting works until your Trino or MongoDB stops accepting
+it, so there is no reason to block an Apply that would succeed.
+
+**Why it does not just reload.** One of Apchi's destinations cannot. MongoDB's client loads
+its certificate into an SSL context when the client is built and keeps it, so picking up a
+rotation there means rebuilding the client. If the others reloaded anyway, a rotated CA would
+be trusted by your coordinator, your identity provider and your webhook but not by MongoDB —
+which is exactly the split `pod.caBundle` exists to prevent. Since rotating an internal root
+touches all four, a restart was needed either way.
+
+Each restart logs what it loaded and when it expires, which is worth reading:
+
+```
+loaded certificate from /etc/apchi/trino-tls/tls.crt, subject CN=apchi, expires 2027-04-18T09:12:00+00:00
+```
+
 ## If something goes wrong
 
 **Everything times out, or `apchi` never becomes ready.** Check that it is MongoDB and not
@@ -558,6 +589,10 @@ to serve it from — a 503 means MongoDB is unreachable, which is a different th
 **Every Apply is refused with "Trino then refuses plain HTTP from every client".** The
 coordinator authenticates its callers and Apchi is configured for `http://`. See
 *Reaching a coordinator over HTTPS* above.
+
+**A rotated certificate seems to have been ignored.** It was. See *Rotating any of it*
+above — the Secret's new contents reach the pod within about a minute, and Apchi keeps using
+what it read at startup until it restarts. `kubectl logs` shows the warning naming the file.
 
 **A validation fails with "the validation coordinator was not serving within 300s".** Either
 Apchi is running outside the cluster, where it cannot reach the probe's pod IP, or the node is

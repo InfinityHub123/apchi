@@ -267,10 +267,12 @@ Not built:
   database is your platform's job — the same division Apchi draws for the Trino deployment
   it configures. Point `mongodb.uri` at something durable; the MongoDB the chart can deploy
   is for trying Apchi out and loses everything when its pod restarts.
-- **Certificate rotation needs a restart.** The CA bundle is built once per process, so a
-  rotated root takes effect when the pod restarts rather than when the Secret changes. Fine
-  for the lifetimes these certificates usually have; not yet fine for an issuer that renews
-  hourly (§27, [#193](https://github.com/InfinityHub123/apchi/issues/193)).
+- **Certificate rotation needs a restart**, by decision rather than by omission. Everything
+  Apchi presents or trusts is read once at startup, which is what keeps one coordinator
+  reached through two HTTP libraries from presenting two identities mid-rotation. Apchi logs
+  a warning naming the file when a mounted certificate changes under it, and logs each
+  certificate's expiry as it loads. Fine for the lifetimes these certificates usually have;
+  an issuer renewing hourly would want a reload Apchi does not do (§18, §27).
 - **The interactive reference is open.** `/docs`, `/redoc` and `/openapi.json` answer without
   credentials, by decision: what they expose is the shape of the API, which this repository
   publishes anyway, and "Try it out" sends real requests that meet the gate like any other.
