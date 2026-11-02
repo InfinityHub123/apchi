@@ -14,7 +14,7 @@ from typing import Any, NamedTuple
 import httpx
 from fastapi.concurrency import run_in_threadpool
 
-from app.trust import bundled_ca, verification
+from app.trust import bundled_ca, presented, verification
 
 #: What Apchi's own queries report as their source. The client would otherwise send
 #: "trino-python-client", which says nothing about who is asking. Named so that an Operator
@@ -108,11 +108,16 @@ class Trino:
         # store with whatever path it is given, so handing it the raw CA would make queries
         # distrust everything `is_starting` still trusted. See app.trust.
         self._ca_bundle = bundled_ca(ca_file)
-        self._auth_certificate_file = auth_certificate_file
-        self._auth_key_file = auth_key_file
+        # Copies app.trust owns, not the mounted paths. The client hands `requests` these
+        # two as paths and `requests` reopens them at every handshake, while httpx is given a
+        # context holding the bytes -- so against a rotating mount the two would present
+        # different certificates until the pod restarted (#193).
+        self._auth_certificate_file, self._auth_key_file = presented(
+            auth_certificate_file, auth_key_file
+        )
         # Built once, at startup: a path that does not exist should stop Apchi here rather
         # than inside `is_starting`, which reports every failure as "unreachable".
-        self._verification = verification(ca_file, auth_certificate_file, auth_key_file)
+        self._verification = verification(ca_file, self._auth_certificate_file, self._auth_key_file)
         self._connectors: frozenset[str] | None = None
         self._connectors_read_at: float | None = None
 

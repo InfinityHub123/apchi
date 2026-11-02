@@ -14,6 +14,7 @@ import json
 import ssl
 import threading
 from collections.abc import Iterator
+from pathlib import Path
 
 import httpx
 import pytest
@@ -198,11 +199,19 @@ def test_the_query_session_carries_the_ca_and_the_certificate(
         host=trino_adapter._base,
         user="apchi",
         verify=trino_adapter._ca_bundle,
-        auth=trino.auth.CertificateAuthentication(pem_files["client"], pem_files["client_key"]),
+        auth=trino.auth.CertificateAuthentication(
+            trino_adapter._auth_certificate_file, str(trino_adapter._auth_key_file)
+        ),
     )
     session = connection._create_request()._http_session
     assert session.verify == bundled_ca(pem_files["ca"])
-    assert session.cert == (pem_files["client"], pem_files["client_key"])
+    # The copies `app.trust` owns rather than the mounted paths, holding the same bytes:
+    # `requests` reopens whatever path it is given at every handshake, so pointing it at the
+    # mount is what let a rotation move the query session and not the liveness check (#193).
+    certificate, key = session.cert
+    assert (certificate, key) != (pem_files["client"], pem_files["client_key"])
+    assert Path(certificate).read_bytes() == Path(pem_files["client"]).read_bytes()
+    assert Path(key).read_bytes() == Path(pem_files["client_key"]).read_bytes()
 
 
 def test_a_certificate_without_its_key_is_refused_at_startup(pem_files: dict[str, str]) -> None:
@@ -232,7 +241,8 @@ def test_a_missing_pem_stops_apchi_rather_than_reporting_a_down_cluster() -> Non
     with pytest.raises(RuntimeError, match="ca_file"):
         Trino(url="https://trino:8443", ca_file="/nonexistent/ca.pem")
 
-    # The client certificate is still Trino's own, so its own error still comes from here.
+    # The client certificate gets no such message: `app.trust` copies it before anything
+    # else reads it, so the FileNotFoundError is the copy's and names the path directly.
     with pytest.raises(FileNotFoundError):
         Trino(
             url="https://trino:8443",
