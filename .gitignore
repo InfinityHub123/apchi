@@ -225,3 +225,6 @@ __marimo__/
 .claude/
 .agents/
 skills-lock.json
+
+# Copied in from the repo root while the docs site builds (scripts/mkdocs_hooks.py).
+docs/reference/openapi.json

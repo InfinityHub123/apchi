@@ -1,7 +1,7 @@
 # Apchi Implementation Document
 
-Terminology in this document follows [CONTEXT.md](./CONTEXT.md). Decisions with lasting
-consequences are recorded in [docs/adr/](./docs/adr/).
+Terminology in this document follows `CONTEXT.md`. Decisions with lasting consequences
+are recorded in `docs/adr/`.
 
 ---
 
@@ -2516,7 +2516,7 @@ a model, a configuration generator, an apply strategy, and whether it requires a
 
 ## Vocabulary
 
-The terms in [CONTEXT.md](./CONTEXT.md) are the literal names in code: `Snapshot`,
+The terms in `CONTEXT.md` are the literal names in code: `Snapshot`,
 `ConfigurationCandidate`, `Section`, `apply`, `rollout`, `validate`, `verify`, `commit`,
 `reset`, `section_revert`, `full_rollback`, `auto_rollback`, `maintenance_mode`,
 `TrinoIdentity`, `CertificateMappingPattern`.

@@ -203,6 +203,22 @@ environment, because Snapshots hold real credentials.
 `openapi.json` is committed. CI regenerates it and fails on a diff, so every contract change
 arrives as a reviewed diff.
 
+## Docs site
+
+`mkdocs.yml` at the root, Material, built by CI with `--strict` and published to GitHub Pages
+from `main` by `.github/workflows/docs.yml`. `--strict` fails on a link whose target moved and
+on a doc file that is in the tree but in no `nav` entry -- the second being how a docs site
+rots, since the page still exists and nothing points at it.
+
+**The prose does not move to serve the site.** `README.md`, `CONTEXT.md` and
+`apchi_implementation.md` stay at the root because this file and `docs/agents/domain.md` send
+agents to those exact paths, and each chart's README belongs beside its chart. The site
+includes them from where they are and `include-markdown` rewrites their relative links, which
+means a link between two of them has to resolve *both* in the repo and on the site -- why the
+spec names `CONTEXT.md` in backticks instead of linking to it. `openapi.json` is copied in by
+`scripts/mkdocs_hooks.py`, in `on_config` because hooks run after plugins, rather than
+duplicated under `docs/`. `docs/agents/` is excluded: it is instructions to a tool.
+
 ## Commits
 
 A commit message names the behaviour that changed and the reason it changed. Subject line

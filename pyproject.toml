@@ -38,6 +38,15 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
 ]
+docs = [
+    "mkdocs-material>=9.5",
+    # The prose files live where they are read -- at the repo root and beside the chart
+    # they document -- and the site includes them from there rather than owning copies.
+    "mkdocs-include-markdown-plugin>=7.1",
+    # Renders the committed openapi.json, with Swagger UI vendored rather than pulled
+    # from a CDN at page load.
+    "mkdocs-swagger-ui-tag>=0.6",
+]
 
 [tool.ruff]
 line-length = 100

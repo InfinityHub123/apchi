@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+
+<!-- Apchi has no release yet, and the chart tells readers that an empty image.tag resolves
+     to the chart's appVersion. A site built from main would otherwise read as documentation
+     for something installable. -->
+{% block announce %}
+  This documents <strong>main</strong>. Apchi has not cut a release, so there is no published
+  image or chart yet &mdash; the install instructions describe building it yourself.
+{% endblock %}

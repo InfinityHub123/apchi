@@ -1,0 +1,3 @@
+{%
+  include-markdown "../CONTEXT.md"
+%}
