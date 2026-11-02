@@ -15,6 +15,8 @@ throwaway Trino first, so a coordinator that would refuse to start fails the val
 rather than your cluster. An apply that fails verification rolls the cluster back by itself.
 What survives is a numbered, immutable **Snapshot** you can roll back to.
 
+Documentation: **<https://infinityhub123.github.io/apchi/>**, built from `main`.
+
 ## What Apchi configures
 
 | Section | What it covers | What an apply costs |
@@ -109,19 +111,19 @@ promotes the lot.
 
 ## Install
 
-Apchi is **not released yet** — nothing is published to GHCR, so install from a clone:
+The chart and the image publish to GHCR on every tag:
 
 ```sh
-helm install apchi charts/apchi \
+helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.1.1 \
   --namespace trino \
   --set mongodb.uri=mongodb://your-mongo:27017
 ```
 
-Once there is a release, the chart and the image publish to GHCR on every tag and this
-becomes:
+Or from a clone, which is what you want while changing Apchi itself — the chart then
+installs whatever image you have built:
 
 ```sh
-helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.1.0 \
+helm install apchi charts/apchi \
   --namespace trino \
   --set mongodb.uri=mongodb://your-mongo:27017
 ```
@@ -189,8 +191,10 @@ against the official `trinodb/charts` Trino chart, which mounts `/etc/trino` as 
 rather than file by file. Worth reading before adopting an existing cluster, because that
 shape changes two things Apchi can do.
 
-With Apchi running, `/docs` serves the interactive API reference and `openapi.json` in this
-repository is the committed contract.
+With Apchi running, `/docs` serves the interactive API reference. The same contract is
+published at
+[the documentation site](https://infinityhub123.github.io/apchi/reference/api/), and
+`openapi.json` in this repository is the committed source of both.
 
 ## Where things are
 
@@ -225,9 +229,8 @@ scripts/
 
 ## Current state
 
-Apchi is under active development, and **unreleased** — there is no tag and nothing published
-to GHCR yet, so the install command above will not resolve a version until there is one.
-Install from a clone in the meantime.
+Apchi is under active development. **v0.1.1** is the first published release — the image and
+the chart are on GHCR, and `main` is usually ahead of it.
 
 The backend is complete. The configuration loop is tested end to end against a real Trino on a
 real Kubernetes for all six Sections, on both of the deployment shapes Trino clusters come in

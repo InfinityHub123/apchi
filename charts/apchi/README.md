@@ -2,17 +2,17 @@
 
 Installs Apchi into the namespace its Trino runs in.
 
-Apchi is **not released yet** — nothing is published to GHCR, so install from a clone:
+Published to GHCR on every tag:
+
+```sh
+helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.1.1 \
+  -n trino --set mongodb.uri=mongodb://your-mongo:27017
+```
+
+Or from a clone, while changing Apchi itself:
 
 ```sh
 helm install apchi charts/apchi -n trino --set mongodb.uri=mongodb://your-mongo:27017
-```
-
-Once there is a release this becomes:
-
-```sh
-helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.1.0 \
-  -n trino --set mongodb.uri=mongodb://your-mongo:27017
 ```
 
 Apchi is one container with no state of its own, so the chart is a Deployment, a Service, a

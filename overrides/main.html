@@ -1,9 +1,10 @@
 {% extends "base.html" %}
 
-<!-- Apchi has no release yet, and the chart tells readers that an empty image.tag resolves
-     to the chart's appVersion. A site built from main would otherwise read as documentation
-     for something installable. -->
+<!-- The site is built from main, which is ahead of the newest tag between releases, so
+     anything described here may not be in the version a reader has installed. Deliberately
+     names no version: one written in would be wrong from the next release onwards, and
+     nothing rebuilds this page when a tag is pushed. -->
 {% block announce %}
-  This documents <strong>main</strong>. Apchi has not cut a release, so there is no published
-  image or chart yet &mdash; the install instructions describe building it yourself.
+  This documents <strong>main</strong>, which may be ahead of the latest
+  <a href="https://github.com/InfinityHub123/apchi/releases">release</a>.
 {% endblock %}
