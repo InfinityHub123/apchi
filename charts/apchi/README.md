@@ -115,7 +115,7 @@ secrets:
 | `deployment.setsEventListenerConfigFiles` | `false` | The same, for `event-listener.config-files` naming a file in `/etc/trino/event-listener/`. Costs the ability to empty that Section, because Trino refuses to start without the file the property names |
 | `timeouts.rolloutSeconds` | `600` | A coordinator that never comes back fails the Apply rather than hanging it |
 | `timeouts.validationSeconds` | `300` | The hard limit on Validation. Also sets the liveness budget, so a Validation is never killed mid-Apply |
-| `certificates.expiringWithinDays` | `30` | When Apchi starts calling a Client Certificate expiring. Renewal is manual |
+| `certificates.expiringWithinDays` | `30` | When Apchi starts calling a certificate expiring. Both a Client Certificate, where it sets the status an Operator filters on, and the certificates Apchi itself presents, which the Apply path then warns about in the log. Renewal is manual |
 | `certificates.maxBytes` | `1048576` | What a Kubernetes Secret may hold; a larger upload is refused with that reason |
 | `alertWebhookUrl` | `""` | Where a failed Auto Rollback is reported. Empty means log only |
 | `extraEnv` | `[]` | `APCHI_`-prefixed environment, for a setting newer than this chart |

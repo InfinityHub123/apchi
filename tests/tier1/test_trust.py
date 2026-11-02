@@ -33,7 +33,7 @@ from app.config import Environment, Settings
 from app.pipeline.applies import TERMINAL
 from app.pipeline.auto_rollback import _alert
 from app.trust import bundled_ca, presented, verification
-from tests.certificates import TlsChain, tls_chain
+from tests.certificates import TlsChain, certificate_pem, key_pair, key_pem, tls_chain
 
 
 def _subjects(context: ssl.SSLContext) -> list[str]:
@@ -576,24 +576,29 @@ def test_the_expiry_of_a_presented_certificate_is_logged(
     assert "could not parse" not in caplog.text
 
 
-async def test_an_apply_says_so_when_a_mounted_certificate_has_changed(
+async def test_an_apply_says_what_is_wrong_with_the_certificates_on_disk(
     applying_client: httpx.AsyncClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The wiring, through a real Apply rather than by calling `log_rotations` directly.
+    """Both wirings, through a real Apply rather than by calling either function directly.
 
     Before every Apply and not once at startup, for the same reason §16's preconditions are:
     a Secret can be rewritten under a long-lived pod at any moment, and the Apply is the
     operation whose failure would otherwise be attributed to the Cluster.
+
+    One Apply for both because an Apply here costs a real Trino; the two calls are removed
+    one at a time to check this fails for each.
     """
     mounted = tmp_path / "mounted.pem"
     mounted.write_bytes(b"what Apchi read")
     monkeypatch.setattr(trust, "_loaded", {})
     trust.recorded(str(mounted))
     mounted.write_bytes(b"what the kubelet put there since")
+    expiring = _loads(tmp_path / "expiring.pem", valid_for_days=5)
 
+    caplog.clear()
     with caplog.at_level(logging.WARNING, logger="app.trust"):
         apply_id = (await applying_client.post("/api/v1/applies")).json()["id"]
         deadline = asyncio.get_running_loop().time() + 30.0
@@ -608,3 +613,114 @@ async def test_an_apply_says_so_when_a_mounted_certificate_has_changed(
     assert record["stage"] == "succeeded"
     assert str(mounted) in caplog.text
     assert "restart Apchi" in caplog.text
+    # And the expiry, on the same pass: the default window is 30 days.
+    assert expiring in caplog.text
+    assert "expires on" in caplog.text
+
+
+# --------------------------------------------------------------------------------------
+# Expiry. Logged where Apchi is already doing something, because there is no timer to log
+# it on and this is not the feature to add the first one for (#196).
+# --------------------------------------------------------------------------------------
+
+
+def _loads(path: Path, valid_for_days: int, common_name: str = "apchi") -> str:
+    """A certificate `valid_for_days` from expiry, read the way Apchi reads one.
+
+    `key_pair` rather than `tls_chain`: nothing here performs a handshake, so the extensions
+    a real chain needs would only cost two RSA key generations per case.
+
+    Registering it logs the "loaded certificate" line, which is why every caller clears
+    `caplog` before the call under test -- otherwise the setup is part of the assertion.
+    """
+    certificate, _ = key_pair(common_name, valid_for_days)
+    path.write_bytes(certificate_pem(certificate))
+    trust.recorded(str(path))
+    return str(path)
+
+
+def test_a_certificate_inside_the_window_is_named_with_its_remaining_days(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(trust, "_loaded", {})
+    path = _loads(tmp_path / "soon.pem", valid_for_days=5)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="app.trust"):
+        trust.log_expiring(30)
+
+    assert path in caplog.text
+    assert "in 4 days" in caplog.text or "in 5 days" in caplog.text
+
+
+def test_a_certificate_outside_the_window_says_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Every Apply calls this, so a cluster whose certificates are fine must stay quiet --
+    a warning on each Apply is one an Admin learns to scroll past."""
+    monkeypatch.setattr(trust, "_loaded", {})
+    _loads(tmp_path / "fine.pem", valid_for_days=365)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="app.trust"):
+        trust.log_expiring(30)
+
+    assert caplog.text == ""
+
+
+def test_an_expired_certificate_is_reported_more_loudly_than_an_expiring_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Separable by level, so an alert rule can tell "renew this soon" from "this is already
+    broken" without matching on message text."""
+    monkeypatch.setattr(trust, "_loaded", {})
+    expired = _loads(tmp_path / "gone.pem", valid_for_days=-1)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="app.trust"):
+        trust.log_expiring(30)
+
+    levels = {record.levelno for record in caplog.records}
+    assert levels == {logging.ERROR}
+    assert expired in caplog.text
+    assert "expired" in caplog.text
+
+
+def test_a_file_with_no_certificate_in_it_says_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A private key on its own. `presented` registers both halves, so this is the common
+    case rather than an edge one."""
+    monkeypatch.setattr(trust, "_loaded", {})
+    key_only = tmp_path / "client-key.pem"
+    key_only.write_bytes(key_pem(key_pair("apchi")[1]))
+    trust.recorded(str(key_only))
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="app.trust"):
+        trust.log_expiring(30)
+
+    assert caplog.text == ""
+
+
+def test_the_expiry_reported_is_the_one_apchi_loaded_not_the_one_on_the_mount(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The #193 trap, one layer up. Apchi presents the copy it made at startup, so reading
+    the mount to answer "am I about to expire?" would describe a replacement Apchi is not
+    using -- and would fall silent exactly when a rotation had been staged but not applied by
+    a restart."""
+    monkeypatch.setattr(trust, "_loaded", {})
+    mounted = tmp_path / "client.pem"
+    _loads(mounted, valid_for_days=5)
+    # The kubelet projects the renewal. Apchi has not restarted, so it still presents the
+    # certificate that is about to expire.
+    replacement, _ = key_pair("apchi", valid_for_days=365)
+    mounted.write_bytes(certificate_pem(replacement))
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="app.trust"):
+        trust.log_expiring(30)
+
+    assert "expires" in caplog.text
+    assert str(mounted) in caplog.text

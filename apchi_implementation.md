@@ -2077,6 +2077,15 @@ would have succeeded, and would do it in the middle of a correct rotation. Each 
 subject and expiry are logged as it loads, since the restart is the only moment a deployment
 of this shape has to tell an Admin what is now in use.
 
+**Expiry rides the same chokepoint**, and for the same reason: the Apply path warns when a
+certificate Apchi loaded is inside `certificate_expiring_within_days`, and reports one
+already past it at `ERROR`. Of what was *loaded* and never of what is mounted — those differ
+after a rotation, and the one deciding whether a connection still works is the one Apchi is
+presenting. It is an Apply and not a timer because there is no periodic task in this codebase
+to hang it on, and that limit is accepted rather than hidden: a Cluster nobody applies to
+hears nothing between restarts, for which the answer is a log alert on `app.trust` and not a
+scheduler Apchi would have to grow (§27, #196).
+
 Two things follow from that boundary rather than from a recovery plan:
 
 - **Apchi keeps exactly one number outside MongoDB**: the highest Snapshot it has ever
@@ -2758,10 +2767,20 @@ Additional constraints:
   §18's one bundle exists to prevent. A realistic rotation is an organisation rotating its
   root, which touches all four, so a restart was required regardless.
 
-  What remains open is narrower: a **near-expiry warning**. The subject and expiry of every
-  certificate are logged as it is loaded, which serves a deployment that rotates by
-  restarting, but a pod up for sixty days logged that sixty days ago. A warning needs a
-  threshold setting and something to re-check it on, which is a timer this slice deliberately
-  did not add.
+  What remains open is narrower still. The Apply path now warns when a loaded certificate is
+  inside `certificate_expiring_within_days` — the same window a Client Certificate's
+  `expiring` status uses, because an organisation that renews on a schedule renews everything
+  on it — and reports one already past expiry at `ERROR`, so an alert rule can separate
+  "renew this soon" from "this is already broken" without matching message text.
+
+  That leaves **a Cluster nobody applies to**, which hears nothing between restarts, and that
+  is accepted rather than pending. Closing it needs somewhere to say it and there is nowhere:
+  no UI (§21), nothing polling, the alert webhook is the failed-Auto-Rollback channel, and
+  the codebase has no periodic task at all — every loop in it is bounded and scoped to an
+  operation in flight. The first scheduler here should not arrive for a certificate expiry,
+  and an endpoint nothing can call would commit a path to a published contract to serve a
+  consumer that does not exist.
+  [#196](https://github.com/InfinityHub123/apchi/issues/196) is closed on those grounds; the
+  documented workaround is a log alert on `app.trust`.
 - **API policy** — breaking changes, deprecation, new versions.
 - **Draining** — deferred to Trino Gateway blue/green.

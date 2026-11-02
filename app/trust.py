@@ -36,19 +36,36 @@ import hashlib
 import logging
 import ssl
 from contextlib import suppress
+from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
 from tempfile import mkstemp
+from typing import NamedTuple
 
 import certifi
 from cryptography import x509
 
 logger = logging.getLogger(__name__)
 
-#: The digest of what each mounted file held when Apchi read it, keyed by the mounted path.
-#: Written once per path, as the material is loaded, and compared against the mount again by
-#: `rotated` -- which is the only thing that ever looks at these files twice.
-_loaded: dict[str, str] = {}
+
+class _Material(NamedTuple):
+    """What a mounted file held when Apchi read it.
+
+    The digest is what `rotated` compares. The certificate's own details are kept because
+    the file is never read again, so after startup this is the only record of what Apchi is
+    presenting -- and answering from the mount instead would describe a certificate a
+    rotation has replaced but Apchi is not using (#193).
+    """
+
+    digest: str
+    #: None for a file holding no certificate: a private key on its own.
+    subject: str | None = None
+    expires: datetime | None = None
+
+
+#: What each mounted file held when Apchi read it, keyed by the mounted path. Written once
+#: per path, as the material is loaded, and read again only by `rotated` and `expiring`.
+_loaded: dict[str, _Material] = {}
 
 #: Where a PEM's first certificate starts. A key file has none, and MongoDB's
 #: `tlsCertificateKeyFile` holds a certificate *and* a key in one file, so neither "the whole
@@ -57,24 +74,28 @@ _CERTIFICATE_HEADER = b"-----BEGIN CERTIFICATE-----"
 
 
 def _read(path: str) -> bytes:
-    """`path`'s bytes, remembering their digest so a later rotation can be noticed."""
+    """`path`'s bytes, remembering what they held so a rotation or an expiry can be noticed."""
     content = Path(path).read_bytes()
     if path not in _loaded:
-        _loaded[path] = hashlib.sha256(content).hexdigest()
-        _log_certificate(path, content)
+        _loaded[path] = _describe(path, content)
     return content
 
 
-def _log_certificate(path: str, content: bytes) -> None:
-    """The subject and expiry of the certificate in `content`, if it holds one.
+def _describe(path: str, content: bytes) -> _Material:
+    """What was read, and a line saying so when it is a certificate.
 
-    Logged because a deployment that rotates by restarting makes the restart the moment an
-    Admin wants to see what was loaded and when it dies; there is no other way to ask. A file
-    with no certificate in it is a private key, and says nothing here.
+    Logged at load because a deployment that rotates by restarting makes the restart the one
+    moment an Admin can be told what is now in use and when it dies. A file with no
+    certificate in it is a private key, and says nothing here.
+
+    Only the **first** certificate in the file is described. That is the right one for the
+    two Apchi presents, and a partial answer for a CA file holding a chain -- enough to
+    notice the root expiring, which is what `expiring` is for.
     """
+    digest = hashlib.sha256(content).hexdigest()
     start = content.find(_CERTIFICATE_HEADER)
     if start == -1:
-        return
+        return _Material(digest)
     try:
         certificate = x509.load_pem_x509_certificate(content[start:])
     except ValueError:
@@ -82,14 +103,16 @@ def _log_certificate(path: str, content: bytes) -> None:
         # than this could, and failing here would turn a bad certificate into a crash with
         # no destination named.
         logger.warning("could not parse a certificate from %s", path)
-        return
+        return _Material(digest)
+    expires = certificate.not_valid_after_utc
     logger.info(
         "loaded certificate from %s, subject %s, expires %s",
         path,
         certificate.subject.rfc4514_string(),
-        certificate.not_valid_after_utc.isoformat(),
-        extra={"certificate_path": path, "expires": certificate.not_valid_after_utc.isoformat()},
+        expires.isoformat(),
+        extra={"certificate_path": path, "expires": expires.isoformat()},
     )
+    return _Material(digest, certificate.subject.rfc4514_string(), expires)
 
 
 @cache
@@ -209,13 +232,13 @@ def rotated() -> list[str]:
     changed = []
     # A copy, because this runs inside an Apply and a client built lazily on another task
     # would otherwise be able to add an entry mid-iteration.
-    for path, digest in list(_loaded.items()):
+    for path, material in list(_loaded.items()):
         try:
             current = hashlib.sha256(Path(path).read_bytes()).hexdigest()
         except OSError:
             changed.append(path)
             continue
-        if current != digest:
+        if current != material.digest:
             changed.append(path)
     return changed
 
@@ -229,3 +252,38 @@ def log_rotations() -> None:
             path,
             extra={"certificate_path": path},
         )
+
+
+def log_expiring(within_days: int) -> None:
+    """Say so when a certificate Apchi loaded is near expiry, or already past it.
+
+    Of what was **loaded**, not what is mounted: those differ after a rotation, and the one
+    that decides whether a connection still works is the one Apchi is presenting.
+
+    A log line and not a refusal, and emitted where Apchi is already doing something rather
+    than on a timer -- the codebase has no periodic task and this is not the feature to add
+    the first one for. The limit is recorded rather than hidden (#196): a Cluster nobody
+    applies to hears nothing between restarts, and closing that needs a consumer Apchi does
+    not have yet.
+    """
+    now = datetime.now(UTC)
+    for path, material in list(_loaded.items()):
+        if material.expires is None:
+            continue
+        remaining = (material.expires - now).days
+        if material.expires <= now:
+            logger.error(
+                "the certificate at %s expired on %s; connections using it will be refused",
+                path,
+                material.expires.isoformat(),
+                extra={"certificate_path": path, "expires": material.expires.isoformat()},
+            )
+        elif remaining <= within_days:
+            logger.warning(
+                "the certificate at %s expires on %s, in %d days; renewing it needs a new "
+                "Secret and a restart",
+                path,
+                material.expires.isoformat(),
+                remaining,
+                extra={"certificate_path": path, "expires": material.expires.isoformat()},
+            )
