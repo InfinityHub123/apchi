@@ -270,7 +270,7 @@ Not built:
 - **Certificate rotation needs a restart.** The CA bundle is built once per process, so a
   rotated root takes effect when the pod restarts rather than when the Secret changes. Fine
   for the lifetimes these certificates usually have; not yet fine for an issuer that renews
-  hourly (§27).
+  hourly (§27, [#193](https://github.com/InfinityHub123/apchi/issues/193)).
 - **The interactive reference is open.** `/docs`, `/redoc` and `/openapi.json` answer without
   credentials, by decision: what they expose is the shape of the API, which this repository
   publishes anyway, and "Try it out" sends real requests that meet the gate like any other.

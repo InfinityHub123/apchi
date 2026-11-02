@@ -2715,6 +2715,8 @@ Additional constraints:
   queries would present different certificates until a restart. Tolerable for the lifetimes
   these certificates usually have and wrong for short-lived ones; an issuer renewing hourly
   needs the mount watched or a signal handled, and the fix should make the two halves of that
-  destination read the same files at the same moment. Not ticketed, and nothing warns today.
+  destination read the same files at the same moment. Nothing warns today;
+  [#193](https://github.com/InfinityHub123/apchi/issues/193) has the measurements and the
+  decisions still open.
 - **API policy** — breaking changes, deprecation, new versions.
 - **Draining** — deferred to Trino Gateway blue/green.
