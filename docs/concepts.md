@@ -86,6 +86,19 @@ configures. Point `mongodb.uri` at a MongoDB that is operated and backed up the 
 databases are. The MongoDB the chart can deploy for you is for trying Apchi out and runs on an
 emptyDir.
 
+Reaching it is Apchi's side of that same boundary. A platform that runs MongoDB the way it
+runs its other databases is likely to require TLS of its clients, and may authenticate them by
+certificate — so Apchi takes both. Where x509 is on offer it is worth preferring, because
+`mongodb.uri` is a plain Helm value: a password in it is visible in `helm get values` and in
+the pod spec, while an x509 URI carries no secret at all and MongoDB derives the username from
+the certificate.
+
+What Apchi *trusts* is one setting for every connection it opens — the coordinator, MongoDB,
+your identity provider, the alert webhook. A certificate authority you name there is **added**
+to the public trust store rather than replacing it, which is what stops an internal CA for your
+own MongoDB quietly breaking a public webhook. [`getting-started.md`](getting-started.md) has
+the values.
+
 If Apchi's database were empty, the cluster itself would be unaffected — Trino keeps serving,
 because what it reads are Kubernetes Secrets and those are untouched. What would be missing is
 Apchi's record of it, and that matters in one place worth knowing about: **adoption**.
@@ -212,6 +225,12 @@ one cluster that somebody else deployed, and it needs that deployment to satisfy
 preconditions — a writable catalog store, the generated files mounted where Apchi puts them,
 a refresh period on the access control file. Apchi checks them before every apply and names
 the one that failed rather than half-applying.
+
+One of those checks points the other way, at Apchi rather than at your deployment, and it is
+worth knowing which. A coordinator that authenticates its callers requires TLS and refuses
+plain HTTP from everybody — so an Apchi configured for `http://` is not answered at all, and
+the symptom would be every query in an apply timing out with nothing to read. Apchi refuses the
+apply instead, and says the configuration to change is its own.
 
 It manages one cluster. One Apchi, one Trino, one namespace.
 

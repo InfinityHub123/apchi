@@ -87,6 +87,13 @@ inside it. *Whole-directory*: `/etc/trino` is one volume, and Kubernetes will no
 single file inside it — so the deployment provides the two files Trino pins to that directory,
 and Raw Files do not work at all. Asserted before every Apply, never guessed at.
 
+**Trust Bundle**:
+The one set of certificate authorities Apchi verifies every outbound TLS connection against —
+the Cluster, MongoDB, the identity provider and the alert webhook. A configured authority is
+*added* to the public store rather than replacing it, and the single bundle is what keeps one
+meaning of "trust this CA" across the three HTTP libraries involved. Deployment configuration,
+not a Section.
+
 **Audit Event**:
 One record of who changed what, and when: a Caller Identity, a Section or the Admin surface, an
 action, and the resources it touched. Written for refusals as well as changes, at the point an
@@ -147,7 +154,9 @@ certificate presented by a caller.
 
 **Client Certificate**:
 A certificate and private key Trino presents when connecting outward to an external system.
-Distinct from the Certificate Mapping Pattern, which governs callers authenticating inward.
+Distinct from the Certificate Mapping Pattern, which governs callers authenticating inward,
+and from the certificate *Apchi* presents to the Cluster, which is not a Section, never
+enters a Snapshot, and is configured as `trino_auth_certificate_file` for that reason.
 
 **Trino Identity**:
 The username a client certificate resolves to, and the subject of permissions and
