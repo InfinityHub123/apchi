@@ -25,6 +25,11 @@ deployment that does not use the chart.
 That is a decision and not an oversight: a rotation therefore takes effect when the pod
 restarts. See `presented` for why the alternative was worse, and `rotated` for how an Admin
 finds out.
+
+Both the bundle and the copies are written with `mkstemp`, so this module needs a **writable
+temporary directory**. A container hardened with `readOnlyRootFilesystem: true` would fail at
+startup; the chart does not set it, and a deployment that wants to would have to mount an
+`emptyDir` over the temporary directory.
 """
 
 import hashlib
@@ -137,7 +142,10 @@ def presented(certificate_file: str | None, key_file: str | None) -> tuple[str |
     destinations, which is the failure this module exists to prevent.
 
     The copies are 0600, which the mount itself cannot be: the kubelet ORs 0440 into every
-    file's mode in a readOnly volume, so 0640 is the floor there (§13.2).
+    file's mode in a readOnly volume, so 0640 is the floor there (§13.2). So this puts a
+    private key in the container's temporary directory for the life of the process, and it is
+    a *more* restricted copy of a key already in the same filesystem -- the mounted one is
+    0640 and root-owned. Left for the container's exit to remove, like the bundle.
     """
     if certificate_file is None or key_file is None:
         return None, None
@@ -199,7 +207,9 @@ def rotated() -> list[str]:
     that would have succeeded, and would do it in the middle of a correct rotation.
     """
     changed = []
-    for path, digest in _loaded.items():
+    # A copy, because this runs inside an Apply and a client built lazily on another task
+    # would otherwise be able to add an entry mid-iteration.
+    for path, digest in list(_loaded.items()):
         try:
             current = hashlib.sha256(Path(path).read_bytes()).hexdigest()
         except OSError:
