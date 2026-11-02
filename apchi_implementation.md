@@ -2045,6 +2045,38 @@ behaviour — it is Apchi's own misconfiguration, present from the first second 
 one startup failure that does *not* surface as the 503 an unreachable MongoDB gives, so it is
 documented as its own symptom rather than left to look like one.
 
+**Reading a certificate once.** Everything above is read when the client that needs it is
+built, in the lifespan, and the mounted file is never read again — so rotating a certificate
+or a CA takes effect at the next pod restart, not when the Secret changes (#193). The kubelet
+does deliver the new bytes, watch-driven and within `syncFrequency`; nothing here looks at
+them.
+
+That is a decision, and the thing it buys is that all four destinations behave the same way.
+Two measurements decided it. The official Trino client hands `requests` the certificate and
+key as *paths*, and `requests` reopens them at every TLS handshake, where httpx is given a
+context with the bytes already in it — so one coordinator reached through two libraries
+presented two different identities as soon as one file rotated, confirmed against a server
+reporting the CN it was shown. And PyMongo builds its `SSLContext` while validating its
+options and keeps that object, so MongoDB cannot be handed a new one without rebuilding the
+client.
+
+Together those rule out the middle option. Reloading Trino alone would leave a rotated CA
+trusted by the coordinator, the provider and the webhook but not by MongoDB — a split in the
+one thing this section's single bundle exists to keep whole. Reloading everything would mean
+replacing the Mongo client while requests are in flight. And since an organisation rotating
+its root touches all four destinations, a restart is needed either way; reloading one of them
+early only makes the window asymmetric. So `app/trust.py` copies the PEMs Apchi presents to
+files it owns and hands those to both libraries, which has the side benefit of being the only
+place the private key can be `0600` — a Secret mount cannot go below `0640` (§13.2).
+
+A rotation is **reported, never refused**. `app.trust` remembers the digest of what it read,
+compares it against the mount, and the Apply path logs a warning naming the file. It is not a
+§16 precondition on purpose: a certificate Apchi has not reread is still a working
+certificate until the destination stops accepting it, so refusing would block an Apply that
+would have succeeded, and would do it in the middle of a correct rotation. Each certificate's
+subject and expiry are logged as it loads, since the restart is the only moment a deployment
+of this shape has to tell an Admin what is now in use.
+
 Two things follow from that boundary rather than from a recovery plan:
 
 - **Apchi keeps exactly one number outside MongoDB**: the highest Snapshot it has ever
@@ -2706,17 +2738,30 @@ Additional constraints:
   a restored-or-lost database cannot tell you itself — the high-water mark lives in a
   ConfigMap outside MongoDB, so an empty `snapshots` collection is distinguishable from a new
   install and Adoption answers those two differently (§15).
-- **Certificate and CA rotation.** The trust bundle is concatenated once per path and cached
-  for the life of the process, so a rotated root reaches nothing until the pod restarts, even
-  though the kubelet projects the new bytes within a minute. The certificates Apchi *presents*
-  are worse than uniform: `app.trust` loads them into an `SSLContext` when the adapter is
-  built in the lifespan, while the official Trino client stores the two paths and lets
-  `requests` open them per connection — so after a rotation Apchi's liveness check and its
-  queries would present different certificates until a restart. Tolerable for the lifetimes
-  these certificates usually have and wrong for short-lived ones; an issuer renewing hourly
-  needs the mount watched or a signal handled, and the fix should make the two halves of that
-  destination read the same files at the same moment. Nothing warns today;
-  [#193](https://github.com/InfinityHub123/apchi/issues/193) has the measurements and the
-  decisions still open.
+- ~~**Certificate and CA rotation**~~ — **settled** (§18, "Reading a certificate once"):
+  everything Apchi presents or trusts is read once, at startup, so a rotation takes effect
+  when the pod restarts, and Apchi says so rather than being silent about it
+  ([#193](https://github.com/InfinityHub123/apchi/issues/193)).
+
+  What was actually wrong was not the staleness but an asymmetry. The official Trino client
+  hands `requests` the certificate and key as *paths* and `requests` reopens them at every
+  handshake, while httpx is given a context holding the bytes — so one coordinator reached
+  through two libraries presented two identities the moment one file was rotated, measured
+  against a server reporting the CN it was shown. `app.trust` copies both PEMs to files it
+  owns and hands those to both, which is also the one place the private key can be 0600
+  rather than the 0640 a Secret mount floors at (§13.2).
+
+  Reloading instead was rejected for a reason worth keeping: PyMongo holds its certificate as
+  bytes in a context built with the client, so MongoDB could not follow a reload without the
+  client being rebuilt — and a CA that reloaded for Trino, the provider and the webhook while
+  MongoDB kept the old bundle would split trust across destinations, which is the failure
+  §18's one bundle exists to prevent. A realistic rotation is an organisation rotating its
+  root, which touches all four, so a restart was required regardless.
+
+  What remains open is narrower: a **near-expiry warning**. The subject and expiry of every
+  certificate are logged as it is loaded, which serves a deployment that rotates by
+  restarting, but a pod up for sixty days logged that sixty days ago. A warning needs a
+  threshold setting and something to re-check it on, which is a timer this slice deliberately
+  did not add.
 - **API policy** — breaking changes, deprecation, new versions.
 - **Draining** — deferred to Trino Gateway blue/green.

@@ -126,6 +126,12 @@ secrets:
 | `service.type`, `service.port` | `ClusterIP`, `8000` | |
 | `resources`, `nodeSelector`, `tolerations`, `affinity`, `podAnnotations`, `podLabels` | | The usual |
 
+**Rotating anything under `trino.tls`, `mongodb.tls` or `pod.caBundle` needs a
+`kubectl rollout restart`.** Apchi reads all of it once, at startup, which is what keeps the
+coordinator's two client libraries from presenting different certificates mid-rotation; the
+next Apply logs a warning naming a file that changed, and each certificate's expiry is logged
+as it loads. §18 argues it and #193 has the measurements.
+
 `scripts/check_chart_env.py` renders this chart and builds Apchi's own `Settings` out of the
 result, so a value the application does not read, or a value it will not parse, fails CI
 rather than becoming a pod that will not start. CI runs it.

@@ -97,6 +97,17 @@ queries disagree. `requests` also reads `REQUESTS_CA_BUNDLE` while httpx reads
 `SSL_CERT_FILE`, so none of this is left to the environment. httpx additionally deprecates
 both a path-valued `verify` and `cert` in favour of an `ssl.SSLContext`.
 
+**Read once, at startup, and never again** — and the certificate Apchi *presents* is a copy
+`app.trust` owns, not the mounted file. Same reason, pointing the other way: `requests` is
+handed the two paths and reopens them at every handshake, where httpx holds the bytes, so
+against a rotating Secret the query session and the liveness check presented two different
+identities. Reloading was rejected: PyMongo keeps the context it builds with the client, so
+MongoDB cannot follow without being rebuilt, and a CA reloaded for Trino alone splits trust
+across destinations. So a rotation needs a pod restart — logged with the file's name, and
+never a refusal, because what Apchi loaded still works until the destination stops accepting
+it. A certificate's subject and expiry are logged as it loads, since the restart is the only
+moment there is to say so. See §18 and #193.
+
 ## Deployment shapes
 
 Trino clusters mount `/etc/trino` in one of two ways, and it decides what Apchi can deliver.

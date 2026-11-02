@@ -7,6 +7,7 @@ context built the other way. So the bundle is concatenated once and every client
 result, and these tests hold that property rather than the implementation.
 """
 
+import asyncio
 import http.server
 import json
 import logging
@@ -29,6 +30,7 @@ from app.adapters.mongo import _tls_options
 from app.adapters.trino import Trino
 from app.auth.oidc import OidcError, OidcProvider
 from app.config import Environment, Settings
+from app.pipeline.applies import TERMINAL
 from app.pipeline.auto_rollback import _alert
 from app.trust import bundled_ca, presented, verification
 from tests.certificates import TlsChain, tls_chain
@@ -572,3 +574,37 @@ def test_the_expiry_of_a_presented_certificate_is_logged(
     assert expiry.isoformat() in caplog.text
     # The key file holds no certificate, so it says nothing rather than warning.
     assert "could not parse" not in caplog.text
+
+
+async def test_an_apply_says_so_when_a_mounted_certificate_has_changed(
+    applying_client: httpx.AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The wiring, through a real Apply rather than by calling `log_rotations` directly.
+
+    Before every Apply and not once at startup, for the same reason §16's preconditions are:
+    a Secret can be rewritten under a long-lived pod at any moment, and the Apply is the
+    operation whose failure would otherwise be attributed to the Cluster.
+    """
+    mounted = tmp_path / "mounted.pem"
+    mounted.write_bytes(b"what Apchi read")
+    monkeypatch.setattr(trust, "_loaded", {})
+    trust.recorded(str(mounted))
+    mounted.write_bytes(b"what the kubelet put there since")
+
+    with caplog.at_level(logging.WARNING, logger="app.trust"):
+        apply_id = (await applying_client.post("/api/v1/applies")).json()["id"]
+        deadline = asyncio.get_running_loop().time() + 30.0
+        while asyncio.get_running_loop().time() < deadline:
+            record = (await applying_client.get(f"/api/v1/applies/{apply_id}")).json()
+            if record["stage"] in TERMINAL:
+                break
+            await asyncio.sleep(0.02)
+
+    # Warned, and the Apply still ran: what Apchi loaded works until the destination stops
+    # accepting it, so refusing here would block an Apply that would have succeeded.
+    assert record["stage"] == "succeeded"
+    assert str(mounted) in caplog.text
+    assert "restart Apchi" in caplog.text
