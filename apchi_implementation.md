@@ -2002,9 +2002,9 @@ authenticate them by certificate, so Apchi takes a CA and a certificate for its 
 connection (#186). Three things about that are not guesses and are worth recording:
 
 - **One PEM, not two.** PyMongo's `tlsCertificateKeyFile` holds the certificate and its key in
-  a single file, where the Trino client wants them apart (§16's ninth precondition). The two
-  settings are shaped differently because the two clients are. What Apchi *trusts* is one
-  setting for all four destinations, below.
+  a single file, where the Trino client wants them apart (§16, "Two HTTP libraries reach one
+  coordinator"). The two settings are shaped differently because the two clients are. What
+  Apchi *trusts* is one setting for all four destinations, below.
 - **Either file turns TLS on.** PyMongo builds its SSL context from them and does not also
   need `tls=true`, verified against a mongod running `--tlsMode requireTLS`. There is no
   silently-plaintext configuration to fall into here, unlike the port-based scheme inference
@@ -2650,6 +2650,15 @@ Additional constraints:
 - **`FileCatalogStore` enumerates its directory only in its constructor.** Catalog files
   written while the coordinator is running are never picked up until it restarts — which is
   why catalogs are applied by DDL rather than by writing files.
+- **Every authentication type requires TLS.** With an authenticator configured alongside
+  HTTPS, `http-server.authentication.allow-insecure-over-http` defaults to false and plain
+  HTTP is refused for *every* client; Trino's documentation calls overriding it not
+  recommended. So there is no degraded plaintext connection for Apchi to fall back to, which
+  is what makes §16's ninth precondition a refusal rather than a warning.
+- **The official Trino client reads `https` from the port only at exactly 443.** 8443 —
+  Trino's own documented HTTPS port — produced plaintext requests against a TLS listener and
+  reported nothing at all. The client takes a URL in place of a host, which is why the
+  coordinator is configured as one (§16).
 
 # 27. Open items
 
@@ -2697,5 +2706,15 @@ Additional constraints:
   a restored-or-lost database cannot tell you itself — the high-water mark lives in a
   ConfigMap outside MongoDB, so an empty `snapshots` collection is distinguishable from a new
   install and Adoption answers those two differently (§15).
+- **Certificate and CA rotation.** The trust bundle is concatenated once per path and cached
+  for the life of the process, so a rotated root reaches nothing until the pod restarts, even
+  though the kubelet projects the new bytes within a minute. The certificates Apchi *presents*
+  are worse than uniform: `app.trust` loads them into an `SSLContext` when the adapter is
+  built in the lifespan, while the official Trino client stores the two paths and lets
+  `requests` open them per connection — so after a rotation Apchi's liveness check and its
+  queries would present different certificates until a restart. Tolerable for the lifetimes
+  these certificates usually have and wrong for short-lived ones; an issuer renewing hourly
+  needs the mount watched or a signal handled, and the fix should make the two halves of that
+  destination read the same files at the same moment. Not ticketed, and nothing warns today.
 - **API policy** — breaking changes, deprecation, new versions.
 - **Draining** — deferred to Trino Gateway blue/green.

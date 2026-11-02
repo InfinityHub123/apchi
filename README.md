@@ -52,6 +52,15 @@ lives as Secrets; and Trino itself, which it talks to as an ordinary SQL client.
                                                         from the mounted files
 ```
 
+Each of those connections can be TLS, and a coordinator that authenticates its callers
+requires it. Apchi takes a **URL** for the coordinator rather than a host and a port, so
+`https://trino:8443` means what it says; it presents a client certificate to a Trino that
+authenticates by one, and to a MongoDB that does; and a private certificate authority is one
+setting covering every destination — the coordinator, MongoDB, your identity provider and the
+alert webhook — **added to** the public trust store rather than replacing it, so trusting your
+own CA cannot break a public one. [`docs/getting-started.md`](docs/getting-started.md) has the
+values.
+
 Nothing about Trino's deployment belongs to Apchi. The Admin owns the Deployment, the heap
 sizes and the image; Apchi owns the configuration files inside it, delivered through Secrets
 the coordinator mounts. That is the whole coupling, and it is why installing Apchi is just
@@ -156,8 +165,13 @@ Apchi and a MongoDB and tells you what to do next:
   Apchi names which one failed rather than half-applying. Apchi is developed and tested
   against Trino **483**, and several things it relies on were established by reading that
   version rather than its documentation — another version may well work, but no other
-  version has been tried.
-- MongoDB, for Apchi's own Snapshots and in-flight state.
+  version has been tried. A cluster that authenticates its callers also requires TLS of them
+  — that is Trino's rule, not Apchi's — so there the coordinator URL must be `https://`, and
+  Apchi refuses an apply it can see would never be answered rather than letting every query
+  time out.
+- MongoDB, for Apchi's own Snapshots and in-flight state. TLS and `MONGODB-X509`
+  authentication are supported, and x509 is worth preferring where it is on offer — the
+  connection URI is a Helm value, so an x509 one carries no secret where a password would.
 - **Apchi runs inside the cluster**, in the Trino namespace. Validation starts a throwaway
   coordinator and talks to it by pod IP, which is not reachable from a laptop; running Apchi
   outside the cluster makes every validation time out.
@@ -229,6 +243,11 @@ Built, and covered end to end:
   Every route carries a gate, and a test walks the published contract so a route added later
   cannot ship ungated. Operators own all six Sections; Admins additionally write Raw Files and
   engage Maintenance Mode.
+- **TLS on everything Apchi connects to.** HTTPS to the coordinator, with a client
+  certificate where Trino authenticates by one; TLS and x509 to MongoDB; and one CA bundle
+  for all four outbound destinations, added to the public store rather than substituted for
+  it. Covered against a real Trino 483 with certificate authentication, a real MongoDB
+  requiring TLS, and real HTTPS servers for the provider and the webhook.
 - **An audit trail.** Who changed what, and when, recorded at the one chokepoint an edit
   cannot skip — so a shared Candidate is still attributable. Refusals are recorded too.
 - **Adoption.** A cluster configured before Apchi, or by hand, can be brought under
@@ -248,6 +267,10 @@ Not built:
   database is your platform's job — the same division Apchi draws for the Trino deployment
   it configures. Point `mongodb.uri` at something durable; the MongoDB the chart can deploy
   is for trying Apchi out and loses everything when its pod restarts.
+- **Certificate rotation needs a restart.** The CA bundle is built once per process, so a
+  rotated root takes effect when the pod restarts rather than when the Secret changes. Fine
+  for the lifetimes these certificates usually have; not yet fine for an issuer that renews
+  hourly (§27).
 - **The interactive reference is open.** `/docs`, `/redoc` and `/openapi.json` answer without
   credentials, by decision: what they expose is the shape of the API, which this repository
   publishes anyway, and "Try it out" sends real requests that meet the gate like any other.

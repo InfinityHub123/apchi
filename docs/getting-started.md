@@ -488,7 +488,7 @@ helm upgrade apchi charts/apchi -n apchi --reuse-values \
 ```
 
 **`client.pem` holds the certificate and its key in one file.** That is PyMongo's
-`tlsCertificateKeyFile` shape, and it differs from `trino.tls` above, which wants the two
+`tlsCertificateKeyFile` shape, and it differs from `trino.tls` below, which wants the two
 apart. `cat cert.pem key.pem > client.pem` is the whole of it.
 
 **Either file turns TLS on.** There is no `tls=true` to remember — PyMongo builds its SSL
@@ -530,7 +530,7 @@ plaintext requests against a TLS listener and reported nothing. `trino.url` carr
 scheme so that cannot happen.
 
 **A private CA goes in `pod.caBundle`, not here.** One bundle covers every outbound
-connection Apchi makes — see *Trusting a private CA* below. `trino.tls` is only the
+connection Apchi makes — see *Trusting a private CA* above. `trino.tls` is only the
 certificate Apchi presents.
 
 **The certificate is only needed for `http-server.authentication.type=CERTIFICATE`.** Trino
@@ -557,7 +557,7 @@ to serve it from — a 503 means MongoDB is unreachable, which is a different th
 
 **Every Apply is refused with "Trino then refuses plain HTTP from every client".** The
 coordinator authenticates its callers and Apchi is configured for `http://`. See
-*Reaching a coordinator over HTTPS* below.
+*Reaching a coordinator over HTTPS* above.
 
 **A validation fails with "the validation coordinator was not serving within 300s".** Either
 Apchi is running outside the cluster, where it cannot reach the probe's pod IP, or the node is

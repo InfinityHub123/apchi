@@ -113,6 +113,12 @@ can.
 reads the user-mapping file; it does not configure TLS, a keystore or a truststore. Those
 go through `trino.additionalCoordinatorProperties` and mounts of your own.
 
+If you do configure them, Apchi has to be told, because an authenticator makes Trino refuse
+plain HTTP from every client: set `trino.url=https://...` on the Apchi chart, and
+`trino.tls.*` so Apchi has a certificate to present. Apchi asserts this before every Apply
+and refuses rather than letting the queries time out — `charts/apchi/README.md` for the
+values, `docs/getting-started.md` for a worked example.
+
 **Autoscaling, ingress, exchange managers, JMX export, Kafka schemas, group providers.**
 The official chart has all of these. If you need them, that is the chart to use — and #93
 is what has to land first.
