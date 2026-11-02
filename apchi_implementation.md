@@ -2082,8 +2082,9 @@ certificate Apchi loaded is inside `certificate_expiring_within_days`, and repor
 already past it at `ERROR`. Of what was *loaded* and never of what is mounted — those differ
 after a rotation, and the one deciding whether a connection still works is the one Apchi is
 presenting. It is an Apply and not a timer because there is no periodic task in this codebase
-to hang it on, and that limit is real rather than hidden: a Cluster nobody applies to hears
-nothing between restarts (§27, #196).
+to hang it on, and that limit is accepted rather than hidden: a Cluster nobody applies to
+hears nothing between restarts, for which the answer is a log alert on `app.trust` and not a
+scheduler Apchi would have to grow (§27, #196).
 
 Two things follow from that boundary rather than from a recovery plan:
 
@@ -2772,12 +2773,14 @@ Additional constraints:
   on it — and reports one already past expiry at `ERROR`, so an alert rule can separate
   "renew this soon" from "this is already broken" without matching message text.
 
-  That leaves **a Cluster nobody applies to**, which hears nothing between restarts. Closing
-  it needs somewhere to say it, and there is nowhere: no UI (§21), nothing polling, the alert
-  webhook is the failed-Auto-Rollback channel, and the codebase has no periodic task at all —
-  every loop in it is bounded and scoped to an operation in flight. The first scheduler here
-  should not arrive for a certificate expiry.
-  [#196](https://github.com/InfinityHub123/apchi/issues/196) holds that, waiting on a
-  consumer rather than on a design.
+  That leaves **a Cluster nobody applies to**, which hears nothing between restarts, and that
+  is accepted rather than pending. Closing it needs somewhere to say it and there is nowhere:
+  no UI (§21), nothing polling, the alert webhook is the failed-Auto-Rollback channel, and
+  the codebase has no periodic task at all — every loop in it is bounded and scoped to an
+  operation in flight. The first scheduler here should not arrive for a certificate expiry,
+  and an endpoint nothing can call would commit a path to a published contract to serve a
+  consumer that does not exist.
+  [#196](https://github.com/InfinityHub123/apchi/issues/196) is closed on those grounds; the
+  documented workaround is a log alert on `app.trust`.
 - **API policy** — breaking changes, deprecation, new versions.
 - **Draining** — deferred to Trino Gateway blue/green.

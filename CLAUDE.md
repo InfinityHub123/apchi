@@ -109,7 +109,8 @@ it. A certificate's subject and expiry are logged as it loads, and the Apply pat
 when one is inside `certificate_expiring_within_days` — of what was *loaded*, never of what is
 mounted, since a rotation makes those two different certificates. An Apply rather than a timer
 because there is no periodic task in this codebase, which leaves a Cluster nobody applies to
-hearing nothing between restarts (#196). See §18, #193.
+hearing nothing between restarts — accepted, with a log alert on `app.trust` as the answer
+rather than a scheduler (#196). See §18, #193.
 
 ## Deployment shapes
 
