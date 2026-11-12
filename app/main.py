@@ -28,6 +28,7 @@ from app.api.resource_groups import router as resource_groups_router
 from app.api.snapshots import router as snapshots_router
 from app.api.tokens import router as tokens_router
 from app.api.validations import router as validations_router
+from app.api.web import mount_web
 from app.audit.events import AuditStore
 from app.auth.logins import LoginStore
 from app.auth.oidc import OidcProvider
@@ -258,6 +259,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             dependencies=[AdminOnly],
             responses=unauthenticated | forbidden,
         )
+
+    # Last, because its catch-all GET must not shadow a real route. See app/api/web.py for
+    # why the UI has to be on this origin rather than its own.
+    mount_web(app)
     return app
 
 
