@@ -529,6 +529,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/sign-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How to sign in here
+         * @description The one question a caller with no credential may ask.
+         *
+         *     Without it a UI cannot tell `password` from `sso`: `/auth/me` answers 401 in both, and
+         *     the only difference is the prose of the refusal -- which would make a client branch on
+         *     an error message, and make that message a contract nobody meant to publish.
+         *
+         *     It discloses nothing a caller could not establish by trying both endpoints, and it is
+         *     deliberately the configured mode and nothing else: no issuer, no client id, no hint
+         *     about which users exist.
+         */
+        get: operations["sign_in_api_v1_auth_sign_in_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/sso/callback": {
         parameters: {
             query?: never;
@@ -1563,6 +1591,16 @@ export interface components {
              */
             via: "none" | "password" | "sso" | "token";
         };
+        /**
+         * AuthMode
+         * @description How a caller proves who they are (§19, #128).
+         *
+         *     `NONE` is the default because it is what Apchi does today -- every endpoint open -- and
+         *     anything else would break every existing install on upgrade. Tokens are not a mode: they
+         *     are a credential an authenticated user mints, so they need one of the others.
+         * @enum {string}
+         */
+        AuthMode: "none" | "password" | "sso";
         /** Body_upload_certificate_api_v1_certificates_post */
         Body_upload_certificate_api_v1_certificates_post: {
             /**
@@ -2573,6 +2611,14 @@ export interface components {
              * @description Evaluated top to bottom.
              */
             selectors?: components["schemas"]["Selector"][];
+        };
+        /**
+         * SignIn
+         * @description How a caller with no credential is meant to get one.
+         */
+        SignIn: {
+            /** @description Which of Apchi's three authentication modes is configured. `none` means every caller is already an Admin and there is nothing to sign in to. */
+            mode: components["schemas"]["AuthMode"];
         };
         /** Snapshot */
         Snapshot: {
@@ -3861,6 +3907,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Identity"];
+                };
+            };
+            /** @description No usable credential. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    sign_in_api_v1_auth_sign_in_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignIn"];
                 };
             };
             /** @description No usable credential. */

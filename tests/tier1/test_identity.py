@@ -19,6 +19,7 @@ from starlette.routing import Route
 
 from app.adapters.trino import Trino
 from app.api.deps import caller
+from app.api.web import UI_ROUTES, mount_web
 from app.auth.identity import NOBODY, Identity
 from app.config import AuthMode, Settings
 from app.main import create_app
@@ -35,9 +36,15 @@ from tests.conftest import FakeKubernetes
 #: stricter tests: not "does it refuse nobody" but "does it refuse the wrong password, the
 #: unknown user and the disabled account alike", and "does it refuse a replayed state, a
 #: mismatched one, and a token signed by the wrong key".
+#: /auth/sign-in answers which authentication mode is configured, and has to answer it to a
+#: caller who has no credential yet -- that is the whole reason it exists. Without it a UI
+#: cannot tell `password` from `sso`, because /auth/me refuses in both and only the prose of
+#: the refusal differs. It discloses the mode and nothing else: no issuer, no client id, and
+#: no hint about which accounts exist, which test_sign_in_discovery.py asserts.
 OPEN = {
     "/api/v1/health",
     "/api/v1/auth/login",
+    "/api/v1/auth/sign-in",
     "/api/v1/auth/sso/login",
     "/api/v1/auth/sso/callback",
 }
@@ -219,7 +226,7 @@ def test_nothing_else_is_served_outside_the_contract(settings: Settings) -> None
     instances, which is the reason the rest of this file reads the contract instead -- but the
     routes that escape the contract are exactly the plain ones, so this needs nothing private.
     """
-    app = create_app(settings)
+    app = _api_only(settings)
     contract = set(json.loads(CONTRACT.read_text())["paths"])
     served = {route.path for route in app.routes if isinstance(route, Route)}
 
@@ -227,6 +234,69 @@ def test_nothing_else_is_served_outside_the_contract(settings: Settings) -> None
         "the set of routes served but not published has changed; classify each one as gated "
         "(put it in the contract) or deliberately open (name it in UNDOCUMENTED_AND_OPEN)"
     )
+
+
+def test_serving_the_ui_adds_exactly_two_routes_and_no_data(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """The UI is served from this origin (app/api/web.py), which means a catch-all GET.
+
+    A catch-all is the one thing that could quietly answer for a path the contract never
+    mentions, so what it adds is asserted rather than trusted -- and the previous test is
+    pinned to the API-only app, because otherwise this whole file passes or fails depending
+    on whether somebody has run a frontend build.
+    """
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "index.html").write_text("<!doctype html><title>Apchi</title>")
+
+    app = create_app(settings)
+    assert mount_web(app, tmp_path) is True
+
+    served = {route.path for route in app.routes if isinstance(route, Route)}
+    api_only = {route.path for route in _api_only(settings).routes if isinstance(route, Route)}
+
+    assert served - api_only == UI_ROUTES
+
+
+async def test_the_ui_catch_all_never_answers_for_an_api_path(
+    settings: Settings, fake_kubernetes: FakeKubernetes, tmp_path: Path
+) -> None:
+    """A mistyped API path must 404, not come back as the entry document.
+
+    An HTML body where JSON was expected is the failure that reads as a client bug for an
+    hour: the request looks like it worked.
+    """
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "index.html").write_text("<!doctype html><title>Apchi</title>")
+
+    app = create_app(settings)
+    mount_web(app, tmp_path)
+    app.state.kubernetes = fake_kubernetes
+    app.state.trino = Trino(url="http://127.0.0.1:1")
+
+    async with (
+        AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as http,
+        app.router.lifespan_context(app),
+    ):
+        assert (await http.get("/api/v1/nope")).status_code == 404
+        assert (await http.get("/api/v1/catalogs/../secrets")).status_code == 404
+
+        # A client-side route, by contrast, has to answer with the document so a reload or a
+        # pasted link does not 404.
+        document = await http.get("/catalogs")
+        assert document.status_code == 200
+        assert document.headers["content-type"].startswith("text/html")
+
+
+def _api_only(settings: Settings) -> FastAPI:
+    """The app with no UI build in front of it, whatever is on this machine's disk."""
+    app = create_app(settings)
+    # create_app mounts the UI when a build exists, so the routes it may have added are
+    # dropped rather than hoping the build is absent.
+    app.router.routes = [
+        route for route in app.routes if not (isinstance(route, Route) and route.path in UI_ROUTES)
+    ]
+    return app
 
 
 async def test_health_needs_no_identity(unauthenticatable: AsyncClient) -> None:
