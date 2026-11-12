@@ -29,7 +29,7 @@ test("password mode offers a real form, not a div that listens for clicks", asyn
   await expect(page.getByLabel("Password")).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
   // The console is not behind it, merely hidden.
-  await expect(page.getByText("Candidate", { exact: true })).toHaveCount(0);
+  await expect(candidate(page)).toHaveCount(0);
 });
 
 test("a wrong password shows exactly what Apchi said and nothing more", async ({ page }) => {
@@ -88,7 +88,7 @@ test("a correct password reaches the console without a second round trip", async
   await page.getByLabel("Password").fill("right");
   await page.getByRole("button", { name: "Sign in" }).click();
 
-  await expect(page.getByText("Candidate", { exact: true })).toBeVisible();
+  await expect(candidate(page)).toBeVisible();
   await expect(page.getByRole("banner")).toContainText("jo");
 });
 
@@ -107,7 +107,7 @@ test("none mode never shows a sign-in screen or a sign-out control", async ({ pa
   await stubApi(page, { caller: { subject: "nobody", role: "admin", via: "none" } });
   await page.goto("/");
 
-  await expect(page.getByText("Candidate", { exact: true })).toBeVisible();
+  await expect(candidate(page)).toBeVisible();
   await expect(page.getByLabel("Password")).toHaveCount(0);
   // There is no session to end, so offering the control would be a button that does nothing.
   await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
@@ -124,7 +124,7 @@ test("a signed-in caller can sign out, and lands back on the sign-in screen", as
   );
   await page.goto("/");
 
-  await expect(page.getByText("Candidate", { exact: true })).toBeVisible();
+  await expect(candidate(page)).toBeVisible();
 
   await page.route("**/api/v1/auth/logout", async (r) => {
     await page.route("**/api/v1/auth/me", (m) =>
@@ -137,7 +137,7 @@ test("a signed-in caller can sign out, and lands back on the sign-in screen", as
 
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
   // Nothing the previous session read may remain on the screen.
-  await expect(page.getByText("Candidate", { exact: true })).toHaveCount(0);
+  await expect(candidate(page)).toHaveCount(0);
 });
 
 test("an unreachable Apchi says so rather than offering a form that cannot work", async ({
@@ -171,3 +171,8 @@ test("the sign-in form is completable from the keyboard alone", async ({ page })
   await page.keyboard.press("Tab");
   await expect(page.getByRole("button", { name: "Sign in" })).toBeFocused();
 });
+
+/** The Candidate strip, which every screen carries and more than one place names. */
+function candidate(page: import("@playwright/test").Page) {
+  return page.getByRole("region", { name: "Candidate" });
+}

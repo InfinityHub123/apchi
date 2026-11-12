@@ -22,10 +22,12 @@ test("a staged Candidate says so, and says how many changes", async ({ page }) =
   await stubApi(page);
   await page.goto("/");
 
-  await expect(page.getByText("Candidate", { exact: true })).toBeVisible();
-  await expect(page.getByText("4 changes")).toBeVisible();
-  // The point of the strip: staged is not live, and it says that in the work area too.
-  await expect(page.getByText(/Nothing here has reached the cluster/)).toBeVisible();
+  // Scoped to the strip: the Overview reports the same count, and an unscoped match would
+  // pass while the strip said nothing.
+  await expect(candidate(page)).toContainText("4 changes");
+  await expect(candidate(page)).toContainText("based on Snapshot 118");
+  // The point of the strip: staged is not live, and the work area says so too.
+  await expect(page.getByText(/Nothing below has reached the cluster/)).toBeVisible();
 });
 
 test("a Candidate that forces a rollout carries the live query count", async ({ page }) => {
@@ -126,3 +128,8 @@ test("every interactive control is reachable by keyboard", async ({ page }) => {
   expect(reachable).toContain("button:Validate");
   expect(reachable).toContain("button:Apply");
 });
+
+/** The Candidate strip, which every screen carries and more than one place names. */
+function candidate(page: import("@playwright/test").Page) {
+  return page.getByRole("region", { name: "Candidate" });
+}
