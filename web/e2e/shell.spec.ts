@@ -100,14 +100,8 @@ test("auth.mode=none leaves nobody to name rather than erroring", async ({ page 
 });
 
 test("a failed review is reported, not rendered as empty", async ({ page }) => {
-  await page.route("**/api/v1/review", (r) =>
-    r.fulfill({
-      status: 503,
-      contentType: "application/json",
-      body: JSON.stringify({ detail: "MongoDB is unreachable" }),
-    }),
-  );
-  await stubApi(page, { review: REVIEW_CLEAN });
+  await stubApi(page);
+  // Registered after stubApi, because Playwright matches the most recently added route.
   await page.route("**/api/v1/review", (r) =>
     r.fulfill({
       status: 503,
