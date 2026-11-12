@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { Pill, CostPill } from "../ui/Pill";
+import { Diff } from "../ui/Diff";
 import { sectionLabel, sectionRestarts } from "../sections";
 import type { Review } from "../api/client";
 import {
@@ -122,28 +124,13 @@ export function Overview({
             <tbody>
               {changed.flatMap((s) =>
                 (s.changes ?? []).map((c, i) => (
-                  <tr key={`${s.section}:${c.resource}`}>
-                    <td>
-                      {i === 0 ? (
-                        <span className="strong">{sectionLabel(s.section)}</span>
-                      ) : (
-                        <span className="muted" aria-hidden="true">
-                          ·
-                        </span>
-                      )}
-                    </td>
-                    <td className="mono">
-                      <ChangeMark change={c.change} /> {c.resource}
-                    </td>
-                    <td className="muted">
-                      {by.get(`${s.section}:${c.resource}`) ?? (
-                        <span title="The audit trail does not attribute this change.">—</span>
-                      )}
-                    </td>
-                    <td className="right">
-                      <CostPill restarts={sectionRestarts(s.section)} />
-                    </td>
-                  </tr>
+                  <ChangeRow
+                    key={`${s.section}:${c.resource}`}
+                    section={s.section}
+                    first={i === 0}
+                    change={c}
+                    by={by.get(`${s.section}:${c.resource}`)}
+                  />
                 )),
               )}
             </tbody>
@@ -188,6 +175,71 @@ export function Overview({
             </tbody>
           </table>
         </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * One staged change, and what it does to the resource when opened.
+ *
+ * Collapsed by default: a Candidate with six changes across four Sections is read for its
+ * shape first, and an Operator opens the one they are unsure about. Expanding is a real
+ * button with aria-expanded, so the row is reachable and its state announced.
+ */
+function ChangeRow({
+  section,
+  first,
+  change,
+  by,
+}: {
+  section: Review["sections"][number]["section"];
+  first: boolean;
+  change: NonNullable<Review["sections"][number]["changes"]>[number];
+  by: string | undefined;
+}) {
+  const [open, setOpen] = useState(false);
+  const id = `diff-${section}-${change.resource}`;
+
+  return (
+    <>
+      <tr>
+        <td>
+          {first ? (
+            <span className="strong">{sectionLabel(section)}</span>
+          ) : (
+            <span className="muted" aria-hidden="true">
+              ·
+            </span>
+          )}
+        </td>
+        <td className="mono">
+          <button
+            type="button"
+            className="rowopen"
+            aria-expanded={open}
+            aria-controls={id}
+            onClick={() => setOpen((o) => !o)}
+          >
+            <span className={`rowopen__caret${open ? " rowopen__caret--open" : ""}`} aria-hidden="true">
+              ›
+            </span>
+            <ChangeMark change={change.change} /> {change.resource}
+          </button>
+        </td>
+        <td className="muted">
+          {by ?? <span title="The audit trail does not attribute this change.">—</span>}
+        </td>
+        <td className="right">
+          <CostPill restarts={sectionRestarts(section)} />
+        </td>
+      </tr>
+      {open && (
+        <tr id={id} className="diffrow">
+          <td colSpan={4}>
+            <Diff before={change.before} after={change.after} />
+          </td>
+        </tr>
       )}
     </>
   );
