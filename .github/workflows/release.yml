@@ -99,6 +99,7 @@ jobs:
           Image: \`$REGISTRY/$owner/apchi:$version\` (linux/amd64, linux/arm64)
           Chart: \`oci://$REGISTRY/$owner/charts/apchi\` at version and appVersion $version
           Docs: https://infinityhub123.github.io/apchi/
+          Changelog: https://github.com/${{ github.repository }}/blob/v$version/CHANGELOG.md
           EOF
           {
             echo "## Published $version"

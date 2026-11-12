@@ -232,6 +232,12 @@ scripts/
 Apchi is under active development. **v0.1.1** is the first published release — the image and
 the chart are on GHCR, and `main` is usually ahead of it.
 
+**If you automate against the API**, read this: while Apchi is `0.x` a breaking change may
+land in any minor release, and each one is named under `## Breaking` in
+[`CHANGELOG.md`](https://github.com/InfinityHub123/apchi/blob/main/CHANGELOG.md). The contract
+firms up at 1.0. There is no `/api/v2` planned and no deprecation window — §19 argues why —
+and `openapi.json` in this repository is the contract itself.
+
 The backend is complete. The configuration loop is tested end to end against a real Trino on a
 real Kubernetes for all six Sections, on both of the deployment shapes Trino clusters come in
 (§16).
