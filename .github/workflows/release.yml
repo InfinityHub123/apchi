@@ -20,7 +20,8 @@ jobs:
     name: Publish the image and the chart
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # write, not read: the last step creates the GitHub Release this tag points at.
+      contents: write
       packages: write
     steps:
       - uses: actions/checkout@v4
@@ -79,17 +80,36 @@ jobs:
           helm package charts/apchi --version "$version" --app-version "$version" -d /tmp/chart
           helm push "/tmp/chart/apchi-$version.tgz" "oci://$REGISTRY/$owner/charts"
 
+      # The same text twice, deliberately: the step summary is where whoever pushed the tag
+      # is already looking, and the Release is where everybody else looks. Writing it only
+      # to the summary left the tag bare -- nothing on the repository said the version
+      # existed or how to install it.
       - name: Say what was published
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           version="${{ steps.version.outputs.version }}"
           owner="${{ steps.version.outputs.owner }}"
-          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
-          ## Published $version
-
+          cat > /tmp/notes.md <<EOF
           \`\`\`sh
           helm install apchi oci://$REGISTRY/$owner/charts/apchi --version $version \\
             --namespace trino --set mongodb.uri=mongodb://your-mongo:27017
           \`\`\`
 
           Image: \`$REGISTRY/$owner/apchi:$version\` (linux/amd64, linux/arm64)
+          Chart: \`oci://$REGISTRY/$owner/charts/apchi\` at version and appVersion $version
+          Docs: https://infinityhub123.github.io/apchi/
           EOF
+          {
+            echo "## Published $version"
+            echo
+            cat /tmp/notes.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # --verify-tag so a workflow_dispatch cannot invent a release for a version no tag
+          # points at, and --generate-notes to append the commit log under the install block.
+          gh release create "v$version" \
+            --title "Apchi v$version" \
+            --notes-file /tmp/notes.md \
+            --generate-notes \
+            --verify-tag
