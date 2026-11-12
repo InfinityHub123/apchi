@@ -2130,8 +2130,28 @@ configuration, its own Apply, and Maintenance Mode. Operators never see these pa
 stability promise above is for the Operator API; the Admin surface may move faster. The
 paths themselves are still to be defined.
 
-A policy is still needed for breaking changes, deprecated endpoints, deprecated fields and
-new API versions.
+**What stability means while Apchi is `0.x`.** A breaking change may land in any minor
+release, and each one is named under `## Breaking` in `CHANGELOG.md`, which the release notes
+link to. The contract firms up at 1.0. That is only SemVer, and it is written down because the
+promise above — that Operators can automate against this — said nothing about what it
+permitted, which left "stable" meaning whatever the last reader assumed.
+
+There is deliberately **no deprecation policy and no planned `/api/v2`**. The image and the
+chart carry one version number, so an operator upgrades both together, and §21's UI will ship
+inside that same image: nothing Apchi owns ever has an old client reaching a new server.
+Deprecation windows, `Sunset` headers and serving two versions side by side are the apparatus
+of an API with pinned external consumers, and building them before there is one would be
+designing for a shape this product does not have. Retiring something stays cheap regardless —
+FastAPI's `deprecated=True` lands in `openapi.json`, which CI already turns into a reviewed
+diff, so it costs nothing on the day it is wanted (#202).
+
+Two breaks here are invisible to that diff, and both belong in the changelog anyway. Pydantic
+models reject unknown fields, so adding an *optional* request field is safe while a client
+already sending an extra one gets a 422 — the reverse of the usual rule, and not something a
+schema change announces. And a response *value* can move with no schema change at all:
+`describe()` recomputes a Client Certificate's `valid`/`expiring`/`expired` on every read
+against `certificate_expiring_within_days` (§13.2), so a client branching on that status reads
+a different answer once an Admin changes the setting.
 
 ## Applies
 
@@ -2782,5 +2802,19 @@ Additional constraints:
   consumer that does not exist.
   [#196](https://github.com/InfinityHub123/apchi/issues/196) is closed on those grounds; the
   documented workaround is a log alert on `app.trust`.
-- **API policy** — breaking changes, deprecation, new versions.
+- ~~**API policy**~~ — **settled** (§19, "What stability means while Apchi is `0.x`"):
+  there is no policy, and that is the decision rather than the omission
+  ([#202](https://github.com/InfinityHub123/apchi/issues/202)).
+
+  Breaking changes land in `0.x` minors, named under `## Breaking` in `CHANGELOG.md`, and the
+  contract firms up at 1.0. No `/api/v2` is planned and no deprecation window is defined,
+  because one version number covers the image and the chart and the UI ships inside the image,
+  so nothing Apchi owns has an old client reaching a new server.
+
+  What was missing was never the policy. It was the channel: no changelog existed, the release
+  notes were a flat commit list, nothing on any of the 56 contract paths could be marked
+  deprecated, and no file said what `0.x` permitted — so "Operators are told before a change"
+  was a promise with nowhere to keep it. The consumer that pays for that is not a reader who
+  would have seen an announcement; it is the CI job §19 cites as the reason for stability in
+  the first place.
 - **Draining** — deferred to Trino Gateway blue/green.

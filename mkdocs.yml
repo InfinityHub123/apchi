@@ -74,6 +74,7 @@ nav:
   - Getting started: getting-started.md
   - Concepts: concepts.md
   - Glossary: glossary.md
+  - Changelog: changelog.md
   - Deploying:
       - The official Trino chart: official-trino-chart.md
       - A development cluster: deploying/trino-dev.md
