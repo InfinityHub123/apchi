@@ -32,6 +32,16 @@ class ApplyCost(BaseModel):
     restarts_coordinator: bool = Field(
         description="Whether applying the Candidate as it stands requires a Rollout."
     )
+    rollout_sections: list[SectionName] = Field(
+        default_factory=list,
+        description=(
+            "Which Sections the Rollout is for, in Section order. §21 requires an Operator "
+            "to see which changes force a restart and which do not, and a client cannot "
+            "work it out from `Section.requires_rollout`: a Section also forces a Rollout "
+            "when what Apchi would render is not what the Cluster has mounted. A name here "
+            "with no entry in the diff is a Rollout that no staged change accounts for."
+        ),
+    )
     queries_at_risk: int | None = Field(
         default=None,
         description=(
@@ -96,7 +106,8 @@ async def cost_of(
 
     A Candidate that needs no restart costs no queries, so there is nothing to count.
     """
-    if not await sections_needing_rollout(plans, desired, cluster):
+    rollout = await sections_needing_rollout(plans, desired, cluster)
+    if not rollout:
         return ApplyCost(restarts_coordinator=False)
 
     try:
@@ -107,4 +118,11 @@ async def cost_of(
         logger.warning("could not count queries at risk", exc_info=True)
         at_risk = None
 
-    return ApplyCost(restarts_coordinator=True, queries_at_risk=at_risk, warning=RESTART_WARNING)
+    return ApplyCost(
+        restarts_coordinator=True,
+        # Registry order rather than the set's, so Review and this list name the Sections in
+        # the same order and a client can join them without sorting either.
+        rollout_sections=[s.name for s in REGISTERED if s.name in rollout],
+        queries_at_risk=at_risk,
+        warning=RESTART_WARNING,
+    )
