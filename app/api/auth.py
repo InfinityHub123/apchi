@@ -254,3 +254,31 @@ async def me(identity: CallerDep) -> Identity:
     it can tell a 403 they expected from one they did not.
     """
     return identity
+
+
+class SignIn(BaseModel):
+    """How a caller with no credential is meant to get one."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: AuthMode = Field(
+        description=(
+            "Which of Apchi's three authentication modes is configured. `none` means every "
+            "caller is already an Admin and there is nothing to sign in to."
+        )
+    )
+
+
+@router.get("/sign-in", response_model=SignIn, summary="How to sign in here")
+async def sign_in(settings: SettingsDep) -> SignIn:
+    """The one question a caller with no credential may ask.
+
+    Without it a UI cannot tell `password` from `sso`: `/auth/me` answers 401 in both, and
+    the only difference is the prose of the refusal -- which would make a client branch on
+    an error message, and make that message a contract nobody meant to publish.
+
+    It discloses nothing a caller could not establish by trying both endpoints, and it is
+    deliberately the configured mode and nothing else: no issuer, no client id, no hint
+    about which users exist.
+    """
+    return SignIn(mode=settings.auth_mode)
