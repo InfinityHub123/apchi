@@ -2,7 +2,8 @@ import { useHealth, useReview } from "./api/queries";
 import { useIdentity, useLogout } from "./auth/useAuth";
 import { SignInScreen } from "./auth/SignInScreen";
 import { Pill, CostPill } from "./ui/Pill";
-import { SECTIONS, sectionLabel, sectionRestarts } from "./sections";
+import { Overview } from "./screens/Overview";
+import { SECTIONS } from "./sections";
 import type { Review } from "./api/client";
 
 /**
@@ -62,7 +63,7 @@ function Console() {
           )}
         />
         <main className="work">
-          <ReviewScreen review={review.data} error={review.error} pending={review.isPending} />
+          <Overview review={review.data} error={review.error} pending={review.isPending} />
         </main>
       </div>
     </div>
@@ -156,14 +157,14 @@ function CandidateStrip({
 
   if (review === undefined || !review.has_changes) {
     return (
-      <div className="strip strip--clean">
+      <section className="strip strip--clean" aria-label="Candidate">
         <span className="strip__title strip__title--clean">No staged changes</span>
         <span className="strip__meta">
           {review?.base_snapshot == null
             ? "no Snapshot yet"
             : `Snapshot ${review.base_snapshot}`}
         </span>
-      </div>
+      </section>
     );
   }
 
@@ -172,7 +173,7 @@ function CandidateStrip({
   const atRisk = cost?.queries_at_risk ?? null;
 
   return (
-    <div className="strip strip--staged">
+    <section className="strip strip--staged" aria-label="Candidate">
       <span className="strip__title">Candidate</span>
       <span className="strip__meta">
         {review.base_snapshot == null
@@ -195,7 +196,7 @@ function CandidateStrip({
           Apply
         </button>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -227,94 +228,4 @@ function SectionRail({ counts }: { counts: Record<string, number> }) {
   );
 }
 
-function ReviewScreen({
-  review,
-  error,
-  pending,
-}: {
-  review: Review | undefined;
-  error: unknown;
-  pending: boolean;
-}) {
-  if (pending) return <p className="note">Reading the Candidate…</p>;
-  if (error !== null && error !== undefined)
-    return <p className="note note--red">{(error as Error).message}</p>;
-  if (review === undefined) return <p className="note">Nothing to show.</p>;
 
-  const changed = review.sections.filter((s) => (s.changes?.length ?? 0) > 0);
-
-  return (
-    <>
-      <h1 className="title">Review</h1>
-      <p className="lede">
-        {review.has_changes
-          ? "Nothing here has reached the cluster. An Apply is the only thing that changes it."
-          : "The Candidate matches the committed Snapshot."}
-      </p>
-
-      {changed.length === 0 ? (
-        <p className="note">
-          No Section has staged changes. Edit a Section to stage one and it will appear here
-          before it reaches Trino.
-        </p>
-      ) : (
-        <div className="panel">
-          <table className="table">
-            <caption className="sr-only">
-              Every staged change in the Candidate, by Section, with what it costs the cluster
-            </caption>
-            <thead>
-              <tr>
-                <th scope="col">Section</th>
-                <th scope="col">Change</th>
-                <th scope="col" className="right">
-                  Costs the cluster
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {changed.flatMap((s) =>
-                (s.changes ?? []).map((c, i) => (
-                  <tr key={`${s.section}:${c.resource}`}>
-                    <td>
-                      {i === 0 ? (
-                        <span className="strong">{sectionLabel(s.section)}</span>
-                      ) : (
-                        <span className="muted" aria-hidden="true">
-                          ·
-                        </span>
-                      )}
-                    </td>
-                    <td className="mono">
-                      <ChangeMark change={c.change} /> {c.resource}
-                    </td>
-                    <td className="right">
-                      <CostPill restarts={sectionRestarts(s.section)} />
-                    </td>
-                  </tr>
-                )),
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </>
-  );
-}
-
-/**
- * Added, changed or removed, as a glyph and a word.
- *
- * Colour alone would not carry it: things that must be told apart differ in lightness too,
- * and an Operator reading a long diff should not have to compare two greens. The word is
- * there for a screen reader, which cannot see either.
- */
-function ChangeMark({ change }: { change: "added" | "changed" | "removed" }) {
-  const mark = { added: "+", changed: "~", removed: "−" }[change];
-  return (
-    <span className={`mark mark--${change}`}>
-      <span className="sr-only">{change} </span>
-      {mark}
-    </span>
-  );
-}
