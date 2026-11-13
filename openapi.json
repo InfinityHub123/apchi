@@ -881,6 +881,58 @@
         "title": "ClientCertificate",
         "type": "object"
       },
+      "ClusterState": {
+        "additionalProperties": false,
+        "description": "What Apchi can answer without asking Trino anything.",
+        "properties": {
+          "last_apply": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LastApply"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The most recent Apply, or null on a Cluster nothing has been applied to. Its Verification is the last word on whether the Cluster was healthy, and it is **history**: it says nothing about now. Probe for that."
+          },
+          "maintenance": {
+            "$ref": "#/components/schemas/MaintenanceState",
+            "description": "Whether Operator changes are disabled, why, and whether an Admin engaged it or Apchi did after a failed Auto Rollback. Readable here by any caller, because the people it stops are the ones who need to know -- `/admin/maintenance-mode` is where an Admin changes it, and that stays Admin-only."
+          },
+          "snapshot": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The committed Snapshot the Cluster is running; null before the first.",
+            "title": "Snapshot"
+          },
+          "snapshot_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When that Snapshot was committed.",
+            "title": "Snapshot At"
+          }
+        },
+        "required": [
+          "snapshot",
+          "maintenance"
+        ],
+        "title": "ClusterState",
+        "type": "object"
+      },
       "Configuration": {
         "additionalProperties": false,
         "description": "The six Sections, and the Admin values when an Admin exported it.",
@@ -1477,6 +1529,69 @@
         "title": "Import",
         "type": "object"
       },
+      "LastApply": {
+        "additionalProperties": false,
+        "description": "The most recent Apply, as far as the Cluster's state is concerned.",
+        "properties": {
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null while it is still in flight.",
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "snapshot": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Snapshot it committed, when it succeeded.",
+            "title": "Snapshot"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/Stage"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "verified": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether Verification passed. Null when this Apply never reached Verification, which is a different answer from `false`: a Validation failure means nothing was delivered and nothing was checked.",
+            "title": "Verified"
+          }
+        },
+        "required": [
+          "id",
+          "stage",
+          "started_at",
+          "verified"
+        ],
+        "title": "LastApply",
+        "type": "object"
+      },
       "MaintenanceState": {
         "properties": {
           "engaged": {
@@ -1770,6 +1885,46 @@
           "privileges"
         ],
         "title": "PrivilegesWrite",
+        "type": "object"
+      },
+      "Probe": {
+        "additionalProperties": false,
+        "description": "One reading, taken when asked.",
+        "properties": {
+          "at": {
+            "description": "When this reading was taken. Already stale by the time it is read.",
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "coordinator": {
+            "description": "`starting` is its own answer rather than a kind of down: a coordinator that is coming back from a Rollout refuses queries and is not broken.",
+            "enum": [
+              "up",
+              "starting",
+              "unreachable"
+            ],
+            "title": "Coordinator",
+            "type": "string"
+          },
+          "workers": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Active workers, and only when asked for. Null otherwise, and null when the coordinator could not be reached or the count failed -- never 0 for 'unknown', because a Cluster with no workers is a real and different state.",
+            "title": "Workers"
+          }
+        },
+        "required": [
+          "at",
+          "coordinator"
+        ],
+        "title": "Probe",
         "type": "object"
       },
       "Problem": {
@@ -5855,6 +6010,94 @@
         "summary": "One certificate",
         "tags": [
           "client certificates"
+        ]
+      }
+    },
+    "/api/v1/cluster": {
+      "get": {
+        "description": "Three reads against MongoDB and nothing outbound, so this is the one to poll.\n\nIt answers \u00a721's always-visible pair -- the committed Snapshot and what is known about\nthe Cluster's health -- plus the state that decides whether an Operator can edit at all.",
+        "operationId": "state_api_v1_cluster_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          }
+        },
+        "summary": "What Apchi knows about the Cluster",
+        "tags": [
+          "cluster"
+        ]
+      }
+    },
+    "/api/v1/cluster/probe": {
+      "get": {
+        "description": "A live reading, and the only thing here that leaves Apchi.\n\nDeliberately not folded into `GET /cluster`: that one is polled, and a console with a\nhealth indicator open on twenty desks would otherwise be twenty requests a second\narriving at a coordinator whose job is queries.\n\nIt never fails. An unreachable coordinator is the answer to this question, not an error\nserving it -- a 503 here would make \"Trino is down\" indistinguishable from \"Apchi is\nbroken\", which is the distinction an Operator opens this for.",
+        "operationId": "probe_api_v1_cluster_probe_get",
+        "parameters": [
+          {
+            "description": "Also count active workers. Off by default because it is a SQL query against `system.runtime.nodes` where the reachability check is one HTTP request, so a caller that only wants to know whether Trino is answering does not pay for a query.",
+            "in": "query",
+            "name": "workers",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Also count active workers. Off by default because it is a SQL query against `system.runtime.nodes` where the reachability check is one HTTP request, so a caller that only wants to know whether Trino is answering does not pay for a query.",
+              "title": "Workers",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Probe"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ask the coordinator how it is, now",
+        "tags": [
+          "cluster"
         ]
       }
     },

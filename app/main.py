@@ -20,6 +20,7 @@ from app.api.candidate import router as candidate_router
 from app.api.catalogs import router as catalogs_router
 from app.api.certificate_mapping import router as certificate_mapping_router
 from app.api.client_certificates import router as certificates_router
+from app.api.cluster import router as cluster_router
 from app.api.deps import AdminOnly, Authenticated
 from app.api.event_listeners import router as event_listeners_router
 from app.api.health import router as health_router
@@ -241,6 +242,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         validations_router,
         audit_router,
         tokens_router,
+        # Authenticated rather than Admin-only, unlike the /admin route that *changes*
+        # Maintenance Mode: the Operators it stops are the ones who need to read it.
+        cluster_router,
     ):
         app.include_router(
             router,
