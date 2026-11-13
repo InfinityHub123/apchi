@@ -20,6 +20,13 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+`GET /api/v1/cluster` and `GET /api/v1/cluster/probe` are new, and answer what §21 asks to
+be visible at all times: the committed Snapshot, what is known about the Cluster's health,
+and whether Maintenance Mode is engaged. The first touches nothing outside MongoDB, so it is
+the one to poll; the second asks the coordinator and takes `?workers=true` for a count that
+costs a SQL query. Maintenance Mode is readable by an Operator there —
+`PUT /admin/maintenance-mode` stays Admin-only, and so does reading it at that path.
+
 `GET /api/v1/auth/sign-in` is new, and answers without a credential in every mode: it
 reports which of the three authentication modes is configured, and nothing else. Nothing
 could tell `password` from `sso` before it, because `/auth/me` refuses in both and only the
