@@ -113,8 +113,12 @@ test("every interactive control is reachable by keyboard", async ({ page }) => {
   await stubApi(page);
   await page.goto("/");
 
+  // Wait for the strip before tabbing: a Tab pressed into a half-rendered page lands
+  // nowhere and the walk below starts from the wrong place.
+  await expect(page.getByRole("button", { name: "Apply" })).toBeVisible();
+
   const reachable: string[] = [];
-  for (let i = 0; i < 14; i += 1) {
+  for (let i = 0; i < 25; i += 1) {
     await page.keyboard.press("Tab");
     const label = await page.evaluate(() => {
       const el = document.activeElement;
