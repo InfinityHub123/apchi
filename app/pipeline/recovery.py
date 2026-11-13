@@ -62,6 +62,7 @@ class RevertEffect(BaseModel):
                     "catalogs_replaced": ["finance_pg"],
                     "cost": {
                         "restarts_coordinator": False,
+                        "rollout_sections": [],
                         "queries_at_risk": None,
                         "warning": None,
                     },

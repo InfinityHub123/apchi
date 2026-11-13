@@ -1469,6 +1469,11 @@ export interface components {
              */
             restarts_coordinator: boolean;
             /**
+             * Rollout Sections
+             * @description Which Sections the Rollout is for, in Section order. §21 requires an Operator to see which changes force a restart and which do not, and a client cannot work it out from `Section.requires_rollout`: a Section also forces a Rollout when what Apchi would render is not what the Cluster has mounted. A name here with no entry in the diff is a Rollout that no staged change accounts for.
+             */
+            rollout_sections?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners")[];
+            /**
              * Warning
              * @description What to show an Operator before they Apply.
              */
