@@ -20,7 +20,11 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
-Nothing yet.
+`GET /api/v1/review` and the Section Revert preview now report `cost.rollout_sections`: which
+Sections the Rollout is for, rather than only whether there is one. Additive, so nothing
+breaks. A client that held its own table of which Sections restart Trino can drop it, and a
+Section named there with no entry in the diff is a Rollout that no staged change accounts for
+— what Apchi would write is not what the Cluster has mounted.
 
 ## 0.1.1 — 2026-11-02
 
