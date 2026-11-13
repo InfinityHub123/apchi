@@ -35,9 +35,15 @@ from tests.conftest import FakeKubernetes
 #: stricter tests: not "does it refuse nobody" but "does it refuse the wrong password, the
 #: unknown user and the disabled account alike", and "does it refuse a replayed state, a
 #: mismatched one, and a token signed by the wrong key".
+#: /auth/sign-in answers which authentication mode is configured, and has to answer it to a
+#: caller who has no credential yet -- that is the whole reason it exists. Without it a UI
+#: cannot tell `password` from `sso`, because /auth/me refuses in both and only the prose of
+#: the refusal differs. It discloses the mode and nothing else: no issuer, no client id, and
+#: no hint about which accounts exist, which test_sign_in_discovery.py asserts.
 OPEN = {
     "/api/v1/health",
     "/api/v1/auth/login",
+    "/api/v1/auth/sign-in",
     "/api/v1/auth/sso/login",
     "/api/v1/auth/sso/callback",
 }

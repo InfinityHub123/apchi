@@ -509,6 +509,16 @@
         "title": "AuditEvent",
         "type": "object"
       },
+      "AuthMode": {
+        "description": "How a caller proves who they are (\u00a719, #128).\n\n`NONE` is the default because it is what Apchi does today -- every endpoint open -- and\nanything else would break every existing install on upgrade. Tokens are not a mode: they\nare a credential an authenticated user mints, so they need one of the others.",
+        "enum": [
+          "none",
+          "password",
+          "sso"
+        ],
+        "title": "AuthMode",
+        "type": "string"
+      },
       "Body_upload_certificate_api_v1_certificates_post": {
         "properties": {
           "archive": {
@@ -2824,6 +2834,21 @@
         "title": "Selectors",
         "type": "object"
       },
+      "SignIn": {
+        "additionalProperties": false,
+        "description": "How a caller with no credential is meant to get one.",
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/AuthMode",
+            "description": "Which of Apchi's three authentication modes is configured. `none` means every caller is already an Admin and there is nothing to sign in to."
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "SignIn",
+        "type": "object"
+      },
       "Snapshot": {
         "properties": {
           "apply_id": {
@@ -4713,6 +4738,38 @@
           }
         },
         "summary": "Who Apchi thinks you are",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/sign-in": {
+      "get": {
+        "description": "The one question a caller with no credential may ask.\n\nWithout it a UI cannot tell `password` from `sso`: `/auth/me` answers 401 in both, and\nthe only difference is the prose of the refusal -- which would make a client branch on\nan error message, and make that message a contract nobody meant to publish.\n\nIt discloses nothing a caller could not establish by trying both endpoints, and it is\ndeliberately the configured mode and nothing else: no issuer, no client id, no hint\nabout which users exist.",
+        "operationId": "sign_in_api_v1_auth_sign_in_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignIn"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          }
+        },
+        "summary": "How to sign in here",
         "tags": [
           "auth"
         ]
