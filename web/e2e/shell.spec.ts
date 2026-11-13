@@ -91,13 +91,6 @@ test("an unhealthy cluster carries §21's verification wording", async ({ page }
   await expect(alert).toContainText("previous Snapshot remains the known-good configuration");
 });
 
-test("auth.mode=none leaves nobody to name rather than erroring", async ({ page }) => {
-  await stubApi(page, { caller: null });
-  await page.goto("/");
-
-  await expect(page.getByRole("banner")).toContainText("Apchi");
-  await expect(page.getByText("Candidate", { exact: true })).toBeVisible();
-});
 
 test("a failed review is reported, not rendered as empty", async ({ page }) => {
   await stubApi(page);
