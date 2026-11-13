@@ -186,7 +186,8 @@ curl -s $A/review | python3 -m json.tool
     {"section": "permissions", "changes": []},
     {"section": "resource_groups", "changes": []}
   ],
-  "cost": {"restarts_coordinator": false, "queries_at_risk": null, "warning": null}
+  "cost": {"restarts_coordinator": false, "rollout_sections": [],
+           "queries_at_risk": null, "warning": null}
 }
 ```
 
@@ -346,10 +347,16 @@ curl -s $A/review | python3 -c 'import sys,json; print(json.dumps(json.load(sys.
 ```json
 {
   "restarts_coordinator": true,
+  "rollout_sections": ["resource_groups"],
   "queries_at_risk": 0,
   "warning": "Applying this restarts the Trino coordinator, which terminates every running and queued query. Trino cannot drain a coordinator, so there is no way to avoid it."
 }
 ```
+
+`rollout_sections` names what the restart is for, which is the answer you want when a
+candidate holds changes to several sections and only some of them cost anything. A section
+named there with nothing in the diff is also possible, and means what Apchi would write is
+not what the cluster has mounted.
 
 `queries_at_risk` is counted from the cluster at the moment you asked, so on a busy cluster
 it is a real number and the decision is yours. Apply it the same way; the stage list now has
@@ -374,6 +381,7 @@ curl -s $A/review | python3 -c 'import sys,json; d=json.load(sys.stdin); print(j
   "base_snapshot": 2,
   "cost": {
     "restarts_coordinator": true,
+    "rollout_sections": ["resource_groups"],
     "queries_at_risk": 0,
     "warning": "Applying this restarts the Trino coordinator, which terminates every running and queued query. Trino cannot drain a coordinator, so there is no way to avoid it."
   }

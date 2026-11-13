@@ -200,6 +200,22 @@
             "title": "Restarts Coordinator",
             "type": "boolean"
           },
+          "rollout_sections": {
+            "description": "Which Sections the Rollout is for, in Section order. \u00a721 requires an Operator to see which changes force a restart and which do not, and a client cannot work it out from `Section.requires_rollout`: a Section also forces a Rollout when what Apchi would render is not what the Cluster has mounted. A name here with no entry in the diff is a Rollout that no staged change accounts for.",
+            "items": {
+              "enum": [
+                "catalogs",
+                "client_certificates",
+                "certificate_mapping",
+                "permissions",
+                "resource_groups",
+                "event_listeners"
+              ],
+              "type": "string"
+            },
+            "title": "Rollout Sections",
+            "type": "array"
+          },
           "warning": {
             "anyOf": [
               {
@@ -2409,7 +2425,8 @@
               "finance_pg"
             ],
             "cost": {
-              "restarts_coordinator": false
+              "restarts_coordinator": false,
+              "rollout_sections": []
             },
             "from_snapshot": 12,
             "other_sections_stay_at": 17,

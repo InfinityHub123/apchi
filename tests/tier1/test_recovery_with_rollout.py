@@ -80,6 +80,7 @@ async def test_a_listener_revert_says_it_will_restart_the_coordinator(
     ).json()
 
     assert effect["cost"]["restarts_coordinator"] is True
+    assert effect["cost"]["rollout_sections"] == ["event_listeners"]
     assert RESTART_WARNING in effect["summary"]
     assert effect["cost"]["queries_at_risk"] == 0
 
@@ -103,6 +104,7 @@ async def test_a_catalogs_revert_costs_no_restart(two_snapshots: AsyncClient) ->
     effect = (await two_snapshots.post("/api/v1/catalogs/revert", json={"snapshot": 1})).json()
 
     assert effect["cost"]["restarts_coordinator"] is False
+    assert effect["cost"]["rollout_sections"] == []
     assert effect["catalogs_dropped"] == ["added"]
     assert RESTART_WARNING not in effect["summary"]
     assert "drop 1 catalog: added" in effect["summary"]
