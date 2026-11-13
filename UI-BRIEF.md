@@ -192,6 +192,11 @@ require restarting the coordinator, which kills every query in flight.
 | **Resource groups** | A tree of groups with CPU, memory and concurrency limits, plus an *ordered* list of selectors that route queries into them. First matching selector wins, so order is meaningful. | **Rollout.** The file is parsed once at start-up. |
 | **Event listeners** | Where Trino sends query events — an HTTP endpoint, a Kafka topic. Typed with pass-through properties. | **Rollout.** |
 
+The API reports which Sections an Apply's restart is actually for, so this does not have to be
+read off the table above. A Section can also appear there with **nothing staged in it**, which
+means what Apchi would write is not what the cluster has mounted — a restart that no visible
+change accounts for, and one the interface has to be able to explain.
+
 **FIXED — the interface must show which changes force a restart and which do not, per change,
 not only in aggregate.** An operator deciding whether to apply now or wait for a quiet window
 needs to know that three of their six edits are free and one costs every running query.
@@ -660,9 +665,6 @@ be purged without breaking Snapshot immutability. This is a recorded, accepted t
 
 Honest list. Designing around these is fine; assuming they exist is not.
 
-- **Per-Section restart cost is not in the API.** It answers whether the Candidate *as a whole*
-  requires a rollout, not which Sections caused it. The per-Section mapping in §5 is stable and
-  can be relied on, but it has to come from somewhere other than the API today.
 - **No per-catalog "test connection".** Connectivity is only checked inside a full Validation.
 - **Audit has no export**, one listing endpoint, and filters on category, actor and time only
   — not on outcome or on a particular resource. Finding "everything that happened to
