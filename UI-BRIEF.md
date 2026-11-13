@@ -240,10 +240,15 @@ all times. It does not say how — a persistent bar, a panel, a summary that fol
 or something else entirely are all open; what is fixed is that none of it may be somewhere a
 person has to remember to go and look.
 
-1. Cluster health, and the Snapshot currently committed. **Read the gap in §13 before
-   designing this one**: there is no endpoint that reports the Trino cluster's health on
-   demand. What exists is Apchi's own liveness, the outcome of the last Apply's Verification,
-   and whether Maintenance Mode is engaged.
+1. Cluster health, and the Snapshot currently committed. The API answers this in **two
+   parts, which cost different things**, and a design has to decide what it shows by default.
+   One read returns the committed Snapshot, whether Maintenance Mode is engaged, and the last
+   Apply with whether its Verification passed — it touches nothing outside Apchi's own
+   database, so it can be polled. A second, separate read asks the coordinator how it is
+   right now, and optionally counts active workers. The live answer therefore costs a request
+   to Trino each time, and the cheap one is **history**: it says what happened at the last
+   Apply, not what is true now. Rendering the last Verification as a current reading would
+   tell somebody the cluster is healthy because it was healthy when it was last applied to.
 2. Whether the Candidate has staged changes, **and by whom**.
 3. The full Candidate diff — **every Section, not only the current operator's own changes**.
 4. Which changes apply without a restart and which force one.
@@ -534,8 +539,10 @@ The product generates these constantly; they are not edge cases.
 - **Apply failed, rolled back** — the cluster is back on its previous Snapshot.
 - **Incident** — rollback failed, Maintenance Mode on, nobody may edit.
 - **Maintenance Mode (deliberate)** — an Admin disabled editing, with a reason.
-- **Cluster unreachable** — Apchi is up but Trino is not. Nothing announces this: it surfaces
-  as an operation failing, or as a Validation warning that a probe could not connect.
+- **Cluster unreachable** — Apchi is up but Trino is not. Nothing announces it: it is the
+  answer to a probe somebody took, an operation failing, or a Validation warning that a probe
+  could not connect. The coordinator **starting** is its own state and not a kind of down: one
+  coming back from a restart refuses queries and is not broken.
 - **Apchi degraded** — its own database is unreachable; it reports this rather than crashing.
 - **Not signed in**, and **signed in with no permission** for an Admin-only area.
 - **Session expired mid-work** — the twelve-hour absolute expiry elapsed while somebody was
@@ -676,15 +683,12 @@ Honest list. Designing around these is fine; assuming they exist is not.
 - **No per-resource revert** — the smallest unit is a whole Section.
 - **No drift detection.** If someone changes Trino outside Apchi, Apchi neither notices nor
   reports it. Explicitly out of scope.
-- **No cluster health endpoint.** The only health call is **Apchi's own** liveness — whether it
-  is serving and whether its database is reachable — and it is deliberately kept that way,
-  because it is also Kubernetes' liveness probe and a condition reported there would crashloop
-  the pod. Trino's health is decided *inside* a Verification, during an Apply. So the
-  always-visible "cluster health" of §6.1 can be assembled from the last Verification's outcome,
-  Maintenance Mode, and Apchi's own liveness — but a design must not assume a live green/red
-  cluster indicator, and must not render the last Verification as a current reading.
-- **No worker/coordinator detail** at all; there is no cluster topology view, no node list, no
-  per-worker state.
+- **No continuous health monitoring.** Nothing inside Apchi watches the cluster on a timer —
+  there is no scheduler in the product at all — so a live reading exists only while somebody is
+  asking for one. A health indicator that looks live is a design that polls, and it should know
+  that each poll is a request arriving at a coordinator whose job is queries.
+- **No cluster topology.** An active worker count is available on demand; there is no node
+  list, no per-worker state and no view of the cluster's shape.
 - **No notifications** of any kind. No email, no in-app inbox. An alert webhook exists but only
   fires for a failed Auto Rollback.
 - **No scheduling.** Nothing can be applied later or during a window.
