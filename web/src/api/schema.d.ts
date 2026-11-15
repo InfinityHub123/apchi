@@ -894,6 +894,81 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/cluster": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What Apchi knows about the Cluster
+         * @description Three reads against MongoDB and nothing outbound, so this is the one to poll.
+         *
+         *     It answers §21's always-visible pair -- the committed Snapshot and what is known about
+         *     the Cluster's health -- plus the state that decides whether an Operator can edit at all.
+         */
+        get: operations["state_api_v1_cluster_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/cluster/drift": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Has the Cluster moved since its Snapshot?
+         * @description Beside the probe rather than on `GET /cluster`, and for the same reason.
+         *
+         *     This reads one Secret per Section-declared Secret from the Kubernetes API, so it is not
+         *     something to put behind a console's poll timer. It is the read somebody takes before an
+         *     Apply, to find out whether the Rollout they are about to pay for is theirs.
+         */
+        get: operations["drift_api_v1_cluster_drift_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/cluster/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ask the coordinator how it is, now
+         * @description A live reading, and the only thing here that leaves Apchi.
+         *
+         *     Deliberately not folded into `GET /cluster`: that one is polled, and a console with a
+         *     health indicator open on twenty desks would otherwise be twenty requests a second
+         *     arriving at a coordinator whose job is queries.
+         *
+         *     It never fails. An unreachable coordinator is the answer to this question, not an error
+         *     serving it -- a 503 here would make "Trino is down" indistinguishable from "Apchi is
+         *     broken", which is the distinction an Operator opens this for.
+         */
+        get: operations["probe_api_v1_cluster_probe_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/event-listeners": {
         parameters: {
             query?: never;
@@ -1780,6 +1855,26 @@ export interface components {
             subject: string;
         };
         /**
+         * ClusterState
+         * @description What Apchi can answer without asking Trino anything.
+         */
+        ClusterState: {
+            /** @description The most recent Apply, or null on a Cluster nothing has been applied to. Its Verification is the last word on whether the Cluster was healthy, and it is **history**: it says nothing about now. Probe for that. */
+            last_apply?: components["schemas"]["LastApply"] | null;
+            /** @description Whether Operator changes are disabled, why, and whether an Admin engaged it or Apchi did after a failed Auto Rollback. Readable here by any caller, because the people it stops are the ones who need to know -- `/admin/maintenance-mode` is where an Admin changes it, and that stays Admin-only. */
+            maintenance: components["schemas"]["MaintenanceState"];
+            /**
+             * Snapshot
+             * @description The committed Snapshot the Cluster is running; null before the first.
+             */
+            snapshot: number | null;
+            /**
+             * Snapshot At
+             * @description When that Snapshot was committed.
+             */
+            snapshot_at?: string | null;
+        };
+        /**
          * Configuration
          * @description The six Sections, and the Admin values when an Admin exported it.
          */
@@ -1866,6 +1961,33 @@ export interface components {
             sections: {
                 [key: string]: unknown;
             }[];
+        };
+        /**
+         * Drift
+         * @description One reading, taken when asked.
+         */
+        Drift: {
+            /**
+             * At
+             * Format: date-time
+             * @description When this reading was taken. Already stale by the time it is read.
+             */
+            at: string;
+            /**
+             * Diverged
+             * @description True when at least one Section is known to have drifted. Null when none is but at least one could not be read, because an all-clear Apchi could not verify is not an all-clear. False means every Section Apchi *can* compare is in sync, and says nothing about a `not_comparable` one -- `sections` carries that.
+             */
+            diverged: boolean | null;
+            /**
+             * Sections
+             * @description Every registered Section, in Section order, whether it drifted or not.
+             */
+            sections: components["schemas"]["SectionDrift"][];
+            /**
+             * Snapshot
+             * @description The committed Snapshot this is measured against; null when nothing has been applied yet, which is the one case where every Section reads `unknown` -- there is no committed state to have drifted from.
+             */
+            snapshot: number | null;
         };
         /**
          * EngagedBy
@@ -2059,6 +2181,35 @@ export interface components {
                 };
             };
         };
+        /**
+         * LastApply
+         * @description The most recent Apply, as far as the Cluster's state is concerned.
+         */
+        LastApply: {
+            /**
+             * Finished At
+             * @description Null while it is still in flight.
+             */
+            finished_at?: string | null;
+            /** Id */
+            id: string;
+            /**
+             * Snapshot
+             * @description The Snapshot it committed, when it succeeded.
+             */
+            snapshot?: number | null;
+            stage: components["schemas"]["Stage"];
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Verified
+             * @description Whether Verification passed. Null when this Apply never reached Verification, which is a different answer from `false`: a Validation failure means nothing was delivered and nothing was checked.
+             */
+            verified: boolean | null;
+        };
         /** MaintenanceState */
         MaintenanceState: {
             /**
@@ -2168,6 +2319,29 @@ export interface components {
         PrivilegesWrite: {
             /** Privileges */
             privileges: ("SELECT" | "INSERT" | "UPDATE" | "DELETE" | "OWNERSHIP" | "GRANT_SELECT")[];
+        };
+        /**
+         * Probe
+         * @description One reading, taken when asked.
+         */
+        Probe: {
+            /**
+             * At
+             * Format: date-time
+             * @description When this reading was taken. Already stale by the time it is read.
+             */
+            at: string;
+            /**
+             * Coordinator
+             * @description `starting` is its own answer rather than a kind of down: a coordinator that is coming back from a Rollout refuses queries and is not broken.
+             * @enum {string}
+             */
+            coordinator: "up" | "starting" | "unreachable";
+            /**
+             * Workers
+             * @description Active workers, and only when asked for. Null otherwise, and null when the coordinator could not be reached or the count failed -- never 0 for 'unknown', because a Cluster with no workers is a real and different state.
+             */
+            workers?: number | null;
         };
         /**
          * Problem
@@ -2522,6 +2696,28 @@ export interface components {
              * @enum {string}
              */
             section: "catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners";
+        };
+        /**
+         * SectionDrift
+         * @description One Section's answer.
+         */
+        SectionDrift: {
+            /**
+             * Restarts Coordinator
+             * @description Whether an Apply that reconciles this Section restarts the coordinator. Here rather than in a client-side table of Section names, for the reason #210 put `rollout_sections` on the Apply cost: the table is a second copy of Apchi's own registry, and it goes stale silently.
+             */
+            restarts_coordinator: boolean;
+            /**
+             * Section
+             * @enum {string}
+             */
+            section: "catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners";
+            /**
+             * Status
+             * @description `in_sync` when what Apchi would render is byte-identical to what the Cluster holds. `diverged` when it is not. `unknown` when the Cluster could not be read. `not_comparable` when this Section does not reach Trino as a file at all -- Catalogs are delivered as statements, so no file diff can speak for them, and claiming they are in sync would be an answer Apchi has not earned.
+             * @enum {string}
+             */
+            status: "in_sync" | "diverged" | "unknown" | "not_comparable";
         };
         /**
          * Seeded
@@ -4720,6 +4916,105 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description No usable credential. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    state_api_v1_cluster_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterState"];
+                };
+            };
+            /** @description No usable credential. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    drift_api_v1_cluster_drift_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Drift"];
+                };
+            };
+            /** @description No usable credential. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    probe_api_v1_cluster_probe_get: {
+        parameters: {
+            query?: {
+                /** @description Also count active workers. Off by default because it is a SQL query against `system.runtime.nodes` where the reachability check is one HTTP request, so a caller that only wants to know whether Trino is answering does not pay for a query. */
+                workers?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Probe"];
+                };
             };
             /** @description No usable credential. */
             401: {
