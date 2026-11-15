@@ -1,0 +1,374 @@
+/* The components the console is made of. Named for what they are in the product, not for how
+ * they look, so a change to the pinned world lands in one place. */
+
+/* ---- the shell -------------------------------------------------------------------- */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.topbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 18px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar__mark {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: var(--primary);
+  color: #fff;
+  font-size: var(--t-micro);
+  font-weight: 700;
+}
+
+.topbar__name {
+  font-size: var(--t-body-lg);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.rule-v {
+  width: 1px;
+  height: 22px;
+  background: var(--line);
+  flex: none;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.work {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 20px;
+}
+
+/* ---- the band that only appears when the cluster is unhealthy ---------------------- */
+
+.band {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 18px;
+  background: var(--red);
+  border-bottom: 1px solid var(--red-deep);
+  color: #fff;
+}
+
+.band__title {
+  font-size: var(--t-body-lg);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.band__detail {
+  font-size: 12px;
+  /* Tinted from the band's own hue rather than grey, so it stays legible on red. */
+  color: var(--red-on);
+}
+
+/* ---- the Candidate strip, present above the work area on every screen -------------- */
+
+.strip {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  min-height: 52px;
+  padding: 8px 18px;
+}
+
+.strip--staged {
+  background: var(--blue-bg);
+  border-bottom: 1px solid var(--blue-bd);
+}
+
+.strip--clean {
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.strip__title {
+  font-size: var(--t-body);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--primary-active);
+}
+
+.strip__title--clean {
+  color: var(--ink-2);
+}
+
+.strip__meta {
+  font-family: var(--font-mono);
+  font-size: var(--t-label);
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.strip__rule {
+  width: 1px;
+  height: 24px;
+  background: var(--blue-bd);
+  flex: none;
+}
+
+.strip__actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---- the Section rail -------------------------------------------------------------- */
+
+.rail {
+  width: 216px;
+  flex: none;
+  overflow: auto;
+  padding: 6px 0;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+}
+
+.rail__label,
+.label {
+  font-size: var(--t-micro);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-6);
+}
+
+.rail__label {
+  padding: 8px 14px 5px;
+}
+
+.rail__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px;
+  font-size: var(--t-body);
+  color: var(--ink-2);
+}
+
+.rail__item:hover {
+  background: var(--surface-2);
+  color: var(--ink-2);
+  text-decoration: none;
+}
+
+.rail__item--on {
+  background: var(--blue-bg);
+  color: var(--primary-active);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+
+.rail__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail__none {
+  font-family: var(--font-mono);
+  font-size: var(--t-label);
+  color: var(--ink-6);
+}
+
+/* ---- buttons ----------------------------------------------------------------------- */
+
+.btn {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 5px;
+  border: 1px solid var(--line-3);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 120ms ease-out;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn--primary {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.btn--primary:active:not(:disabled) {
+  background: var(--primary-active);
+}
+
+/* ---- pills: the only way a state is shown ------------------------------------------ */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 5px;
+  border: 1px solid;
+  font-size: var(--t-label);
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.pill__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex: none;
+  background: currentColor;
+}
+
+/* ---- tables: the main instrument --------------------------------------------------- */
+
+.panel {
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th {
+  height: 34px;
+  padding: 0 14px;
+  text-align: left;
+  font-size: var(--t-micro);
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-6);
+  background: var(--surface-3);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.table td {
+  height: 44px;
+  padding: 0 14px;
+  font-size: var(--t-cell);
+  color: var(--ink-2);
+  border-bottom: 1px solid var(--surface-2);
+}
+
+.table tr:last-child td {
+  border-bottom: 0;
+}
+
+.table .num,
+.table .mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.table .right {
+  text-align: right;
+}
+
+.table .strong {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.table .muted {
+  color: var(--ink-4);
+}
+
+/* ---- headings and notes ------------------------------------------------------------ */
+
+.title {
+  font-size: var(--t-title);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.lede {
+  margin: 2px 0 20px;
+  font-size: var(--t-body);
+  color: var(--ink-3);
+  max-width: 72ch;
+}
+
+.note {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: var(--t-body);
+  color: var(--ink-3);
+  max-width: 72ch;
+}
+
+.note--red {
+  border-color: var(--red-bd);
+  background: var(--red-bg);
+  color: var(--red);
+}
+
+/* ---- the change mark: added, changed, removed -------------------------------------- */
+
+.mark {
+  font-weight: 700;
+}
+
+.mark--added {
+  color: var(--green);
+}
+.mark--changed {
+  color: var(--primary);
+}
+.mark--removed {
+  color: var(--red);
+}

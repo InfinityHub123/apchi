@@ -80,6 +80,40 @@ jobs:
       - name: Build
         run: uv run mkdocs build --strict
 
+  web:
+    name: The UI -- types, build and browser tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+
+      # The client types are generated from the committed contract. Regenerating and
+      # diffing them here is the same gate openapi.json already has on the Python side:
+      # a contract change that nobody regenerated against fails now rather than as a
+      # runtime shape mismatch in a browser.
+      - name: Client types match openapi.json
+        run: npm run api:check
+
+      - name: Types
+        run: npm run typecheck
+
+      - name: Build
+        run: npx vite build
+
+      # Against the built bundle, not the dev server, because the build is what ships.
+      - name: Browser tests
+        run: |
+          npx playwright install --with-deps chromium
+          npx playwright test
+
   image:
     name: The image docs/getting-started.md tells you to build
     runs-on: ubuntu-latest

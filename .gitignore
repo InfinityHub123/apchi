@@ -228,3 +228,13 @@ skills-lock.json
 
 # Copied in from the repo root while the docs site builds (scripts/mkdocs_hooks.py).
 docs/reference/openapi.json
+
+# Impeccable decision-round sketches: the spent hand, not source.
+.impeccable/mocks/
+.impeccable/live/
+
+# The UI build and browser-test output.
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/

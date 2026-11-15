@@ -1,0 +1,166 @@
+/* The design system, pinned.
+ *
+ * These values come from the ConfigAPI console prototype and are reproduced exactly rather
+ * than approximated. Five semantic tones carry every state as a foreground/background/border
+ * triple, so a state is never a bare colour and never a hue difference alone.
+ *
+ * Plain custom properties and component classes, not a utility framework: the pin is a set
+ * of exact pixel values and fixed row heights, which this expresses directly.
+ */
+:root {
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* grounds and hairlines */
+  --ground: #f5f6f8;
+  --surface: #fafbfc;
+  --surface-2: #f1f3f6;
+  --surface-3: #f2f4f7;
+  --line: #e4e7eb;
+  --line-2: #dfe3e9;
+  --line-3: #d5dae1;
+
+  /* The ink ramp, strongest to faintest. Every step that carries text passes 4.5:1 on
+     every ground it is used on -- measured, not assumed.
+
+     --ink-6 is the one value changed from the pinned prototype, which set its 10.5px table
+     headers in #98a1ad: 2.37:1 on --surface-3, against the WCAG 2.2 AA commitment recorded
+     in PRODUCT.md. 4.5:1 is the bar for text this size -- the 3:1 allowance is for large
+     text only, so being a quiet uppercase label earns no exemption. #666f7c is the lightest
+     value in the same hue that clears it on both label grounds (4.91 and 4.61).
+
+     --ink-5 stays as the prototype set it and is for non-text use only: rules, dividers,
+     disabled glyphs. It does not pass as text on any ground here. */
+  --ink: #16191d;
+  --ink-2: #3b444e;
+  --ink-3: #5c6672;
+  --ink-4: #6b7480;
+  --ink-5: #8a93a0;
+  --ink-6: #666f7c;
+
+  /* the one primary */
+  --primary: #1f5fd0;
+  --primary-hover: #1a52ba;
+  --primary-active: #17479c;
+  --ring: #cddcfa;
+
+  /* tone: green — healthy, verified, applies without a restart */
+  --green: #15803d;
+  --green-bg: #ecf6ef;
+  --green-bd: #cfe6d6;
+  /* tone: blue — staged, informational */
+  --blue: #1f5fd0;
+  --blue-bg: #eef4ff;
+  --blue-bd: #d3e0fb;
+  /* tone: amber — forces a rollout, expiring */
+  --amber: #9a5b06;
+  --amber-bg: #fdf4e5;
+  --amber-bd: #f0dfbe;
+  /* tone: red — failed, expired, unhealthy */
+  --red: #a81f1f;
+  --red-bg: #fdeeee;
+  --red-bd: #f3d3d3;
+  --red-deep: #8d1a1a;
+  --red-on: #f6dede;
+  /* tone: gray — absent, not applicable */
+  --gray: #5c6672;
+  --gray-bg: #f2f4f7;
+  --gray-bd: #e2e6ec;
+
+  /* The half-steps are the prototype's. 11px is the floor for anything a person reads or
+     acts on; nothing functional goes below it. */
+  --t-micro: 11px;
+  --t-label: 11.5px;
+  --t-cell: 12.5px;
+  --t-body: 13px;
+  --t-body-lg: 13.5px;
+  --t-heading: 14.5px;
+  --t-title: 16px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--ground);
+}
+
+body {
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--t-body);
+  /* Every number here sits in a column under another number. */
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The surfaces nobody draws still carry the design: a browser default belongs to no design
+   system, and these are the cheapest to claim. */
+::selection {
+  background: var(--ring);
+  color: var(--ink);
+}
+
+input,
+textarea {
+  caret-color: var(--primary);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #d6dae0;
+  border-radius: 6px;
+  border: 3px solid var(--ground);
+}
+* {
+  scrollbar-color: #d6dae0 var(--ground);
+}
+
+/* One focus ring, keyboard-only, on everything. WCAG 2.2 AA is recorded in PRODUCT.md, and a
+   ring that exists on only some controls fails it quietly. */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+a {
+  color: var(--primary);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+a:hover {
+  color: var(--primary-active);
+  text-decoration: underline;
+}
+
+input,
+button,
+select,
+textarea {
+  font: inherit;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
