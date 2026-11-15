@@ -274,6 +274,10 @@ class AuditStore:
         *,
         category: Category | None = None,
         actor: str | None = None,
+        outcome: Outcome | None = None,
+        resource: str | None = None,
+        action: Action | None = None,
+        apply_id: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int = 50,
@@ -283,12 +287,25 @@ class AuditStore:
 
         The keyset predicate is what makes the boundary exact: everything strictly older than
         the cursor's instant, plus anything in that same instant with a lower identifier.
+
+        Every filter is an equality match, and they combine as a conjunction. There is
+        deliberately no text search over `detail`: it holds why something was refused, in
+        prose Apchi writes, and making it searchable would turn those sentences into a
+        contract clients match on.
         """
         query: dict[str, Any] = {}
         if category is not None:
             query["category"] = category
         if actor is not None:
             query["actor"] = actor
+        if outcome is not None:
+            query["outcome"] = outcome
+        if resource is not None:
+            query["resource"] = resource
+        if action is not None:
+            query["action"] = action
+        if apply_id is not None:
+            query["apply_id"] = apply_id
         window = {k: v for k, v in (("$gte", since), ("$lte", until)) if v is not None}
         if window:
             query["at"] = window
@@ -351,19 +368,28 @@ class AuditStore:
         return AuditEvent(id=str(identifier), **document)
 
     async def ensure_indexes(self, retention_days: float | None = None) -> None:
-        """The indexes the endpoint's three queries actually make, and nothing else.
+        """One index per filter the endpoint offers, and nothing else.
 
         Every query sorts by `(at, _id)` descending, so each filter gets that pair as its
         suffix: MongoDB then satisfies the match and the sort from one index, with no blocking
         sort to grow with the collection.
+
+        Six of them, which would be a lot on a busy collection and is not one here. An event
+        is written when somebody changes configuration on a single Trino cluster -- a handful
+        of times a day -- so the write amplification six indexes cost is not a consideration,
+        and the read side is: with no retention by default this collection outlives everything
+        else in the product, and an unindexed filter over it is a scan that gets slower every
+        month it is kept.
+
+        `via` deliberately has none. It is on the record so that "jo did this" and "an
+        automation jo minted did this" are different answers, but it has three values and is
+        asked about alongside an actor rather than instead of one.
         """
         await self._collection.create_index([("at", DESCENDING), ("_id", DESCENDING)])
-        await self._collection.create_index(
-            [("actor", ASCENDING), ("at", DESCENDING), ("_id", DESCENDING)]
-        )
-        await self._collection.create_index(
-            [("category", ASCENDING), ("at", DESCENDING), ("_id", DESCENDING)]
-        )
+        for field in ("actor", "category", "outcome", "resource", "action", "apply_id"):
+            await self._collection.create_index(
+                [(field, ASCENDING), ("at", DESCENDING), ("_id", DESCENDING)]
+            )
         if retention_days is not None:
             # Deliberately conditional. See the module docstring: an audit trail that deletes
             # itself by default is worse than one that grows, so this index exists only

@@ -3982,6 +3982,13 @@ export interface operations {
             query?: {
                 category?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners") | ("admin" | "pipeline") | null;
                 actor?: string | null;
+                /** @description `refused` is the one people come here for: a frozen Candidate, Maintenance Mode, a rejected payload. It is Apchi working correctly, which is why it is recorded and why it is worth being able to ask for on its own. */
+                outcome?: ("succeeded" | "refused" | "failed") | null;
+                /** @description Exact match on the resource's name, not a search. Null on an event about a whole Section or Cluster, and such an event is therefore never returned by this filter. */
+                resource?: string | null;
+                action?: ("attempted" | "created" | "updated" | "removed" | "reset" | "imported" | "reverted" | "applied" | "rolled_back" | "engaged" | "released" | "minted" | "revoked") | null;
+                /** @description Every event belonging to one Apply. The same id is on the log records for that Apply, so the trail and the logs join on it rather than by timestamp. */
+                apply_id?: string | null;
                 since?: string | null;
                 until?: string | null;
                 limit?: number;

@@ -11,6 +11,7 @@ in testing and times out after a year of history, and an audit trail that accumu
 credentials is a second copy of everything §12 already protects.
 """
 
+import inspect
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -465,40 +466,18 @@ async def test_no_index_is_created_before_the_first_event(client: AsyncClient) -
 # --- the queries are indexed --------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "params",
-    [
-        {},
-        {"actor": "jo"},
-        {"category": "catalogs"},
-        {"actor": "jo", "category": "catalogs"},
-        {"since": "2020-01-01T00:00:00+00:00"},
-    ],
-    ids=["unfiltered", "by-actor", "by-category", "by-both", "by-time"],
-)
-async def test_every_query_the_endpoint_makes_uses_an_index(
-    client: AsyncClient, params: dict[str, str]
-) -> None:
-    """A scan is not a slow endpoint, it is an endpoint that works in testing and times out
-    after a year of history -- and a blocking sort is the same failure wearing a different
-    name, because it grows with the collection rather than with the page.
+#: What `AuditStore.page` takes that is not an equality match on a field. Everything else in
+#: its signature is a filter, which is how the coverage test below finds a new one without
+#: anybody remembering to add it here.
+NOT_A_FIELD_FILTER = {"self", "since", "until", "limit", "before"}
 
-    Asserted against MongoDB's own plan rather than by reading the index list, which would
-    prove an index exists and not that the query uses it.
+
+async def _plan(store: AuditStore, query: dict[str, Any]) -> str:
+    """MongoDB's own plan for one of the endpoint's queries.
+
+    Asserted against the plan rather than by reading the index list, which would prove an
+    index exists and not that the query uses it.
     """
-    store = _store(client)
-    await _some(store, 5)
-    # Directly, for the same reason as the retention test: indexing happens once per process,
-    # so this test's own database may not have been the one that got them.
-    await store.ensure_indexes(retention_days=None)
-
-    query: dict[str, Any] = {}
-    if "actor" in params:
-        query["actor"] = params["actor"]
-    if "category" in params:
-        query["category"] = params["category"]
-    if "since" in params:
-        query["at"] = {"$gte": datetime.fromisoformat(params["since"])}
     plan = await store._collection.database.command(
         {
             "explain": {
@@ -510,7 +489,201 @@ async def test_every_query_the_endpoint_makes_uses_an_index(
             "verbosity": "queryPlanner",
         }
     )
+    return str(plan["queryPlanner"]["winningPlan"])
 
-    stages = str(plan["queryPlanner"]["winningPlan"])
-    assert "COLLSCAN" not in stages, f"{params} scans the collection: {stages}"
-    assert "SORT" not in stages, f"{params} needs a blocking sort: {stages}"
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        {},
+        {"actor": "jo", "category": "catalogs"},
+        {"at": {"$gte": datetime(2020, 1, 1, tzinfo=UTC)}},
+    ],
+    ids=["unfiltered", "two-at-once", "by-time"],
+)
+async def test_every_query_the_endpoint_makes_uses_an_index(
+    client: AsyncClient, query: dict[str, Any]
+) -> None:
+    """A scan is not a slow endpoint, it is an endpoint that works in testing and times out
+    after a year of history -- and a blocking sort is the same failure wearing a different
+    name, because it grows with the collection rather than with the page."""
+    store = _store(client)
+    await _some(store, 5)
+    # Directly, for the same reason as the retention test: indexing happens once per process,
+    # so this test's own database may not have been the one that got them.
+    await store.ensure_indexes(retention_days=None)
+
+    stages = await _plan(store, query)
+
+    assert "COLLSCAN" not in stages, f"{query} scans the collection: {stages}"
+    assert "SORT" not in stages, f"{query} needs a blocking sort: {stages}"
+
+
+async def test_every_filter_the_endpoint_offers_is_indexed(client: AsyncClient) -> None:
+    """Derived from `page`'s signature rather than listed, which is the point.
+
+    The parametrized test above used to carry one case per filter, built with a branch per
+    parameter -- so adding a filter did not fail it, it just quietly stopped covering the new
+    one. Reading the signature means an unindexed filter fails here on the day it is added,
+    which is the only time the fix is cheap.
+    """
+    store = _store(client)
+    await _some(store, 5)
+    await store.ensure_indexes(retention_days=None)
+
+    filters = [
+        name
+        for name in inspect.signature(AuditStore.page).parameters
+        if name not in NOT_A_FIELD_FILTER
+    ]
+    assert sorted(filters) == [
+        "action",
+        "actor",
+        "apply_id",
+        "category",
+        "outcome",
+        "resource",
+    ], f"a filter was added or removed without a look at this file: {filters}"
+
+    for name in filters:
+        # The value is irrelevant to the plan -- an equality match on a string either has an
+        # index for that field or does not.
+        stages = await _plan(store, {name: "anything"})
+        assert "COLLSCAN" not in stages, f"filtering on {name} scans the collection: {stages}"
+        assert "SORT" not in stages, f"filtering on {name} needs a blocking sort: {stages}"
+
+
+# --- the filters ---------------------------------------------------------------------------
+
+
+async def _a_mixed_history(store: AuditStore) -> None:
+    """One of each shape worth filtering for, written directly.
+
+    Written here rather than driven through the API because what is under test is the filter,
+    and producing a `refused` through the API means engaging Maintenance Mode -- which proves
+    the freeze works, not that the filter does.
+    """
+    await store.record("jo", "password", "catalogs", "created", resource="finance_pg")
+    await store.record("jo", "password", "catalogs", "updated", resource="finance_pg")
+    await store.record(
+        "sam", "token", "catalogs", "attempted", resource="finance_pg", outcome="refused"
+    )
+    await store.record("sam", "token", "event_listeners", "created", resource="audit")
+    await store.record("apchi", "none", "pipeline", "applied", snapshot=4, apply_id="apply-4")
+    await store.record("apchi", "none", "pipeline", "rolled_back", apply_id="apply-4")
+    await store.record("apchi", "none", "pipeline", "applied", snapshot=5, apply_id="apply-5")
+
+
+async def test_refusals_can_be_asked_for_on_their_own(as_operator: AsyncClient) -> None:
+    """The first question anybody opens an audit log to ask, and before this it meant paging a
+    category and filtering client-side -- which gets worse every month the trail is kept."""
+    await _a_mixed_history(_store(as_operator))
+
+    page = (await as_operator.get(AUDIT, params={"outcome": "refused"})).json()
+
+    assert [event["action"] for event in page["items"]] == ["attempted"]
+    assert page["items"][0]["actor"] == "sam"
+
+
+async def test_one_resource_can_be_followed_across_actors_and_actions(
+    as_operator: AsyncClient,
+) -> None:
+    """ "Everything that happened to finance_pg" -- three events, two actors, three actions,
+    one of them refused."""
+    await _a_mixed_history(_store(as_operator))
+
+    page = (await as_operator.get(AUDIT, params={"resource": "finance_pg"})).json()
+
+    assert len(page["items"]) == 3
+    assert {event["resource"] for event in page["items"]} == {"finance_pg"}
+    assert {event["actor"] for event in page["items"]} == {"jo", "sam"}
+
+
+async def test_an_event_about_no_particular_resource_is_not_returned_by_that_filter(
+    as_operator: AsyncClient,
+) -> None:
+    """`resource` is null on an act against a whole Section or Cluster, and an equality match
+    on a name cannot return those. Worth pinning, because a design that filters by resource
+    and shows a total is counting a different set from the unfiltered one."""
+    await _a_mixed_history(_store(as_operator))
+
+    by_resource = (await as_operator.get(AUDIT, params={"resource": "finance_pg"})).json()
+    everything = (await as_operator.get(AUDIT)).json()
+
+    assert all(event["resource"] is not None for event in by_resource["items"])
+    assert any(event["resource"] is None for event in everything["items"]), (
+        "the fixture has to contain an event with no resource for this to mean anything"
+    )
+
+
+async def test_one_applys_entries_can_be_asked_for_by_its_id(as_operator: AsyncClient) -> None:
+    """The id that joins the trail to the logs for the same Apply. Two of the three pipeline
+    events belong to one Apply, which is what makes this a filter and not a listing."""
+    await _a_mixed_history(_store(as_operator))
+
+    page = (await as_operator.get(AUDIT, params={"apply_id": "apply-4"})).json()
+
+    assert {event["action"] for event in page["items"]} == {"applied", "rolled_back"}
+    assert {event["apply_id"] for event in page["items"]} == {"apply-4"}
+
+
+async def test_filtering_by_action_narrows_within_a_category(as_operator: AsyncClient) -> None:
+    await _a_mixed_history(_store(as_operator))
+
+    page = (await as_operator.get(AUDIT, params={"action": "applied"})).json()
+
+    assert [event["snapshot"] for event in page["items"]] == [5, 4], "newest first"
+
+
+async def test_the_filters_combine_as_a_conjunction(as_operator: AsyncClient) -> None:
+    """Not a union. An actor and an outcome together means that actor's refusals, which is the
+    question somebody asks during an incident."""
+    await _a_mixed_history(_store(as_operator))
+
+    both = (await as_operator.get(AUDIT, params={"actor": "sam", "outcome": "refused"})).json()
+    just_sam = (await as_operator.get(AUDIT, params={"actor": "sam"})).json()
+
+    assert len(just_sam["items"]) == 2
+    assert len(both["items"]) == 1
+    assert both["items"][0]["resource"] == "finance_pg"
+
+
+async def test_a_filter_value_outside_the_vocabulary_is_refused_not_ignored(
+    as_operator: AsyncClient,
+) -> None:
+    """`outcome` and `action` are closed sets, so a typo is a 422 rather than an empty page.
+    An empty page is the more dangerous answer: it reads as "nothing happened".
+
+    `denied` is the plausible wrong guess -- the vocabulary is `refused`, and a client that
+    guessed would otherwise be told the trail holds no refusals.
+    """
+    wrong = await as_operator.get(AUDIT, params={"outcome": "denied"})
+    right = await as_operator.get(AUDIT, params={"outcome": "refused"})
+
+    assert wrong.status_code == 422
+    assert right.status_code == 200
+
+
+async def test_filters_survive_the_page_boundary(as_operator: AsyncClient) -> None:
+    """A cursor carries no filter, so the caller resends it -- and the second page has to be
+    the rest of the *filtered* set rather than the rest of the collection."""
+    store = _store(as_operator)
+    for index in range(5):
+        await store.record(
+            "jo", "password", "catalogs", "attempted", resource=f"c_{index}", outcome="refused"
+        )
+        await store.record("jo", "password", "catalogs", "created", resource=f"c_{index}")
+
+    first = (await as_operator.get(AUDIT, params={"outcome": "refused", "limit": 3})).json()
+    assert len(first["items"]) == 3
+    assert first["next"] is not None
+
+    second = (
+        await as_operator.get(
+            AUDIT, params={"outcome": "refused", "limit": 3, "before": first["next"]}
+        )
+    ).json()
+
+    assert len(second["items"]) == 2
+    assert second["next"] is None
+    assert all(event["outcome"] == "refused" for event in first["items"] + second["items"])

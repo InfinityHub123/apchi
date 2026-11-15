@@ -20,6 +20,14 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+`GET /api/v1/audit` takes four more filters: `outcome`, `resource`, `action` and `apply_id`.
+Additive, so nothing breaks. `outcome=refused` is the one worth knowing about — refusals were
+always recorded, and asking for them meant paging a category and filtering client-side, which
+got worse the longer a deployment had existed. `outcome` and `action` are closed sets, so a
+value outside the vocabulary is a `422` rather than an empty page that reads as "nothing
+happened". Each new filter has an index, because with no retention by default this collection
+outlives everything else in the product.
+
 `GET /api/v1/cluster/drift` is new, and answers whether the Cluster still holds what Apchi
 committed to it. Per Section: in sync, diverged, unknown, or not comparable — the last being
 Catalogs, which reach Trino as statements rather than as a mounted file, so no file diff can

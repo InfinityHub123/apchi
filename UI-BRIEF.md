@@ -443,9 +443,21 @@ Nine facts about that data shape any view of it:
   in Snapshots under rules of their own. So the audit answers *who changed what, and when*, and
   never *to what*: a design must not promise a before-and-after here.
 
-Filters are category, actor and a time range. Not outcome, not resource. **Retention is forever
-by default** — a deployment may set a window, but nothing is discarded unless somebody chose
-that, so the history can be very long and the oldest entry is not a recent date.
+**Filters:** category, actor, outcome, resource, action, one Apply's id, and a time range.
+They combine as an *and*, not an *or*. Two are worth designing around: `outcome` is how you ask
+for refusals alone, and a refusal is Apchi working correctly rather than an error; `resource`
+follows one catalog or certificate across every actor and action that touched it. Note that
+`resource` is null on an act against a whole Section or Cluster, so filtering by resource
+counts a different set from the unfiltered listing — a total shown beside a resource filter is
+not a total of everything.
+
+There is no free-text search, deliberately: the only prose on a record is why something was
+refused, and making that searchable would turn Apchi's sentences into a contract clients match
+on.
+
+**Retention is forever by default** — a deployment may set a window, but nothing is discarded
+unless somebody chose that, so the history can be very long and the oldest entry is not a
+recent date.
 
 This is also where "who staged what" comes from: the Candidate deliberately stores no
 authorship, and the audit is the only record of whose work an Apply is shipping. That record is
@@ -722,9 +734,10 @@ be purged without breaking Snapshot immutability. This is a recorded, accepted t
 Honest list. Designing around these is fine; assuming they exist is not.
 
 - **No per-catalog "test connection".** Connectivity is only checked inside a full Validation.
-- **Audit has no export**, one listing endpoint, and filters on category, actor and time only
-  — not on outcome or on a particular resource. Finding "everything that happened to
-  `finance_pg`" means reading a category and filtering client-side.
+- **Audit has no export.** One listing endpoint, paged at 500 at a time, and retention is
+  forever by default — so the longest-lived collection in the product is the one that cannot be
+  taken out of it. Filtering is now thorough (§6.11); getting the result into another system is
+  not possible.
 - **No user, role or account management in the API at all** — see §2. Provisioning happens
   outside Apchi, and no screen can change it.
 - **No way to see another person's API tokens**, so nothing can inventory the automation running
