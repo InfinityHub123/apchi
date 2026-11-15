@@ -4780,6 +4780,96 @@
             }
           },
           {
+            "description": "`refused` is the one people come here for: a frozen Candidate, Maintenance Mode, a rejected payload. It is Apchi working correctly, which is why it is recorded and why it is worth being able to ask for on its own.",
+            "in": "query",
+            "name": "outcome",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "succeeded",
+                    "refused",
+                    "failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`refused` is the one people come here for: a frozen Candidate, Maintenance Mode, a rejected payload. It is Apchi working correctly, which is why it is recorded and why it is worth being able to ask for on its own.",
+              "title": "Outcome"
+            }
+          },
+          {
+            "description": "Exact match on the resource's name, not a search. Null on an event about a whole Section or Cluster, and such an event is therefore never returned by this filter.",
+            "in": "query",
+            "name": "resource",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact match on the resource's name, not a search. Null on an event about a whole Section or Cluster, and such an event is therefore never returned by this filter.",
+              "title": "Resource"
+            }
+          },
+          {
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "attempted",
+                    "created",
+                    "updated",
+                    "removed",
+                    "reset",
+                    "imported",
+                    "reverted",
+                    "applied",
+                    "rolled_back",
+                    "engaged",
+                    "released",
+                    "minted",
+                    "revoked"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            }
+          },
+          {
+            "description": "Every event belonging to one Apply. The same id is on the log records for that Apply, so the trail and the logs join on it rather than by timestamp.",
+            "in": "query",
+            "name": "apply_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Every event belonging to one Apply. The same id is on the log records for that Apply, so the trail and the logs join on it rather than by timestamp.",
+              "title": "Apply Id"
+            }
+          },
+          {
             "in": "query",
             "name": "since",
             "required": false,
