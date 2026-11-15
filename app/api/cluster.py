@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import ApplyStoreDep, ClusterDep, MaintenanceStoreDep, SnapshotStoreDep
 from app.pipeline.applies import ApplyRecord, Stage
+from app.pipeline.drift import Drift, drift_of
 from app.pipeline.maintenance import MaintenanceState
 
 router = APIRouter(prefix="/cluster", tags=["cluster"])
@@ -189,3 +190,16 @@ async def probe(
             count = None
 
     return Probe(at=datetime.now(UTC), coordinator=coordinator, workers=count)
+
+
+@router.get("/drift", response_model=Drift, summary="Has the Cluster moved since its Snapshot?")
+async def drift(cluster: ClusterDep, snapshots: SnapshotStoreDep) -> Drift:
+    """Beside the probe rather than on `GET /cluster`, and for the same reason.
+
+    This reads one Secret per Section-declared Secret from the Kubernetes API, so it is not
+    something to put behind a console's poll timer. It is the read somebody takes before an
+    Apply, to find out whether the Rollout they are about to pay for is theirs.
+    """
+    latest = await snapshots.latest()
+    number = None if latest is None else latest.number
+    return await drift_of(cluster, number, await snapshots.sections_of(number))

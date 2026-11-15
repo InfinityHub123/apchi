@@ -264,6 +264,9 @@ class FakeKubernetes:
         self.secret_history: dict[str, dict[str, str]] = {}
         #: Set by a test to make the pod report a condition waiting cannot fix.
         self.pod_problem: str | None = None
+        #: Set by a test to make reading a Secret fail, which is the only way to see a
+        #: caller that reports what it could not determine rather than guessing at it.
+        self.secret_read_problem: str | None = None
         #: Set by a test to make the pod never reach serving, proving the timeout.
         self.pod_never_serves = False
         #: Set by a test to force exactly one Verification failure, at the worker
@@ -293,6 +296,8 @@ class FakeKubernetes:
         self._baselines: dict[str, set[str]] = {}
 
     async def read_secret(self, name: str) -> dict[str, str]:
+        if self.secret_read_problem is not None:
+            raise RuntimeError(self.secret_read_problem)
         return dict(self.secrets.get(name, {}))
 
     async def read_secret_if_present(self, name: str) -> dict[str, str] | None:
