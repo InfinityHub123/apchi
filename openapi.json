@@ -1106,6 +1106,58 @@
         "title": "DiscoveryView",
         "type": "object"
       },
+      "Drift": {
+        "additionalProperties": false,
+        "description": "One reading, taken when asked.",
+        "properties": {
+          "at": {
+            "description": "When this reading was taken. Already stale by the time it is read.",
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "diverged": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "True when at least one Section is known to have drifted. Null when none is but at least one could not be read, because an all-clear Apchi could not verify is not an all-clear. False means every Section Apchi *can* compare is in sync, and says nothing about a `not_comparable` one -- `sections` carries that.",
+            "title": "Diverged"
+          },
+          "sections": {
+            "description": "Every registered Section, in Section order, whether it drifted or not.",
+            "items": {
+              "$ref": "#/components/schemas/SectionDrift"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "snapshot": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The committed Snapshot this is measured against; null when nothing has been applied yet, which is the one case where every Section reads `unknown` -- there is no committed state to have drifted from.",
+            "title": "Snapshot"
+          }
+        },
+        "required": [
+          "at",
+          "snapshot",
+          "diverged",
+          "sections"
+        ],
+        "title": "Drift",
+        "type": "object"
+      },
       "EngagedBy": {
         "enum": [
           "admin",
@@ -2769,6 +2821,47 @@
           "section"
         ],
         "title": "SectionDiff",
+        "type": "object"
+      },
+      "SectionDrift": {
+        "additionalProperties": false,
+        "description": "One Section's answer.",
+        "properties": {
+          "restarts_coordinator": {
+            "description": "Whether an Apply that reconciles this Section restarts the coordinator. Here rather than in a client-side table of Section names, for the reason #210 put `rollout_sections` on the Apply cost: the table is a second copy of Apchi's own registry, and it goes stale silently.",
+            "title": "Restarts Coordinator",
+            "type": "boolean"
+          },
+          "section": {
+            "enum": [
+              "catalogs",
+              "client_certificates",
+              "certificate_mapping",
+              "permissions",
+              "resource_groups",
+              "event_listeners"
+            ],
+            "title": "Section",
+            "type": "string"
+          },
+          "status": {
+            "description": "`in_sync` when what Apchi would render is byte-identical to what the Cluster holds. `diverged` when it is not. `unknown` when the Cluster could not be read. `not_comparable` when this Section does not reach Trino as a file at all -- Catalogs are delivered as statements, so no file diff can speak for them, and claiming they are in sync would be an answer Apchi has not earned.",
+            "enum": [
+              "in_sync",
+              "diverged",
+              "unknown",
+              "not_comparable"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "section",
+          "status",
+          "restarts_coordinator"
+        ],
+        "title": "SectionDrift",
         "type": "object"
       },
       "Seeded": {
@@ -6040,6 +6133,38 @@
           }
         },
         "summary": "What Apchi knows about the Cluster",
+        "tags": [
+          "cluster"
+        ]
+      }
+    },
+    "/api/v1/cluster/drift": {
+      "get": {
+        "description": "Beside the probe rather than on `GET /cluster`, and for the same reason.\n\nThis reads one Secret per Section-declared Secret from the Kubernetes API, so it is not\nsomething to put behind a console's poll timer. It is the read somebody takes before an\nApply, to find out whether the Rollout they are about to pay for is theirs.",
+        "operationId": "drift_api_v1_cluster_drift_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Drift"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          }
+        },
+        "summary": "Has the Cluster moved since its Snapshot?",
         "tags": [
           "cluster"
         ]

@@ -20,6 +20,15 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+`GET /api/v1/cluster/drift` is new, and answers whether the Cluster still holds what Apchi
+committed to it. Per Section: in sync, diverged, unknown, or not comparable — the last being
+Catalogs, which reach Trino as statements rather than as a mounted file, so no file diff can
+speak for them. The overall `diverged` verdict is three-valued for the same reason `verified`
+is: null means no Section is known to have drifted but at least one could not be read, and an
+all-clear nobody verified is not an all-clear. Until now the only trace of drift was a Section
+named in `cost.rollout_sections` with nothing in the diff to account for it, which covered the
+three rollout-required Sections and required somebody to notice an absence.
+
 `GET /api/v1/cluster` and `GET /api/v1/cluster/probe` are new, and answer what §21 asks to
 be visible at all times: the committed Snapshot, what is known about the Cluster's health,
 and whether Maintenance Mode is engaged. The first touches nothing outside MongoDB, so it is
