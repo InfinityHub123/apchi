@@ -34,12 +34,3 @@ export function useSnapshots() {
   });
 }
 
-export function useCaller() {
-  return useQuery({
-    queryKey: ["caller"],
-    queryFn: () => api.GET("/api/v1/auth/me").then(unwrap),
-    // In `auth.mode=none` every caller is an Admin and there is nobody to name. A 401 is a
-    // normal answer here, not an error worth retrying into a login loop.
-    retry: false,
-  });
-}

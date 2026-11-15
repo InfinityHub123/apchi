@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
-import { useHealth, useReview, useCaller } from "./api/queries";
+import { useHealth, useReview } from "./api/queries";
+import { useIdentity, useLogout } from "./auth/useAuth";
+import { SignInScreen } from "./auth/SignInScreen";
 import { Pill, CostPill } from "./ui/Pill";
 import { SECTIONS, sectionLabel, sectionRestarts } from "./sections";
 import type { Review } from "./api/client";
@@ -14,9 +15,29 @@ import type { Review } from "./api/client";
  * failure this product exists to prevent.
  */
 export default function App() {
+  const identity = useIdentity();
+
+  // The console is not rendered at all for a caller Apchi does not know. Hiding controls
+  // while still fetching would show an Operator a shell full of 403s and call it an
+  // interface.
+  if (identity.isPending) return <Booting />;
+  if (identity.isError) return <SignInScreen />;
+
+  return <Console />;
+}
+
+function Booting() {
+  return (
+    <div className="signin">
+      <p className="note">Asking Apchi who you are…</p>
+    </div>
+  );
+}
+
+function Console() {
+  const identity = useIdentity();
   const health = useHealth();
   const review = useReview();
-  const caller = useCaller();
 
   const cost = review.data?.cost;
   const unhealthy = health.data !== undefined && health.data.status !== "ok";
@@ -24,8 +45,9 @@ export default function App() {
   return (
     <div className="app">
       <TopBar
-        caller={caller.data?.subject}
-        role={caller.data?.role}
+        caller={identity.data?.subject}
+        role={identity.data?.role}
+        via={identity.data?.via}
         status={health.isPending ? "checking" : (health.data?.status ?? "unreachable")}
       />
 
@@ -50,12 +72,15 @@ export default function App() {
 function TopBar({
   caller,
   role,
+  via,
   status,
 }: {
   caller?: string;
   role?: string;
+  via?: string;
   status: string;
 }) {
+  const logout = useLogout();
   const tone = status === "ok" ? "green" : status === "checking" ? "gray" : "red";
   const label =
     status === "ok" ? "Healthy" : status === "checking" ? "Checking" : "Unreachable";
@@ -75,6 +100,18 @@ function TopBar({
           {caller}
           {role !== undefined && <span style={{ color: "var(--ink-4)" }}> · {role}</span>}
         </span>
+      )}
+      {/* `none` mode has no session to end, so offering it would be a control that does
+          nothing. */}
+      {via !== undefined && via !== "none" && (
+        <button
+          type="button"
+          className="topbar__signout"
+          onClick={() => logout.mutate()}
+          disabled={logout.isPending}
+        >
+          Sign out
+        </button>
       )}
     </header>
   );
@@ -280,8 +317,4 @@ function ChangeMark({ change }: { change: "added" | "changed" | "removed" }) {
       {mark}
     </span>
   );
-}
-
-export function Note({ children }: { children: ReactNode }) {
-  return <p className="note">{children}</p>;
 }

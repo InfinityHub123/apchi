@@ -51,5 +51,7 @@ export async function stubApi(
       ? r.fulfill({ status: 401, contentType: "application/json", body: "{}" })
       : r.fulfill(json(opts.caller ?? { subject: "dana", role: "operator", via: "password" })),
   );
+  await page.route("**/api/v1/auth/sign-in", (r) => r.fulfill(json({ mode: "password" })));
+  await page.route("**/api/v1/auth/logout", (r) => r.fulfill({ status: 204, body: "" }));
   await page.route("**/api/v1/snapshots", (r) => r.fulfill(json([])));
 }

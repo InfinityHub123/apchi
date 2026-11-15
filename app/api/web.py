@@ -27,8 +27,20 @@ logger = logging.getLogger(__name__)
 DIST = Path(__file__).resolve().parent.parent.parent / "web" / "dist"
 
 
-def mount_web(app: FastAPI, dist: Path = DIST) -> bool:
-    """Serve the built UI at `/`, or leave the app API-only. True when it was mounted."""
+#: The two routes mounting the UI adds, named so tests/tier1/test_identity.py can assert the
+#: served surface instead of discovering it. Both answer with the entry document and nothing
+#: else; every byte of data the UI shows comes from a gated `/api/v1` route.
+UI_ROUTES = {"/", "/{path:path}"}
+
+
+def mount_web(app: FastAPI, dist: Path | None = None) -> bool:
+    """Serve the built UI at `/`, or leave the app API-only. True when it was mounted.
+
+    `dist` is read at call time rather than bound as a default, so a test can point it
+    somewhere empty and get the API-only app deterministically -- which matters because
+    whether this mounts otherwise depends on whether somebody has run a frontend build.
+    """
+    dist = DIST if dist is None else dist
     index = dist / "index.html"
     if not index.is_file():
         logger.info("no UI build at %s; serving the API only", dist)
