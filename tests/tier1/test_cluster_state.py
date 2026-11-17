@@ -222,3 +222,34 @@ async def test_it_needs_an_identity(unauthenticatable: AsyncClient) -> None:
     disabled, which is not for anyone who can reach the port."""
     assert (await unauthenticatable.get(STATE)).status_code == 401
     assert (await unauthenticatable.get(PROBE)).status_code == 401
+
+
+async def test_permission_enforcement_is_readable_by_an_operator(
+    operator_client: AsyncClient, admin_client: AsyncClient
+) -> None:
+    """The same argument as Maintenance Mode, and a sharper one.
+
+    An Operator cannot read `/admin/permissions/enforcement`, so before this there was no way
+    to discover that the grants on screen were not in force. Enforcement is **off by
+    default** -- the generated rules end in a catch-all that allows everything to everyone --
+    so the state nobody could see is the state every new deployment is in.
+    """
+    assert (await operator_client.get("/api/v1/admin/permissions/enforcement")).status_code == 403
+
+    assert (await operator_client.get(STATE)).json()["permissions_enforced"] is False
+
+    enabled = await admin_client.put(
+        "/api/v1/admin/permissions/enforcement", json={"enforced": True}
+    )
+    assert enabled.status_code == 200
+
+    assert (await operator_client.get(STATE)).json()["permissions_enforced"] is True
+
+
+async def test_enforcement_is_reported_without_asking_trino(client: AsyncClient) -> None:
+    """It is on the polled route, so it has to cost a MongoDB read and nothing else. `client`
+    has no reachable coordinator, so a route that asked Trino would hang or report it."""
+    response = await client.get(STATE)
+
+    assert response.status_code == 200
+    assert response.json()["permissions_enforced"] is False

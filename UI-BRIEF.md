@@ -242,9 +242,9 @@ person has to remember to go and look.
 
 1. Cluster health, and the Snapshot currently committed. The API answers this in **two
    parts, which cost different things**, and a design has to decide what it shows by default.
-   One read returns the committed Snapshot, whether Maintenance Mode is engaged, and the last
-   Apply with whether its Verification passed — it touches nothing outside Apchi's own
-   database, so it can be polled. A second, separate read asks the coordinator how it is
+   One read returns the committed Snapshot, whether Maintenance Mode is engaged, whether
+   grants are being enforced, and the last Apply with whether its Verification passed — it
+   touches nothing outside Apchi's own database, so it can be polled. A second, separate read asks the coordinator how it is
    right now, and optionally counts active workers. The live answer therefore costs a request
    to Trino each time, and the cheap one is **history**: it says what happened at the last
    Apply, not what is true now. Rendering the last Verification as a current reading would
@@ -523,8 +523,13 @@ Visible only to Admins; an Operator should not see them at all.
   cluster already serving queries denies every identity without a grant everything it had. An
   Operator cannot touch it — they would be closing a cluster by editing configuration — and the
   interface has to make the off state legible wherever grants are shown, because a screen full
-  of grants that are not being enforced reads as protection that is not there. It also stages
-  nothing by itself: the cluster receives it at the next Apply, costing no restart.
+  of grants that are not being enforced reads as protection that is not there. **The switch is
+  Admin-only; whether it is on is readable by anyone** — on the same polled read as Maintenance
+  Mode (§6.1, point 1) — precisely so that an Operator reading grants can be told they are not
+  in force. It is **off by default**, which is the state every deployment is in until an Admin
+  decides otherwise, so a design that treats "not enforced" as the exceptional case has it
+  backwards. It also stages nothing by itself: the cluster receives it at the next Apply,
+  costing no restart.
 - **Preserved certificate-mapping patterns** — additional patterns a cluster ran *before* Apchi,
   kept alive while its clients migrate. They are **ordered**, and are evaluated beneath the
   Operator's single pattern, so a subject matching both resolves to the Operator's. This is a
