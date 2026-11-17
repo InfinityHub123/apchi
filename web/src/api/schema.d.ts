@@ -707,6 +707,11 @@ export interface paths {
          *     Snapshot being restored from is not modified; applying this produces a new one, so
          *     history is never rewritten.
          *
+         *     **`dry_run: true` is worth using here above anywhere else.** This discards every staged
+         *     change in all six Sections, including other people's, and the effect reported below is
+         *     the only description of what that amounts to. Without a dry run the way to see it was to
+         *     cause it.
+         *
          *     **Admin values are not included.** Raw files, permission enforcement and the preserved
          *     mapping patterns are the Admin's and never enter a Snapshot (invariant 9), so a Full
          *     Rollback does not restore them. Nor does it reach outside Apchi: a Snapshot naming a
@@ -2648,6 +2653,11 @@ export interface components {
              */
             sections: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners")[];
             /**
+             * Staged
+             * @description Whether the Candidate was actually changed. False for a `dry_run`, where everything else in this response is what *would* have happened. The only field that distinguishes a preview from the act, so a client that ignores it cannot tell them apart.
+             */
+            staged: boolean;
+            /**
              * Summary
              * @description What this does, in words, for an Operator to read.
              */
@@ -2659,6 +2669,14 @@ export interface components {
          *     drift into different shapes for the same question.
          */
         RevertRequest: {
+            /**
+             * Dry Run
+             * @description Report what this would do and stage nothing. The answer is the same `RevertEffect` the real call returns, with `staged` false.
+             *
+             *     In the body rather than as a query parameter, and that is a safety property rather than a style: this model forbids unknown fields, so `dryrun` or `dry-run` is a 422. A mistyped query parameter would be ignored, and the request it was meant to make harmless would go through and replace the Section for real.
+             * @default false
+             */
+            dry_run: boolean;
             /** Snapshot */
             snapshot: number;
         };

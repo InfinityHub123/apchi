@@ -144,7 +144,9 @@ async def revert(
     To take **every** Section back to one Snapshot instead of just this one, use
     `POST /candidate/rollback` -- a Full Rollback.
     """
-    return await section_revert(store, snapshots, cluster, CATALOGS, request.snapshot)
+    return await section_revert(
+        store, snapshots, cluster, CATALOGS, request.snapshot, request.dry_run
+    )
 
 
 @router.get("", response_model=list[Catalog], summary="List staged Catalogs")

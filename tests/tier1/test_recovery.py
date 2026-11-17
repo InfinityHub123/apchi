@@ -227,3 +227,138 @@ async def test_recovery_is_refused_while_the_candidate_is_frozen(
     assert revert.status_code == 409
     assert rollback.status_code == 409
     assert revert.json()["code"] == "maintenance_mode"
+
+
+# --- dry run -------------------------------------------------------------------------------
+
+
+async def test_a_dry_run_reports_the_same_effect_and_stages_nothing(
+    applying_client: AsyncClient,
+) -> None:
+    """The question the endpoint could not answer before: *what would this do*.
+
+    The effect is identical to the real call's, because it was always computed from the
+    Candidate in memory -- what the real call adds is the save. Only `staged` differs.
+    """
+    await _two_snapshots(applying_client)
+
+    preview = (
+        await applying_client.post("/api/v1/catalogs/revert", json={"snapshot": 1, "dry_run": True})
+    ).json()
+
+    assert preview["staged"] is False
+    assert sorted(preview["catalogs_dropped"]) == ["beta"]
+    staged = [c["name"] for c in (await applying_client.get("/api/v1/catalogs")).json()]
+    assert staged == ["alpha", "beta"], "the Candidate is untouched"
+
+    real = (await applying_client.post("/api/v1/catalogs/revert", json={"snapshot": 1})).json()
+
+    assert real["staged"] is True
+    assert {k: v for k, v in real.items() if k != "staged"} == {
+        k: v for k, v in preview.items() if k != "staged"
+    }, "the preview was the answer, not an approximation of it"
+
+
+async def test_a_dry_run_of_a_full_rollback_does_not_discard_anyones_work(
+    applying_client: AsyncClient,
+) -> None:
+    """Where this matters most. A Full Rollback discards every staged change in all six
+    Sections, including other people's, and before this the way to see what that amounted to
+    was to cause it."""
+    await _two_snapshots(applying_client)
+    await applying_client.post(
+        "/api/v1/catalogs", json={"name": "gamma", "connector": "memory", "properties": {}}
+    )
+
+    preview = (
+        await applying_client.post(
+            "/api/v1/candidate/rollback", json={"snapshot": 1, "dry_run": True}
+        )
+    ).json()
+
+    assert preview["staged"] is False
+    assert preview["sections"] == list(SECTIONS)
+    assert sorted(preview["catalogs_dropped"]) == ["beta"]
+    staged = [c["name"] for c in (await applying_client.get("/api/v1/catalogs")).json()]
+    assert staged == ["alpha", "beta", "gamma"], "gamma survives a preview"
+
+
+async def test_a_dry_run_records_nothing_in_the_audit(applying_client: AsyncClient) -> None:
+    """It changed nothing, so there is nothing to attribute. The audit is written by
+    `candidates.save`, which is the one call a dry run skips -- and an audit full of reverts
+    nobody performed is worse than one that omits a question somebody asked."""
+    await _two_snapshots(applying_client)
+    before = (await applying_client.get("/api/v1/audit", params={"action": "reverted"})).json()
+
+    await applying_client.post("/api/v1/catalogs/revert", json={"snapshot": 1, "dry_run": True})
+
+    after = (await applying_client.get("/api/v1/audit", params={"action": "reverted"})).json()
+    assert len(after["items"]) == len(before["items"])
+
+    await applying_client.post("/api/v1/catalogs/revert", json={"snapshot": 1})
+
+    recorded = (await applying_client.get("/api/v1/audit", params={"action": "reverted"})).json()
+    assert len(recorded["items"]) == len(before["items"]) + 1
+
+
+async def test_a_mistyped_dry_run_is_refused_rather_than_obeyed(
+    applying_client: AsyncClient,
+) -> None:
+    """Why the flag is in the body rather than a query parameter, and the whole reason that
+    choice is worth making.
+
+    `RevertRequest` forbids unknown fields, so `dryrun` is a 422 and the Candidate is
+    untouched. A mistyped *query* parameter would be ignored, and the request somebody meant
+    to make harmless would replace the Section for real.
+    """
+    await _two_snapshots(applying_client)
+
+    refused = await applying_client.post(
+        "/api/v1/catalogs/revert", json={"snapshot": 1, "dryrun": True}
+    )
+
+    assert refused.status_code == 422
+    staged = [c["name"] for c in (await applying_client.get("/api/v1/catalogs")).json()]
+    assert staged == ["alpha", "beta"], "nothing was reverted by the refused request"
+
+    ignored = await applying_client.post(
+        "/api/v1/catalogs/revert?dry_run=true", json={"snapshot": 1}
+    )
+
+    assert ignored.status_code == 200
+    assert ignored.json()["staged"] is True, (
+        "a query parameter is not the flag; this one staged, which is what the body prevents"
+    )
+
+
+async def test_a_dry_run_to_an_unknown_snapshot_is_still_not_found(
+    applying_client: AsyncClient,
+) -> None:
+    """A preview of an impossible revert is an error, not an empty effect."""
+    await _two_snapshots(applying_client)
+
+    response = await applying_client.post(
+        "/api/v1/catalogs/revert", json={"snapshot": 99, "dry_run": True}
+    )
+
+    assert response.status_code == 404
+
+
+async def test_every_revert_endpoint_offers_the_dry_run(applying_client: AsyncClient) -> None:
+    """One request model shared by seven routes, so the flag cannot reach some of them and
+    not others. Asserted against the live app rather than by reading the source."""
+    await _two_snapshots(applying_client)
+
+    for path in (
+        "/api/v1/catalogs/revert",
+        "/api/v1/certificates/revert",
+        "/api/v1/certificate-mapping/revert",
+        "/api/v1/permissions/revert",
+        "/api/v1/resource-groups/revert",
+        "/api/v1/event-listeners/revert",
+        "/api/v1/candidate/rollback",
+    ):
+        response = await applying_client.post(path, json={"snapshot": 1, "dry_run": True})
+
+        assert response.status_code == 200, f"{path}: {response.text}"
+        assert response.json()["staged"] is False, path

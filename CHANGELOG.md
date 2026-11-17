@@ -20,6 +20,21 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+`POST /{section}/revert` and `POST /api/v1/candidate/rollback` take `dry_run` in the request
+body, and `RevertEffect` gains `staged`. A revert staged immediately and reported its effect
+afterwards, so the only way to see what a Full Rollback amounted to -- every staged change in
+all six Sections discarded, including other people's -- was to cause it. The effect was always
+computed from the Candidate in memory, so a dry run is the real answer rather than an estimate;
+what the real call adds is the save, and a dry run skips it. It therefore records no audit entry
+either, because the audit is written by that save.
+
+`staged` is additive but worth reading: it is the only field distinguishing a preview from the
+act, so a client that ignores it cannot tell them apart.
+
+The flag is in the body rather than a query parameter deliberately. `RevertRequest` forbids
+unknown fields, so `dryrun` is a `422`; a mistyped query parameter would have been ignored and
+the revert it was meant to make harmless would have gone through.
+
 `GET /api/v1/audit` takes four more filters: `outcome`, `resource`, `action` and `apply_id`.
 Additive, so nothing breaks. `outcome=refused` is the one worth knowing about — refusals were
 always recorded, and asking for them meant paging a category and filtering client-side, which

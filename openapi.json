@@ -2650,6 +2650,7 @@
             "sections": [
               "catalogs"
             ],
+            "staged": true,
             "summary": "catalogs will be restored to Snapshot 12; every other Section stays at Snapshot 17. That combination has never run. Applying this will drop 1 catalog: events_clickhouse. Snapshot 12 is not modified; applying this produces a new Snapshot."
           }
         ],
@@ -2712,6 +2713,11 @@
             "title": "Sections",
             "type": "array"
           },
+          "staged": {
+            "description": "Whether the Candidate was actually changed. False for a `dry_run`, where everything else in this response is what *would* have happened. The only field that distinguishes a preview from the act, so a client that ignores it cannot tell them apart.",
+            "title": "Staged",
+            "type": "boolean"
+          },
           "summary": {
             "description": "What this does, in words, for an Operator to read.",
             "title": "Summary",
@@ -2720,6 +2726,7 @@
         },
         "required": [
           "from_snapshot",
+          "staged",
           "sections",
           "cost",
           "summary"
@@ -2736,6 +2743,12 @@
           }
         ],
         "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Report what this would do and stage nothing. The answer is the same `RevertEffect` the real call returns, with `staged` false.\n\nIn the body rather than as a query parameter, and that is a safety property rather than a style: this model forbids unknown fields, so `dryrun` or `dry-run` is a 422. A mistyped query parameter would be ignored, and the request it was meant to make harmless would go through and replace the Section for real.",
+            "title": "Dry Run",
+            "type": "boolean"
+          },
           "snapshot": {
             "title": "Snapshot",
             "type": "integer"
@@ -5341,7 +5354,7 @@
     },
     "/api/v1/candidate/rollback": {
       "post": {
-        "description": "Full Rollback: for a serious mistake, and never implicit.\n\nReplaces **all six Sections** at once, which is what distinguishes this from the\nper-Section `POST /{section}/revert`: those leave the other Sections where they are, and\nthe result is a combination that has never run anywhere.\n\nLike a Section Revert this only stages -- an ordinary `POST /applies` follows. The\nSnapshot being restored from is not modified; applying this produces a new one, so\nhistory is never rewritten.\n\n**Admin values are not included.** Raw files, permission enforcement and the preserved\nmapping patterns are the Admin's and never enter a Snapshot (invariant 9), so a Full\nRollback does not restore them. Nor does it reach outside Apchi: a Snapshot naming a\ndatabase that has since moved restores the configuration, not the world it described.",
+        "description": "Full Rollback: for a serious mistake, and never implicit.\n\nReplaces **all six Sections** at once, which is what distinguishes this from the\nper-Section `POST /{section}/revert`: those leave the other Sections where they are, and\nthe result is a combination that has never run anywhere.\n\nLike a Section Revert this only stages -- an ordinary `POST /applies` follows. The\nSnapshot being restored from is not modified; applying this produces a new one, so\nhistory is never rewritten.\n\n**`dry_run: true` is worth using here above anywhere else.** This discards every staged\nchange in all six Sections, including other people's, and the effect reported below is\nthe only description of what that amounts to. Without a dry run the way to see it was to\ncause it.\n\n**Admin values are not included.** Raw files, permission enforcement and the preserved\nmapping patterns are the Admin's and never enter a Snapshot (invariant 9), so a Full\nRollback does not restore them. Nor does it reach outside Apchi: a Snapshot naming a\ndatabase that has since moved restores the configuration, not the world it described.",
         "operationId": "rollback_api_v1_candidate_rollback_post",
         "requestBody": {
           "content": {

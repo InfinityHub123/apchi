@@ -381,9 +381,27 @@ For catalogs, a revert issues real creates and drops against a live cluster. The
 specific, and it must **name the catalogs that will be dropped, not count them** — an operator
 about to lose one should see which one.
 
-The API returns the full effect of a proposed revert before it is taken: which catalogs would be
-created, dropped and replaced, which Snapshot the other Sections stay at, whether it restarts the
-coordinator, and what that costs in queries.
+**Both take a `dry_run` flag, and the effect is the same either way.** Sending
+`{"snapshot": 10, "dry_run": true}` reports exactly what the real call would do — which catalogs
+would be created, dropped and replaced, which Snapshot the other Sections stay at, whether it
+restarts the coordinator, and what that costs in running queries — and stages nothing. The
+response carries `staged`, which is the only field that distinguishes a preview from the act, so
+an interface that ignores it cannot tell them apart.
+
+Three things follow for a design:
+
+- **The confirmation step can show the real consequence rather than a description of one.** A
+  dry run is not an estimate; it is the answer, computed the same way.
+- **The flag belongs in the request body.** A mistyped query parameter would be ignored and the
+  revert would happen for real, so Apchi only accepts it in the body, where an unknown field is
+  refused. Worth knowing because it rules out building the preview as a URL somebody can hand
+  round.
+- **A preview needs the same permission as the act**, so it is refused while Maintenance Mode is
+  engaged or an Apply is in flight. That costs little — when the preview is refused the revert
+  is too — but a design must not rely on previewing during a freeze.
+
+A `dry_run` leaves no audit entry, because it changed nothing. Only the real revert appears in
+the trail.
 
 ### 6.9 Import and export
 

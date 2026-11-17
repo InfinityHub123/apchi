@@ -154,4 +154,6 @@ async def revert(
     snapshots: SnapshotStoreDep,
     cluster: ClusterDep,
 ) -> RevertEffect:
-    return await section_revert(store, snapshots, cluster, CERTIFICATES, request.snapshot)
+    return await section_revert(
+        store, snapshots, cluster, CERTIFICATES, request.snapshot, request.dry_run
+    )
