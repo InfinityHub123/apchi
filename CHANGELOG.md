@@ -49,6 +49,13 @@ a page still is not. Taking a copy leaves somebody holding the trail outside Apc
 about it; reading a page in a console does not. `Category` and `Action` each gained a value, so
 a client with an exhaustive `switch` over either sees a value it does not know.
 
+`GET /api/v1/cluster` gains `permissions_enforced`. Whether grants are enforced was readable
+only through `GET /api/v1/admin/permissions/enforcement`, which answers `403` to an Operator --
+so the people reading a screen of grants had no way to discover that the rules end in a
+catch-all allowing everything to everyone, and that is the **default**. The switch stays
+Admin-only; only the reading moved, onto the route that is already the one to poll. One more
+MongoDB read and still nothing outbound.
+
 `GET /api/v1/audit` takes four more filters: `outcome`, `resource`, `action` and `apply_id`.
 Additive, so nothing breaks. `outcome=refused` is the one worth knowing about — refusals were
 always recorded, and asking for them meant paging a category and filtering client-side, which
