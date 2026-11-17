@@ -261,6 +261,13 @@ Point 3 matters more than it looks: the Candidate is *shared*. Two operators can
 simultaneously, and applying ships both. Someone who stages one change and presses Apply must
 see the other five they are also about to ship.
 
+**The Candidate has a size ceiling, and the diff reports how close it is.** It is one database
+document, so the limit is on everything staged together rather than on any one Section — and
+because it is shared, somebody can be refused by configuration they did not stage. The review
+reports the current size and the limit, both in bytes, so an interface can warn before an edit
+is rejected rather than explain afterwards. The limit is reported rather than something a
+client should carry its own copy of: a deployment may change it.
+
 ### 6.2 Reviewing what is staged
 
 Two questions have to be answerable, and they are different questions:
@@ -291,6 +298,13 @@ Create, edit and delete for each, shaped by the data in §5. What each one deman
 - **Client certificates arrive as an uploaded ZIP.** Apchi opens it, works out which part is the
   certificate and which the key, checks they match, converts formats, and reports what it found.
   The person never converts anything by hand. Upload can fail in ways worth explaining.
+
+  **Each certificate reports the expiry window its status was computed against.** `status` is
+  one of valid, expiring or expired, and it is derived from the expiry date on **every read**
+  against a deployment-wide setting — so the same certificate reads `valid` under a 30-day
+  window and `expiring` under a 400-day one, with nothing about it having changed. An interface
+  that shows the status should be able to say *expiring within 30 days* rather than just
+  *expiring*, and that number is on the certificate.
 - **Permissions is the high-volume one**: many rows of five fields, usually read filtered to one
   identity or one catalog. It also contains system-owned rules nobody may edit.
 - **Every Section can be reverted** to its content from an earlier Snapshot.
@@ -778,7 +792,10 @@ Honest list. Designing around these is fine; assuming they exist is not.
   fires for a failed Auto Rollback.
 - **No scheduling.** Nothing can be applied later or during a window.
 - **No search** across configuration.
-- **One expiry window** for certificates, configured deployment-wide, not per certificate.
+- **One expiry window** for certificates, configured deployment-wide, not per certificate. It
+  is now *reported* on every certificate (§6.3), so an interface can name the threshold it is
+  rendering — but it cannot be set per certificate, so "warn me 90 days before this one" is not
+  expressible.
 
 ---
 

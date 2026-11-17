@@ -6,10 +6,17 @@ later, with nothing pointing back at the upload -- so the archive is understood 
 time or refused at upload time.
 """
 
-from cryptography.hazmat.primitives import serialization
-from httpx import AsyncClient
+from collections.abc import AsyncIterator
 
+import pytest
+from cryptography.hazmat.primitives import serialization
+from httpx import ASGITransport, AsyncClient
+
+from app.adapters.trino import Trino
+from app.config import Settings
+from app.main import create_app
 from tests.certificates import bundle, certificate_pem, key_pair, key_pem, zipped
+from tests.conftest import FakeKubernetes
 
 
 async def _upload(client: AsyncClient, name: str, archive: bytes) -> object:
@@ -217,3 +224,52 @@ async def test_uploads_are_refused_under_maintenance_mode(client: AsyncClient) -
     refused = await _upload(client, "finance", bundle())
 
     assert refused.status_code == 409
+
+
+# --- the window the status was computed against ----------------------------------------------
+
+
+@pytest.fixture
+async def generous(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> AsyncIterator[AsyncClient]:
+    """An Apchi whose expiry window is wide enough to catch a year-long certificate."""
+    app = create_app(settings.model_copy(update={"certificate_expiring_within_days": 400}))
+    app.state.kubernetes = fake_kubernetes
+    app.state.trino = Trino(url="http://127.0.0.1:1")
+    async with (
+        AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as http,
+        app.router.lifespan_context(app),
+    ):
+        yield http
+
+
+async def test_a_certificate_reports_the_window_its_status_was_computed_against(
+    client: AsyncClient,
+) -> None:
+    """Without it, `expiring` is a verdict with no stated threshold: an interface can say
+    *expiring* but not *expiring within 30 days*."""
+    body = (await _upload(client, "finance", bundle())).json()
+
+    assert body["status"] == "valid"
+    assert body["expiring_within_days"] == 30, "the default"
+
+
+async def test_the_same_certificate_reads_differently_under_a_wider_window(
+    client: AsyncClient, generous: AsyncClient
+) -> None:
+    """The recomputation made visible, and the hazard the CHANGELOG already warned about:
+    `status` is derived from `not_after` on **every read** against this setting, so an Admin
+    widening the window moves certificates into `expiring` with nothing about them having
+    changed. Reporting the window next to the status is what lets an interface explain that
+    rather than appear to contradict itself."""
+    archive = bundle(valid_for_days=365)
+
+    narrow = (await _upload(client, "finance", archive)).json()
+    wide = (await _upload(generous, "finance", archive)).json()
+
+    assert narrow["not_after"] == wide["not_after"], "the same certificate"
+    assert narrow["status"] == "valid"
+    assert narrow["expiring_within_days"] == 30
+    assert wide["status"] == "expiring"
+    assert wide["expiring_within_days"] == 400

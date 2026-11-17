@@ -804,6 +804,7 @@
         "examples": [
           {
             "common_name": "trino-reader.finance.acme.internal",
+            "expiring_within_days": 30,
             "fingerprint": "a12038ec184ace7cc0fb262b40d6c6b70d5624fa8e40c0414b8f575d6c2a37a3",
             "issuer": "C=GB,O=Acme,CN=Acme Internal Issuing CA",
             "name": "finance-client",
@@ -825,6 +826,11 @@
             ],
             "description": "The subject's CN, if it has one.",
             "title": "Common Name"
+          },
+          "expiring_within_days": {
+            "description": "The window `status` was computed against, deployment-wide and configured by an Admin. Reported next to the status it explains, because without it `expiring` is a verdict with no stated threshold -- an interface can say *expiring* but not *expiring within 30 days*. It also makes the recomputation visible: `status` is derived from `not_after` on **every read** against this number, so an Admin widening the window moves certificates into `expiring` with nothing about them having changed.",
+            "title": "Expiring Within Days",
+            "type": "integer"
           },
           "fingerprint": {
             "description": "SHA-256 of the certificate, for matching it elsewhere.",
@@ -878,6 +884,7 @@
           "not_before",
           "not_after",
           "status",
+          "expiring_within_days",
           "fingerprint"
         ],
         "title": "ClientCertificate",
@@ -2772,19 +2779,31 @@
             "title": "Has Changes",
             "type": "boolean"
           },
+          "limit_bytes": {
+            "description": "What `size_bytes` is refused at. Reported beside it rather than left to be configured into a client, because the two are only useful as a ratio and a client holding its own copy of the limit is a client that warns at the wrong number once a deployment changes it.",
+            "title": "Limit Bytes",
+            "type": "integer"
+          },
           "sections": {
             "items": {
               "$ref": "#/components/schemas/SectionDiff"
             },
             "title": "Sections",
             "type": "array"
+          },
+          "size_bytes": {
+            "description": "How large the Candidate is, measured as MongoDB measures it. The Candidate is one document (ADR-0002, \u00a74), so this is a ceiling on everything staged together rather than on any one Section -- and it is shared, so somebody can be refused by configuration they did not stage.",
+            "title": "Size Bytes",
+            "type": "integer"
           }
         },
         "required": [
           "base_snapshot",
           "has_changes",
           "sections",
-          "cost"
+          "cost",
+          "size_bytes",
+          "limit_bytes"
         ],
         "title": "Review",
         "type": "object"

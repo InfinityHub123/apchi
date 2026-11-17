@@ -20,6 +20,20 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+`GET /api/v1/review` gains `size_bytes` and `limit_bytes`, and `ClientCertificate` gains
+`expiring_within_days`. Both are numbers an interface was already rendering something about
+without being able to name it: how close the Candidate is to the ceiling it gets refused at,
+and the window `status` was computed against.
+
+`size_bytes` is measured as BSON of the document as stored, which is what the ceiling applies
+to -- the JSON text is a different number by enough to matter at that size. `limit_bytes` is
+reported beside it rather than left for a client to carry, since a deployment may change
+`candidate_max_bytes` and a client holding its own copy would warn at the wrong number.
+
+`expiring_within_days` sits next to the `status` it explains. The warning at the top of this
+file -- that `status` is recomputed on every read, so a client branching on it reads a different
+answer once an Admin changes the setting -- is now something a response says for itself.
+
 `GET /api/v1/audit/export` is new, and is the audit listing with no paging: every event
 matching the same filters, as NDJSON, streamed. One JSON object per line, each line exactly the
 `AuditEvent` the listing returns -- so nothing had to decide a column order or how to flatten a
