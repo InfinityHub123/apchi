@@ -969,10 +969,12 @@ export interface paths {
         };
         /**
          * What Apchi knows about the Cluster
-         * @description Three reads against MongoDB and nothing outbound, so this is the one to poll.
+         * @description Four reads against MongoDB and nothing outbound, so this is the one to poll.
          *
          *     It answers §21's always-visible pair -- the committed Snapshot and what is known about
-         *     the Cluster's health -- plus the state that decides whether an Operator can edit at all.
+         *     the Cluster's health -- plus the two pieces of state that decide what an Operator is
+         *     looking at: whether they can edit at all, and whether the grants they are reading are
+         *     being enforced.
          */
         get: operations["state_api_v1_cluster_get"];
         put?: never;
@@ -1972,6 +1974,11 @@ export interface components {
             last_apply?: components["schemas"]["LastApply"] | null;
             /** @description Whether Operator changes are disabled, why, and whether an Admin engaged it or Apchi did after a failed Auto Rollback. Readable here by any caller, because the people it stops are the ones who need to know -- `/admin/maintenance-mode` is where an Admin changes it, and that stays Admin-only. */
             maintenance: components["schemas"]["MaintenanceState"];
+            /**
+             * Permissions Enforced
+             * @description Whether a Trino Identity may reach only what it has been granted. Readable here by any caller for the reason Maintenance Mode is: when enforcement is off the generated rules end in a catch-all that allows everything to everyone, so the grants an Operator is reading are not in force -- and the people reading them are the ones who have to know that. It is **off by default**, which is what a Cluster did before Apchi was installed, so this is the state a deployment is in until an Admin decides otherwise. `/admin/permissions/enforcement` is where that decision is made, and it stays Admin-only.
+             */
+            permissions_enforced: boolean;
             /**
              * Snapshot
              * @description The committed Snapshot the Cluster is running; null before the first.

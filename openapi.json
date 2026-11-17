@@ -986,6 +986,11 @@
             "$ref": "#/components/schemas/MaintenanceState",
             "description": "Whether Operator changes are disabled, why, and whether an Admin engaged it or Apchi did after a failed Auto Rollback. Readable here by any caller, because the people it stops are the ones who need to know -- `/admin/maintenance-mode` is where an Admin changes it, and that stays Admin-only."
           },
+          "permissions_enforced": {
+            "description": "Whether a Trino Identity may reach only what it has been granted. Readable here by any caller for the reason Maintenance Mode is: when enforcement is off the generated rules end in a catch-all that allows everything to everyone, so the grants an Operator is reading are not in force -- and the people reading them are the ones who have to know that. It is **off by default**, which is what a Cluster did before Apchi was installed, so this is the state a deployment is in until an Admin decides otherwise. `/admin/permissions/enforcement` is where that decision is made, and it stays Admin-only.",
+            "title": "Permissions Enforced",
+            "type": "boolean"
+          },
           "snapshot": {
             "anyOf": [
               {
@@ -1014,7 +1019,8 @@
         },
         "required": [
           "snapshot",
-          "maintenance"
+          "maintenance",
+          "permissions_enforced"
         ],
         "title": "ClusterState",
         "type": "object"
@@ -6555,7 +6561,7 @@
     },
     "/api/v1/cluster": {
       "get": {
-        "description": "Three reads against MongoDB and nothing outbound, so this is the one to poll.\n\nIt answers \u00a721's always-visible pair -- the committed Snapshot and what is known about\nthe Cluster's health -- plus the state that decides whether an Operator can edit at all.",
+        "description": "Four reads against MongoDB and nothing outbound, so this is the one to poll.\n\nIt answers \u00a721's always-visible pair -- the committed Snapshot and what is known about\nthe Cluster's health -- plus the two pieces of state that decide what an Operator is\nlooking at: whether they can edit at all, and whether the grants they are reading are\nbeing enforced.",
         "operationId": "state_api_v1_cluster_get",
         "responses": {
           "200": {
