@@ -458,6 +458,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/audit/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download the whole filtered trail
+         * @description The listing without the paging, for a trail too long to page through.
+         *
+         *     Not Admin-only, for the reason this module exists: the listing is Operator-readable
+         *     deliberately, and the same data in a different shape does not deserve a different gate.
+         *     It carries exactly what the listing carries -- no configuration values, so the file is
+         *     not a new thing to protect (§12).
+         *
+         *     **The export is itself audited, and the listing is not.** Taking a copy of the whole
+         *     trail leaves Apchi with something that outlives Apchi's own rules about it, which reading
+         *     a page in a console does not; §20's own logic -- record what somebody would later need to
+         *     ask about -- gives different answers for the two.
+         *
+         *     Recorded *before* the first byte is written, which has two consequences worth naming. A
+         *     client that hangs up mid-stream still leaves the record, because a partial copy of an
+         *     audit trail is exactly the copy you would want to know about. And the copy therefore
+         *     contains the record of itself being taken, which is the right way round.
+         */
+        get: operations["export_api_v1_audit_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login": {
         parameters: {
             query?: never;
@@ -1617,7 +1652,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "attempted" | "created" | "updated" | "removed" | "reset" | "imported" | "reverted" | "applied" | "rolled_back" | "engaged" | "released" | "minted" | "revoked";
+            action: "attempted" | "created" | "updated" | "removed" | "reset" | "imported" | "reverted" | "applied" | "rolled_back" | "engaged" | "released" | "minted" | "revoked" | "exported";
             /**
              * Actor
              * @description An Identity's subject, or 'apchi' when Apchi itself acted.
@@ -1634,7 +1669,7 @@ export interface components {
              */
             at: string;
             /** Category */
-            category: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners") | ("admin" | "pipeline");
+            category: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners") | ("admin" | "pipeline" | "audit");
             /**
              * Detail
              * @description Why it was refused, or how it failed. Never a configuration value.
@@ -3987,20 +4022,20 @@ export interface operations {
     list_events_api_v1_audit_get: {
         parameters: {
             query?: {
-                category?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners") | ("admin" | "pipeline") | null;
+                limit?: number;
+                /** @description A `next` from a previous page. Omit for the newest page. */
+                before?: string | null;
+                category?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners") | ("admin" | "pipeline" | "audit") | null;
                 actor?: string | null;
                 /** @description `refused` is the one people come here for: a frozen Candidate, Maintenance Mode, a rejected payload. It is Apchi working correctly, which is why it is recorded and why it is worth being able to ask for on its own. */
                 outcome?: ("succeeded" | "refused" | "failed") | null;
                 /** @description Exact match on the resource's name, not a search. Null on an event about a whole Section or Cluster, and such an event is therefore never returned by this filter. */
                 resource?: string | null;
-                action?: ("attempted" | "created" | "updated" | "removed" | "reset" | "imported" | "reverted" | "applied" | "rolled_back" | "engaged" | "released" | "minted" | "revoked") | null;
+                action?: ("attempted" | "created" | "updated" | "removed" | "reset" | "imported" | "reverted" | "applied" | "rolled_back" | "engaged" | "released" | "minted" | "revoked" | "exported") | null;
                 /** @description Every event belonging to one Apply. The same id is on the log records for that Apply, so the trail and the logs join on it rather than by timestamp. */
                 apply_id?: string | null;
                 since?: string | null;
                 until?: string | null;
-                limit?: number;
-                /** @description A `next` from a previous page. Omit for the newest page. */
-                before?: string | null;
             };
             header?: never;
             path?: never;
@@ -4015,6 +4050,56 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Page_AuditEvent_"];
+                };
+            };
+            /** @description No usable credential. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_api_v1_audit_export_get: {
+        parameters: {
+            query?: {
+                category?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners") | ("admin" | "pipeline" | "audit") | null;
+                actor?: string | null;
+                /** @description `refused` is the one people come here for: a frozen Candidate, Maintenance Mode, a rejected payload. It is Apchi working correctly, which is why it is recorded and why it is worth being able to ask for on its own. */
+                outcome?: ("succeeded" | "refused" | "failed") | null;
+                /** @description Exact match on the resource's name, not a search. Null on an event about a whole Section or Cluster, and such an event is therefore never returned by this filter. */
+                resource?: string | null;
+                action?: ("attempted" | "created" | "updated" | "removed" | "reset" | "imported" | "reverted" | "applied" | "rolled_back" | "engaged" | "released" | "minted" | "revoked" | "exported") | null;
+                /** @description Every event belonging to one Apply. The same id is on the log records for that Apply, so the trail and the logs join on it rather than by timestamp. */
+                apply_id?: string | null;
+                since?: string | null;
+                until?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One `AuditEvent` per line, newest first, as NDJSON. The same events the listing returns for the same filters, with no limit. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/x-ndjson": string;
                 };
             };
             /** @description No usable credential. */

@@ -11,7 +11,7 @@ in testing and times out after a year of history, and an audit trail that accumu
 credentials is a second copy of everything §12 already protects.
 """
 
-import inspect
+import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -21,7 +21,8 @@ from httpx import ASGITransport, AsyncClient
 
 from app.adapters.trino import Trino
 from app.api.deps import caller
-from app.audit.events import AuditStore
+from app.api.pages import MAX_LIMIT
+from app.audit.events import AuditEvent, AuditStore, Entry, Filters
 from app.auth.identity import Identity
 from app.config import Settings
 from app.main import create_app
@@ -466,10 +467,9 @@ async def test_no_index_is_created_before_the_first_event(client: AsyncClient) -
 # --- the queries are indexed --------------------------------------------------------------
 
 
-#: What `AuditStore.page` takes that is not an equality match on a field. Everything else in
-#: its signature is a filter, which is how the coverage test below finds a new one without
-#: anybody remembering to add it here.
-NOT_A_FIELD_FILTER = {"self", "since", "until", "limit", "before"}
+#: The two filters that are a range over `at` rather than an equality match on a field of
+#: their own, so the base `(at, _id)` index already serves them.
+A_TIME_RANGE = {"since", "until"}
 
 
 async def _plan(store: AuditStore, query: dict[str, Any]) -> str:
@@ -520,22 +520,26 @@ async def test_every_query_the_endpoint_makes_uses_an_index(
 
 
 async def test_every_filter_the_endpoint_offers_is_indexed(client: AsyncClient) -> None:
-    """Derived from `page`'s signature rather than listed, which is the point.
+    """Derived from the filter model rather than listed, which is the point.
 
     The parametrized test above used to carry one case per filter, built with a branch per
     parameter -- so adding a filter did not fail it, it just quietly stopped covering the new
-    one. Reading the signature means an unindexed filter fails here on the day it is added,
-    which is the only time the fix is cheap.
+    one. Reading `Filters` means an unindexed filter fails here on the day it is added, which
+    is the only time the fix is cheap.
+
+    `Filters` is where a filter gets added, because it is what the API declares and what both
+    routes take; `Filters.EQUALITY` is what `ensure_indexes` walks. Asserting the two agree
+    is the real check -- a filter added to the model and forgotten in the tuple would be
+    offered, unindexed, and nothing else would notice.
     """
     store = _store(client)
     await _some(store, 5)
     await store.ensure_indexes(retention_days=None)
 
-    filters = [
-        name
-        for name in inspect.signature(AuditStore.page).parameters
-        if name not in NOT_A_FIELD_FILTER
-    ]
+    filters = [name for name in Filters.model_fields if name not in A_TIME_RANGE]
+    assert sorted(filters) == sorted(Filters.EQUALITY), (
+        f"a filter is offered that nothing indexes: {sorted(set(filters) - set(Filters.EQUALITY))}"
+    )
     assert sorted(filters) == [
         "action",
         "actor",
@@ -687,3 +691,155 @@ async def test_filters_survive_the_page_boundary(as_operator: AsyncClient) -> No
     assert len(second["items"]) == 2
     assert second["next"] is None
     assert all(event["outcome"] == "refused" for event in first["items"] + second["items"])
+
+
+# --- the export -----------------------------------------------------------------------------
+
+EXPORT = f"{AUDIT}/export"
+
+
+def _lines(body: str) -> list[dict[str, Any]]:
+    """The NDJSON parsed, and the format asserted while doing it: no wrapper object, no
+    array, no trailing blank line to skip."""
+    assert body.endswith("\n"), "every line is terminated, including the last"
+    return [json.loads(line) for line in body.splitlines()]
+
+
+async def test_the_export_is_the_listing_one_event_per_line(as_operator: AsyncClient) -> None:
+    """Each line is exactly the `AuditEvent` the listing returns, which is the reason NDJSON
+    was chosen over CSV (#215): no column order to decide, no nulls to flatten, and
+    `openapi.json` already documents the shape."""
+    await _a_mixed_history(_store(as_operator))
+    listed = (await as_operator.get(AUDIT)).json()["items"]
+
+    response = await as_operator.get(EXPORT)
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    exported = _lines(response.text)
+    # Its own record is the newest event, so it is the first line. Everything after it is the
+    # history the listing just returned, in the same order and field for field.
+    assert exported[1:] == listed
+
+
+async def test_the_export_contains_the_record_of_itself(as_operator: AsyncClient) -> None:
+    """Recorded before the first byte is written, so a client that hangs up mid-stream still
+    leaves the record -- a partial copy of an audit trail being exactly the copy you would
+    want to know about. The copy therefore contains the record of itself being taken."""
+    await _a_mixed_history(_store(as_operator))
+
+    exported = _lines((await as_operator.get(EXPORT)).text)
+
+    assert exported[0]["action"] == "exported"
+    assert exported[0]["category"] == "audit"
+    assert exported[0]["actor"] == "jo"
+    assert exported[0]["outcome"] == "succeeded"
+    assert exported[0]["resource"] is None, "an act on the trail, not on a resource"
+
+
+async def test_an_export_records_the_filters_it_used(as_operator: AsyncClient) -> None:
+    """ "Who took a copy" is only half the question. A copy of one actor's refusals and a copy
+    of the whole trail are different acts, and the filters are the only thing that tells them
+    apart."""
+    await _a_mixed_history(_store(as_operator))
+
+    await as_operator.get(EXPORT, params={"outcome": "refused", "actor": "sam"})
+    await as_operator.get(EXPORT)
+
+    exports = (await as_operator.get(AUDIT, params={"action": "exported"})).json()["items"]
+
+    assert [event["detail"] for event in exports] == [
+        "an export of the whole trail",
+        # Named in the model's order rather than the query string's, so two exports with the
+        # same filters leave the same record whatever order the client sent them in.
+        "an export filtered by actor=sam, outcome=refused",
+    ], "newest first"
+
+
+async def test_reading_a_page_is_not_audited(as_operator: AsyncClient) -> None:
+    """The asymmetry is deliberate. Taking a copy leaves somebody holding the trail outside
+    Apchi's rules about it; reading a page in a console does not, and auditing every read
+    would bury the exports that matter in a log of people looking at the log."""
+    await _a_mixed_history(_store(as_operator))
+    before = len((await as_operator.get(AUDIT)).json()["items"])
+
+    await as_operator.get(AUDIT, params={"limit": 3})
+    await as_operator.get(AUDIT, params={"outcome": "refused"})
+
+    assert len((await as_operator.get(AUDIT)).json()["items"]) == before
+
+
+async def test_the_export_is_not_capped_at_a_page(as_operator: AsyncClient) -> None:
+    """The point of having it. `limit` cannot exceed 500 (`MAX_LIMIT`), so a trail longer than
+    that cannot be taken out of Apchi by paging -- which is the state the collection is in by
+    default, since retention is off."""
+    store = _store(as_operator)
+    count = MAX_LIMIT + 100
+    # One write rather than 600, for #69's reason: per-operation traffic is what this suite's
+    # MongoDB falls over on.
+    await store.record_each(
+        "jo",
+        "password",
+        [
+            Entry(category="catalogs", action="created", resource=f"c_{index}")
+            for index in range(count)
+        ],
+    )
+
+    exported = _lines((await as_operator.get(EXPORT)).text)
+
+    assert len(exported) == count + 1, "everything, plus the record of the export itself"
+    assert len((await as_operator.get(AUDIT, params={"limit": MAX_LIMIT})).json()["items"]) == (
+        MAX_LIMIT
+    ), "which is as much as the listing can give in one answer"
+
+
+async def test_the_export_takes_the_same_filters_as_the_listing(as_operator: AsyncClient) -> None:
+    """One set of query parameters, declared once and shared by both routes. An export that
+    filtered differently would be a second, undocumented query language over one collection."""
+    await _a_mixed_history(_store(as_operator))
+
+    exported = _lines((await as_operator.get(EXPORT, params={"resource": "finance_pg"})).text)
+
+    assert {event["resource"] for event in exported} == {"finance_pg"}
+    assert len(exported) == 3, "its own record carries no resource, so the filter excludes it"
+
+
+async def test_a_filter_value_outside_the_vocabulary_is_refused_by_the_export_too(
+    as_operator: AsyncClient,
+) -> None:
+    """Shared parameters mean shared validation. An export that answered an unknown `outcome`
+    with an empty file would read as "nothing happened" in a file somebody keeps."""
+    response = await as_operator.get(EXPORT, params={"outcome": "denied"})
+
+    assert response.status_code == 422
+
+
+async def test_the_export_is_offered_as_a_download(as_operator: AsyncClient) -> None:
+    """It is reached from a console by clicking something, and a browser given no disposition
+    renders NDJSON as a wall of text in a tab."""
+    response = await as_operator.get(EXPORT)
+
+    disposition = response.headers["content-disposition"]
+    assert disposition.startswith("attachment; ")
+    assert ".ndjson" in disposition
+
+
+async def test_an_operator_may_export(as_operator: AsyncClient) -> None:
+    """Not Admin-only, for the reason the listing is not: the trail is what makes a shared
+    Candidate acceptable (ADR-0002), and the same data in a different shape does not deserve
+    a different gate."""
+    assert OPERATOR.role == "operator"
+
+    assert (await as_operator.get(EXPORT)).status_code == 200
+
+
+async def test_the_export_carries_no_configuration_values(as_operator: AsyncClient) -> None:
+    """A downloadable copy is the place this would hurt most. The exported line is the
+    `AuditEvent` model and nothing else, so a value-bearing field cannot appear in a file
+    without first appearing in the model -- which `extra="forbid"` already stops."""
+    await _a_mixed_history(_store(as_operator))
+
+    exported = _lines((await as_operator.get(EXPORT)).text)
+
+    assert all(set(event) == set(AuditEvent.model_fields) for event in exported)

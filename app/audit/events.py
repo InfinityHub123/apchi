@@ -24,9 +24,10 @@ inherited.
 """
 
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final, Literal
+from typing import Any, ClassVar, Final, Literal
 
 from bson import ObjectId
 from bson.errors import InvalidId
@@ -40,10 +41,16 @@ from app.sections import SectionName
 
 logger = logging.getLogger(__name__)
 
-#: Where a change landed. The six Sections, plus the two things that are not Sections:
-#: `admin` for low-level configuration and the mutation freeze (§3, §14), and `pipeline` for
-#: an Apply, which is about the whole Candidate rather than one Section.
-Category = SectionName | Literal["admin", "pipeline"]
+#: Where a change landed. The six Sections, plus the three things that are not Sections:
+#: `admin` for low-level configuration and the mutation freeze (§3, §14), `pipeline` for
+#: an Apply, which is about the whole Candidate rather than one Section, and `audit` for an
+#: act on the trail itself.
+#:
+#: That last one changes no configuration at all, and it is its own category rather than part
+#: of `admin` for the reason the category exists: "who has taken a copy of the trail" is a
+#: question somebody asks on its own, and filing it under `admin` would mix it in with
+#: Maintenance Mode and `jvm.config`.
+Category = SectionName | Literal["admin", "pipeline", "audit"]
 
 #: What was done. Past tense, because an event records something that already happened --
 #: writing one before the change lands would name an actor for something that never did.
@@ -66,6 +73,7 @@ Action = Literal[
     "released",
     "minted",
     "revoked",
+    "exported",
 ]
 
 #: `refused` is not a failure. It is Apchi working correctly -- a frozen Candidate,
@@ -129,6 +137,74 @@ class AuditEvent(BaseModel):
             "rather than being matched up by timestamp."
         ),
     )
+
+
+class Filters(BaseModel):
+    """Which events to read, for the listing and for the export alike.
+
+    One object rather than eight parameters declared in two places. An export is the listing
+    without the paging (#215), and two parameter lists that have to stay identical are two
+    parameter lists that eventually do not -- the filter added to one and forgotten in the
+    other is the whole failure mode, and it is silent.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    category: Category | None = None
+    actor: str | None = None
+    outcome: Outcome | None = None
+    resource: str | None = None
+    action: Action | None = None
+    apply_id: str | None = None
+    since: datetime | None = None
+    until: datetime | None = None
+
+    #: The filters that are an equality match on one field of the record, which is exactly
+    #: the set that needs its own index. `since` and `until` are a range over `at`, which the
+    #: base index already sorts by.
+    EQUALITY: ClassVar[tuple[str, ...]] = (
+        "category",
+        "actor",
+        "outcome",
+        "resource",
+        "action",
+        "apply_id",
+    )
+
+    def query(self) -> dict[str, Any]:
+        """The MongoDB query, with the filters combining as a conjunction.
+
+        There is deliberately no text search over `detail`: it holds why something was
+        refused, in prose Apchi writes, and making it searchable would turn those sentences
+        into a contract clients match on.
+        """
+        query: dict[str, Any] = {
+            field: value for field in self.EQUALITY if (value := getattr(self, field)) is not None
+        }
+        window = {k: v for k, v in (("$gte", self.since), ("$lte", self.until)) if v is not None}
+        if window:
+            query["at"] = window
+        return query
+
+    def described(self) -> str:
+        """The filters in prose, for the record an export leaves behind.
+
+        Recorded because "who took a copy" is only half the question: a copy of one actor's
+        events and a copy of the whole trail are different acts, and the filters are the only
+        thing that tells them apart.
+        """
+        applied = {
+            field: getattr(self, field)
+            for field in (*self.EQUALITY, "since", "until")
+            if getattr(self, field) is not None
+        }
+        if not applied:
+            return "an export of the whole trail"
+        named = ", ".join(
+            f"{field}={value.isoformat() if isinstance(value, datetime) else value}"
+            for field, value in applied.items()
+        )
+        return f"an export filtered by {named}"
 
 
 @dataclass(frozen=True)
@@ -271,15 +347,8 @@ class AuditStore:
 
     async def page(
         self,
+        filters: Filters | None = None,
         *,
-        category: Category | None = None,
-        actor: str | None = None,
-        outcome: Outcome | None = None,
-        resource: str | None = None,
-        action: Action | None = None,
-        apply_id: str | None = None,
-        since: datetime | None = None,
-        until: datetime | None = None,
         limit: int = 50,
         before: str | None = None,
     ) -> Page[AuditEvent]:
@@ -287,28 +356,8 @@ class AuditStore:
 
         The keyset predicate is what makes the boundary exact: everything strictly older than
         the cursor's instant, plus anything in that same instant with a lower identifier.
-
-        Every filter is an equality match, and they combine as a conjunction. There is
-        deliberately no text search over `detail`: it holds why something was refused, in
-        prose Apchi writes, and making it searchable would turn those sentences into a
-        contract clients match on.
         """
-        query: dict[str, Any] = {}
-        if category is not None:
-            query["category"] = category
-        if actor is not None:
-            query["actor"] = actor
-        if outcome is not None:
-            query["outcome"] = outcome
-        if resource is not None:
-            query["resource"] = resource
-        if action is not None:
-            query["action"] = action
-        if apply_id is not None:
-            query["apply_id"] = apply_id
-        window = {k: v for k, v in (("$gte", since), ("$lte", until)) if v is not None}
-        if window:
-            query["at"] = window
+        query = (filters or Filters()).query()
         if before is not None:
             at, identifier = _decode(before)
             query.update(after("at", at, identifier))
@@ -326,6 +375,24 @@ class AuditStore:
                 encode_cursor(events[-1].at.isoformat(), events[-1].id) if more and events else None
             ),
         )
+
+    async def stream(self, filters: Filters | None = None) -> AsyncIterator[AuditEvent]:
+        """Every matching event, newest first, one at a time.
+
+        The same filters as `page` and no paging at all, which is what an export is. No limit
+        either, and that is the point of streaming it: retention is off by default (see the
+        module docstring), so this collection is the longest-lived thing in the product and
+        its size is unbounded. Assembling the answer before sending it would make Apchi's own
+        history the way to exhaust its memory.
+
+        Newest first, like the listing, so the two orders cannot disagree about what "the
+        first event" means. The MongoDB cursor stays open while the response is written.
+        """
+        cursor = self._collection.find((filters or Filters()).query()).sort(
+            [("at", DESCENDING), ("_id", DESCENDING)]
+        )
+        async for document in cursor:
+            yield self._as_event(document)
 
     async def _indexed_once(self) -> None:
         """Once per **process**, before the first write.
@@ -374,6 +441,10 @@ class AuditStore:
         suffix: MongoDB then satisfies the match and the sort from one index, with no blocking
         sort to grow with the collection.
 
+        Driven off `Filters.EQUALITY` rather than listed again here, so a filter cannot be
+        offered without being indexed -- which is the failure this collection punishes, since
+        it is the one that outlives everything else.
+
         Six of them, which would be a lot on a busy collection and is not one here. An event
         is written when somebody changes configuration on a single Trino cluster -- a handful
         of times a day -- so the write amplification six indexes cost is not a consideration,
@@ -386,7 +457,7 @@ class AuditStore:
         asked about alongside an actor rather than instead of one.
         """
         await self._collection.create_index([("at", DESCENDING), ("_id", DESCENDING)])
-        for field in ("actor", "category", "outcome", "resource", "action", "apply_id"):
+        for field in Filters.EQUALITY:
             await self._collection.create_index(
                 [(field, ASCENDING), ("at", DESCENDING), ("_id", DESCENDING)]
             )
