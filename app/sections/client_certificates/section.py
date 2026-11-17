@@ -68,6 +68,33 @@ def get_certificate(stored: Resources, name: str, expiring_within_days: int) -> 
     return describe(name, stored[name]["certificate"], expiring_within_days)
 
 
+def _entry(bundle: Bundle) -> dict[str, str]:
+    return {"certificate": bundle.certificate_pem, "private_key": bundle.private_key_pem}
+
+
+def check_certificate(
+    stored: Resources, name: str, bundle: Bundle, settings: Settings
+) -> ClientCertificate:
+    """What storing this bundle under this name would produce, without storing it.
+
+    This is the half of `store_certificate` that does the refusing, split out so an
+    inspection can refuse in exactly the cases the upload would. An inspection that said
+    yes where the upload says no would be worse than no inspection -- it is read precisely
+    to find out whether the upload is safe.
+    """
+    candidate = dict(stored)
+    candidate[name] = _entry(bundle)
+    if (size := rendered_size(candidate)) > settings.client_certificate_max_bytes:
+        raise UnprocessablePayload(
+            f"Storing {name!r} would take the client certificate Secret to {size} bytes, "
+            f"past the {settings.client_certificate_max_bytes} a Kubernetes Secret may "
+            "hold. Remove a certificate "
+            "that is no longer used, or split this Cluster's certificates across Clusters.",
+            details=[{"property": "archive", "problem": "the Secret would be too large"}],
+        )
+    return describe(name, bundle.certificate_pem, settings.certificate_expiring_within_days)
+
+
 def store_certificate(
     stored: Resources, name: str, bundle: Bundle, settings: Settings
 ) -> ClientCertificate:
@@ -77,21 +104,9 @@ def store_certificate(
     reference the name, so a renewal that had to be uploaded under a new one would mean
     editing every Catalog that uses it.
     """
-    candidate = dict(stored)
-    candidate[name] = {
-        "certificate": bundle.certificate_pem,
-        "private_key": bundle.private_key_pem,
-    }
-    if (size := rendered_size(candidate)) > settings.client_certificate_max_bytes:
-        raise UnprocessablePayload(
-            f"Storing {name!r} would take the client certificate Secret to {size} bytes, "
-            f"past the {settings.client_certificate_max_bytes} a Kubernetes Secret may "
-            "hold. Remove a certificate "
-            "that is no longer used, or split this Cluster's certificates across Clusters.",
-            details=[{"property": "archive", "problem": "the Secret would be too large"}],
-        )
-    stored[name] = candidate[name]
-    return describe(name, bundle.certificate_pem, settings.certificate_expiring_within_days)
+    described = check_certificate(stored, name, bundle, settings)
+    stored[name] = _entry(bundle)
+    return described
 
 
 def delete_certificate(stored: Resources, name: str) -> None:

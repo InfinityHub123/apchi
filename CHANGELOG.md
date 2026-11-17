@@ -20,6 +20,22 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+`POST /api/v1/certificates/inspect` is new, and reads an uploaded archive without staging it:
+which member was taken as the certificate and which as the key, what would be converted, the
+resulting certificate, the certificate it would replace, and which Catalogs present that name
+today. Uploading under an existing name replaces it immediately -- that is how renewal works --
+so a wrong file silently swapped out a working certificate and the only way to see what was in
+an archive was to stage it.
+
+A separate route rather than a flag on the upload. The reverts take `dry_run` in a JSON body,
+where an unknown field is a `422`; this endpoint takes multipart form data, where an unknown
+form field cannot be refused the same way, so a mistyped flag would have been ignored and the
+certificate staged for real. A path with no save in it cannot do that.
+
+It refuses in exactly the cases the upload refuses, because the validating half of
+`store_certificate` was split out and is what both call. `Bundle` gains the two member names
+and the conversions, which the ZIP reader previously discarded.
+
 `GET /api/v1/audit/export` is new, and is the audit listing with no paging: every event
 matching the same filters, as NDJSON, streamed. One JSON object per line, each line exactly the
 `AuditEvent` the listing returns -- so nothing had to decide a column order or how to flatten a
