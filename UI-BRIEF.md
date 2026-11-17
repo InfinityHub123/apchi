@@ -7,7 +7,7 @@ designer or a design system starting from nothing, so it assumes no prior knowle
 interface to inherit from, no existing layout, navigation, palette or component language to
 preserve or react against. Every visual and interaction decision is open.
 
-The product is backed by a public REST API of 83 operations across 16 areas. Every screen
+The product is backed by a public REST API of 87 operations across 17 areas. Every screen
 described here is a consumer of it, and the API is the limit of what any interface can know or
 do — which is why this document describes capability and data rather than screens.
 
@@ -413,17 +413,20 @@ it produced; every past Validation with its failures.
 
 ### 6.11 Audit
 
-Every action, newest first, attributed. One listing endpoint, cursor-paginated. Each entry
+Every action, newest first, attributed. A listing endpoint, cursor-paginated, and an export
+that is the same listing without the paging. Each entry
 carries when it happened, who did it, how they authenticated, which token if a token did it, a
 category, what was acted on, the action, the outcome, the Apply it belongs to, the Snapshot it
 produced, and a detail.
 
 Nine facts about that data shape any view of it:
 
-- **Categories** are the six Sections plus `admin` and `pipeline`. Admin changes are audited and
-  are not a Section; the pipeline's own acts — an Apply, a rollback — are neither.
-- **Actions are a closed set of thirteen**, not free text: attempted, created, updated, removed,
-  reset, imported, reverted, applied, rolled back, engaged, released, minted, revoked.
+- **Categories** are the six Sections plus `admin`, `pipeline` and `audit`. Admin changes are
+  audited and are not a Section; the pipeline's own acts — an Apply, a rollback — are neither;
+  and `audit` is an act on the trail itself, which changes no configuration at all.
+- **Actions are a closed set of fourteen**, not free text: attempted, created, updated, removed,
+  reset, imported, reverted, applied, rolled back, engaged, released, minted, revoked,
+  exported.
 - **Outcome is `succeeded`, `refused` or `failed`,** and **refusals are recorded** — an attempt
   that was rejected is part of the trail, with a detail saying why. Worth knowing before
   colour-coding by severity: a refusal is usually somebody correctly being told no, not an
@@ -454,6 +457,22 @@ not a total of everything.
 There is no free-text search, deliberately: the only prose on a record is why something was
 refused, and making that searchable would turn Apchi's sentences into a contract clients match
 on.
+
+**Export.** A second endpoint takes exactly the same filters and returns every match with no
+limit, as **NDJSON** — one JSON object per line, each line the same entry the listing returns.
+It streams, so there is no page count to show and no total to show either: the response has no
+length until it ends. Three consequences for a design:
+
+- It is a **download**, not a view. The response is offered as an attachment with a generated
+  filename; the natural shape is a button beside the filters that exports *what is currently
+  filtered*, and saying so is what makes it predictable.
+- **There is no CSV.** NDJSON is for another system — a log pipeline, a SIEM — rather than for a
+  spreadsheet. A design should not promise "export to Excel".
+- **Exporting is itself audited; reading is not.** An export appears in the trail as category
+  `audit`, action `exported`, with its filters recorded in the detail ("an export filtered by
+  actor=sam, outcome=refused"). Paging the listing leaves no trace. So "who has taken a copy of
+  this trail" is an answerable question, and the exported file contains the record of its own
+  export as its first line.
 
 **Retention is forever by default** — a deployment may set a window, but nothing is discarded
 unless somebody chose that, so the history can be very long and the oldest entry is not a
@@ -734,10 +753,11 @@ be purged without breaking Snapshot immutability. This is a recorded, accepted t
 Honest list. Designing around these is fine; assuming they exist is not.
 
 - **No per-catalog "test connection".** Connectivity is only checked inside a full Validation.
-- **Audit has no export.** One listing endpoint, paged at 500 at a time, and retention is
-  forever by default — so the longest-lived collection in the product is the one that cannot be
-  taken out of it. Filtering is now thorough (§6.11); getting the result into another system is
-  not possible.
+- **The audit export is NDJSON only, and it is all-or-filtered — never a report.** Filtering
+  and export both exist now (§6.11), but the output is one JSON object per line for another
+  system to read. There is no CSV, no spreadsheet, no PDF, and nothing that aggregates or
+  summarises — no "changes per actor this month", no counts of anything. Every total a design
+  shows has to be counted client-side from events it fetched itself.
 - **No user, role or account management in the API at all** — see §2. Provisioning happens
   outside Apchi, and no screen can change it.
 - **No way to see another person's API tokens**, so nothing can inventory the automation running
