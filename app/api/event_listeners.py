@@ -25,6 +25,8 @@ from app.sections.event_listeners.model import (
     EventListenerUpdate,
     EventListenerWrite,
 )
+from app.sections.event_listeners.schemas import CURATED_SCHEMAS
+from app.sections.properties import PropertyRules, describe
 
 router = APIRouter(prefix="/event-listeners", tags=["event listeners"])
 
@@ -183,6 +185,22 @@ async def create_event_listener(
     created = section.create_event_listener(candidate.resources(LISTENERS), write)
     await store.save(candidate)
     return created
+
+
+@router.get(
+    "/types", response_model=list[PropertyRules], summary="What each curated listener accepts"
+)
+async def list_types() -> list[PropertyRules]:
+    """The same rules the write endpoints enforce, for the same reason as
+    `GET /catalogs/connectors`: a form that carries its own copy of them drifts.
+
+    Two curated types against seven connectors, and the asymmetry is real -- a Cluster has
+    one event listener configuration and many Catalogs. An uncurated type is still accepted
+    and still passes through unvalidated.
+
+    Declared before `/{name}` so the path does not resolve to a listener called "types".
+    """
+    return [describe(name, schema) for name, schema in sorted(CURATED_SCHEMAS.items())]
 
 
 @router.get("/{name}", response_model=EventListener, summary="Fetch a staged Event Listener")

@@ -207,6 +207,26 @@ needs to know that three of their six edits are free and one costs every running
   property bag (typically 2–20 key/value pairs, values ranging from short identifiers to long
   JDBC URLs). Some connectors are *curated* (Apchi knows their schema and validates); others
   pass through unvalidated, and the interface should say which.
+- **The curated schemas are readable from the API**, one call per Section, so a form never
+  carries its own copy of them. Each returns, per connector or listener type: the required
+  properties, the optional ones, the *branches*, the open-ended ones, accepted name prefixes,
+  and **which properties carry a credential**. Four facts about that shape:
+  - **A branch is a property whose value decides what else is required.** Iceberg's
+    `iceberg.catalog.type` has six values, each bringing its own required properties and one
+    bringing none; Hive, Kafka and Elasticsearch each have one too. A form that asks for a flat
+    list of fields cannot express this — the second half of the form depends on one answer in
+    the first.
+  - **A branch's allowed values can be a closed list or open.** Null means any value is
+    accepted and the listed ones are merely the values Apchi knows what to do with, which is a
+    dropdown in the first case and something more permissive in the second.
+  - **Which properties are secrets is stated, not guessable from the name.**
+    `mongodb.connection-url` holds the password because that connector has no separate one;
+    `s3.aws-access-key` reads like a secret and is an identifier. A design that masks by name
+    gets both wrong. See §12 for what masking is and is not for.
+  - **Curated is not the same as supported.** Any connector Trino has a plugin for is accepted;
+    an uncurated one just gets no property checking until Apply. The curated list is seven
+    connectors and two listener types, and each Catalog also reports whether its own connector
+    is one of them.
 - **A grant** has an identity, a catalog, optional schema, optional table, and one or more of six privileges.
   Omitting schema means "all schemas"; omitting table means "all tables". There are also
   system-owned rules Apchi maintains that nobody may edit, shown read-only.
@@ -734,6 +754,9 @@ be purged without breaking Snapshot immutability. This is a recorded, accepted t
 Honest list. Designing around these is fine; assuming they exist is not.
 
 - **No per-catalog "test connection".** Connectivity is only checked inside a full Validation.
+  The curated property *rules* are readable (§7's data shape), so a form can be built and
+  validated client-side before anything is staged — but whether the credentials in it actually
+  reach the database is not answerable short of an Apply.
 - **Audit has no export.** One listing endpoint, paged at 500 at a time, and retention is
   forever by default — so the longest-lived collection in the product is the one that cannot be
   taken out of it. Filtering is now thorough (§6.11); getting the result into another system is
