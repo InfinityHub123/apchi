@@ -20,6 +20,13 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+`GET /api/v1/cluster` gains `permissions_enforced`. Whether grants are enforced was readable
+only through `GET /api/v1/admin/permissions/enforcement`, which answers `403` to an Operator --
+so the people reading a screen of grants had no way to discover that the rules end in a
+catch-all allowing everything to everyone, and that is the **default**. The switch stays
+Admin-only; only the reading moved, onto the route that is already the one to poll. One more
+MongoDB read and still nothing outbound.
+
 `GET /api/v1/audit` takes four more filters: `outcome`, `resource`, `action` and `apply_id`.
 Additive, so nothing breaks. `outcome=refused` is the one worth knowing about — refusals were
 always recorded, and asking for them meant paging a category and filtering client-side, which
