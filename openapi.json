@@ -373,7 +373,8 @@
               "engaged",
               "released",
               "minted",
-              "revoked"
+              "revoked",
+              "exported"
             ],
             "title": "Action",
             "type": "string"
@@ -416,7 +417,8 @@
               {
                 "enum": [
                   "admin",
-                  "pipeline"
+                  "pipeline",
+                  "audit"
                 ],
                 "type": "string"
               }
@@ -956,6 +958,11 @@
             "$ref": "#/components/schemas/MaintenanceState",
             "description": "Whether Operator changes are disabled, why, and whether an Admin engaged it or Apchi did after a failed Auto Rollback. Readable here by any caller, because the people it stops are the ones who need to know -- `/admin/maintenance-mode` is where an Admin changes it, and that stays Admin-only."
           },
+          "permissions_enforced": {
+            "description": "Whether a Trino Identity may reach only what it has been granted. Readable here by any caller for the reason Maintenance Mode is: when enforcement is off the generated rules end in a catch-all that allows everything to everyone, so the grants an Operator is reading are not in force -- and the people reading them are the ones who have to know that. It is **off by default**, which is what a Cluster did before Apchi was installed, so this is the state a deployment is in until an Admin decides otherwise. `/admin/permissions/enforcement` is where that decision is made, and it stays Admin-only.",
+            "title": "Permissions Enforced",
+            "type": "boolean"
+          },
           "snapshot": {
             "anyOf": [
               {
@@ -984,7 +991,8 @@
         },
         "required": [
           "snapshot",
-          "maintenance"
+          "maintenance",
+          "permissions_enforced"
         ],
         "title": "ClusterState",
         "type": "object"
@@ -4856,6 +4864,36 @@
         "parameters": [
           {
             "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A `next` from a previous page. Omit for the newest page.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A `next` from a previous page. Omit for the newest page.",
+              "title": "Before"
+            }
+          },
+          {
+            "in": "query",
             "name": "category",
             "required": false,
             "schema": {
@@ -4874,7 +4912,8 @@
                 {
                   "enum": [
                     "admin",
-                    "pipeline"
+                    "pipeline",
+                    "audit"
                   ],
                   "type": "string"
                 },
@@ -4962,7 +5001,8 @@
                     "engaged",
                     "released",
                     "minted",
-                    "revoked"
+                    "revoked",
+                    "exported"
                   ],
                   "type": "string"
                 },
@@ -5024,36 +5064,6 @@
               ],
               "title": "Until"
             }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 50,
-              "maximum": 500,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "A `next` from a previous page. Omit for the newest page.",
-            "in": "query",
-            "name": "before",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "A `next` from a previous page. Omit for the newest page.",
-              "title": "Before"
-            }
           }
         ],
         "responses": {
@@ -5089,6 +5099,223 @@
           }
         },
         "summary": "Who changed what, newest first",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/v1/audit/export": {
+      "get": {
+        "description": "The listing without the paging, for a trail too long to page through.\n\nNot Admin-only, for the reason this module exists: the listing is Operator-readable\ndeliberately, and the same data in a different shape does not deserve a different gate.\nIt carries exactly what the listing carries -- no configuration values, so the file is\nnot a new thing to protect (\u00a712).\n\n**The export is itself audited, and the listing is not.** Taking a copy of the whole\ntrail leaves Apchi with something that outlives Apchi's own rules about it, which reading\na page in a console does not; \u00a720's own logic -- record what somebody would later need to\nask about -- gives different answers for the two.\n\nRecorded *before* the first byte is written, which has two consequences worth naming. A\nclient that hangs up mid-stream still leaves the record, because a partial copy of an\naudit trail is exactly the copy you would want to know about. And the copy therefore\ncontains the record of itself being taken, which is the right way round.",
+        "operationId": "export_api_v1_audit_export_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "catalogs",
+                    "client_certificates",
+                    "certificate_mapping",
+                    "permissions",
+                    "resource_groups",
+                    "event_listeners"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "admin",
+                    "pipeline",
+                    "audit"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "actor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor"
+            }
+          },
+          {
+            "description": "`refused` is the one people come here for: a frozen Candidate, Maintenance Mode, a rejected payload. It is Apchi working correctly, which is why it is recorded and why it is worth being able to ask for on its own.",
+            "in": "query",
+            "name": "outcome",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "succeeded",
+                    "refused",
+                    "failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`refused` is the one people come here for: a frozen Candidate, Maintenance Mode, a rejected payload. It is Apchi working correctly, which is why it is recorded and why it is worth being able to ask for on its own.",
+              "title": "Outcome"
+            }
+          },
+          {
+            "description": "Exact match on the resource's name, not a search. Null on an event about a whole Section or Cluster, and such an event is therefore never returned by this filter.",
+            "in": "query",
+            "name": "resource",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact match on the resource's name, not a search. Null on an event about a whole Section or Cluster, and such an event is therefore never returned by this filter.",
+              "title": "Resource"
+            }
+          },
+          {
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "attempted",
+                    "created",
+                    "updated",
+                    "removed",
+                    "reset",
+                    "imported",
+                    "reverted",
+                    "applied",
+                    "rolled_back",
+                    "engaged",
+                    "released",
+                    "minted",
+                    "revoked",
+                    "exported"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            }
+          },
+          {
+            "description": "Every event belonging to one Apply. The same id is on the log records for that Apply, so the trail and the logs join on it rather than by timestamp.",
+            "in": "query",
+            "name": "apply_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Every event belonging to one Apply. The same id is on the log records for that Apply, so the trail and the logs join on it rather than by timestamp.",
+              "title": "Apply Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "One `AuditEvent` per line, newest first, as NDJSON. The same events the listing returns for the same filters, with no limit."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download the whole filtered trail",
         "tags": [
           "audit"
         ]
@@ -6356,7 +6583,7 @@
     },
     "/api/v1/cluster": {
       "get": {
-        "description": "Three reads against MongoDB and nothing outbound, so this is the one to poll.\n\nIt answers \u00a721's always-visible pair -- the committed Snapshot and what is known about\nthe Cluster's health -- plus the state that decides whether an Operator can edit at all.",
+        "description": "Four reads against MongoDB and nothing outbound, so this is the one to poll.\n\nIt answers \u00a721's always-visible pair -- the committed Snapshot and what is known about\nthe Cluster's health -- plus the two pieces of state that decide what an Operator is\nlooking at: whether they can edit at all, and whether the grants they are reading are\nbeing enforced.",
         "operationId": "state_api_v1_cluster_get",
         "responses": {
           "200": {

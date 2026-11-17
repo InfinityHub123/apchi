@@ -19,7 +19,13 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.deps import ApplyStoreDep, ClusterDep, MaintenanceStoreDep, SnapshotStoreDep
+from app.api.deps import (
+    AdminStoreDep,
+    ApplyStoreDep,
+    ClusterDep,
+    MaintenanceStoreDep,
+    SnapshotStoreDep,
+)
 from app.pipeline.applies import ApplyRecord, Stage
 from app.pipeline.drift import Drift, drift_of
 from app.pipeline.maintenance import MaintenanceState
@@ -67,6 +73,19 @@ class ClusterState(BaseModel):
             "Apchi did after a failed Auto Rollback. Readable here by any caller, because "
             "the people it stops are the ones who need to know -- `/admin/maintenance-mode` "
             "is where an Admin changes it, and that stays Admin-only."
+        )
+    )
+    permissions_enforced: bool = Field(
+        description=(
+            "Whether a Trino Identity may reach only what it has been granted. "
+            "Readable here by any caller for the reason Maintenance Mode is: when enforcement "
+            "is off the generated rules end in a catch-all that allows everything to "
+            "everyone, so the grants an Operator is reading are not in force -- and the "
+            "people reading them are the ones who have to know that. It is **off by "
+            "default**, which is what a Cluster did before Apchi was installed, so this is "
+            "the state a deployment is in until an Admin decides otherwise. "
+            "`/admin/permissions/enforcement` is where that decision is made, and it stays "
+            "Admin-only."
         )
     )
     last_apply: LastApply | None = Field(
@@ -121,11 +140,14 @@ async def state(
     snapshots: SnapshotStoreDep,
     maintenance: MaintenanceStoreDep,
     applies: ApplyStoreDep,
+    admin: AdminStoreDep,
 ) -> ClusterState:
-    """Three reads against MongoDB and nothing outbound, so this is the one to poll.
+    """Four reads against MongoDB and nothing outbound, so this is the one to poll.
 
     It answers §21's always-visible pair -- the committed Snapshot and what is known about
-    the Cluster's health -- plus the state that decides whether an Operator can edit at all.
+    the Cluster's health -- plus the two pieces of state that decide what an Operator is
+    looking at: whether they can edit at all, and whether the grants they are reading are
+    being enforced.
     """
     latest = await snapshots.latest()
     page = await applies.page(limit=1)
@@ -135,6 +157,7 @@ async def state(
         snapshot=None if latest is None else latest.number,
         snapshot_at=None if latest is None else latest.created_at,
         maintenance=await maintenance.get(),
+        permissions_enforced=(await admin.load()).enforce_permissions,
         last_apply=(
             None
             if recent is None

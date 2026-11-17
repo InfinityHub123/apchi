@@ -7,7 +7,7 @@ designer or a design system starting from nothing, so it assumes no prior knowle
 interface to inherit from, no existing layout, navigation, palette or component language to
 preserve or react against. Every visual and interaction decision is open.
 
-The product is backed by a public REST API of 83 operations across 16 areas. Every screen
+The product is backed by a public REST API of 87 operations across 17 areas. Every screen
 described here is a consumer of it, and the API is the limit of what any interface can know or
 do — which is why this document describes capability and data rather than screens.
 
@@ -262,9 +262,9 @@ person has to remember to go and look.
 
 1. Cluster health, and the Snapshot currently committed. The API answers this in **two
    parts, which cost different things**, and a design has to decide what it shows by default.
-   One read returns the committed Snapshot, whether Maintenance Mode is engaged, and the last
-   Apply with whether its Verification passed — it touches nothing outside Apchi's own
-   database, so it can be polled. A second, separate read asks the coordinator how it is
+   One read returns the committed Snapshot, whether Maintenance Mode is engaged, whether
+   grants are being enforced, and the last Apply with whether its Verification passed — it
+   touches nothing outside Apchi's own database, so it can be polled. A second, separate read asks the coordinator how it is
    right now, and optionally counts active workers. The live answer therefore costs a request
    to Trino each time, and the cheap one is **history**: it says what happened at the last
    Apply, not what is true now. Rendering the last Verification as a current reading would
@@ -433,17 +433,20 @@ it produced; every past Validation with its failures.
 
 ### 6.11 Audit
 
-Every action, newest first, attributed. One listing endpoint, cursor-paginated. Each entry
+Every action, newest first, attributed. A listing endpoint, cursor-paginated, and an export
+that is the same listing without the paging. Each entry
 carries when it happened, who did it, how they authenticated, which token if a token did it, a
 category, what was acted on, the action, the outcome, the Apply it belongs to, the Snapshot it
 produced, and a detail.
 
 Nine facts about that data shape any view of it:
 
-- **Categories** are the six Sections plus `admin` and `pipeline`. Admin changes are audited and
-  are not a Section; the pipeline's own acts — an Apply, a rollback — are neither.
-- **Actions are a closed set of thirteen**, not free text: attempted, created, updated, removed,
-  reset, imported, reverted, applied, rolled back, engaged, released, minted, revoked.
+- **Categories** are the six Sections plus `admin`, `pipeline` and `audit`. Admin changes are
+  audited and are not a Section; the pipeline's own acts — an Apply, a rollback — are neither;
+  and `audit` is an act on the trail itself, which changes no configuration at all.
+- **Actions are a closed set of fourteen**, not free text: attempted, created, updated, removed,
+  reset, imported, reverted, applied, rolled back, engaged, released, minted, revoked,
+  exported.
 - **Outcome is `succeeded`, `refused` or `failed`,** and **refusals are recorded** — an attempt
   that was rejected is part of the trail, with a detail saying why. Worth knowing before
   colour-coding by severity: a refusal is usually somebody correctly being told no, not an
@@ -474,6 +477,22 @@ not a total of everything.
 There is no free-text search, deliberately: the only prose on a record is why something was
 refused, and making that searchable would turn Apchi's sentences into a contract clients match
 on.
+
+**Export.** A second endpoint takes exactly the same filters and returns every match with no
+limit, as **NDJSON** — one JSON object per line, each line the same entry the listing returns.
+It streams, so there is no page count to show and no total to show either: the response has no
+length until it ends. Three consequences for a design:
+
+- It is a **download**, not a view. The response is offered as an attachment with a generated
+  filename; the natural shape is a button beside the filters that exports *what is currently
+  filtered*, and saying so is what makes it predictable.
+- **There is no CSV.** NDJSON is for another system — a log pipeline, a SIEM — rather than for a
+  spreadsheet. A design should not promise "export to Excel".
+- **Exporting is itself audited; reading is not.** An export appears in the trail as category
+  `audit`, action `exported`, with its filters recorded in the detail ("an export filtered by
+  actor=sam, outcome=refused"). Paging the listing leaves no trace. So "who has taken a copy of
+  this trail" is an answerable question, and the exported file contains the record of its own
+  export as its first line.
 
 **Retention is forever by default** — a deployment may set a window, but nothing is discarded
 unless somebody chose that, so the history can be very long and the oldest entry is not a
@@ -524,8 +543,13 @@ Visible only to Admins; an Operator should not see them at all.
   cluster already serving queries denies every identity without a grant everything it had. An
   Operator cannot touch it — they would be closing a cluster by editing configuration — and the
   interface has to make the off state legible wherever grants are shown, because a screen full
-  of grants that are not being enforced reads as protection that is not there. It also stages
-  nothing by itself: the cluster receives it at the next Apply, costing no restart.
+  of grants that are not being enforced reads as protection that is not there. **The switch is
+  Admin-only; whether it is on is readable by anyone** — on the same polled read as Maintenance
+  Mode (§6.1, point 1) — precisely so that an Operator reading grants can be told they are not
+  in force. It is **off by default**, which is the state every deployment is in until an Admin
+  decides otherwise, so a design that treats "not enforced" as the exceptional case has it
+  backwards. It also stages nothing by itself: the cluster receives it at the next Apply,
+  costing no restart.
 - **Preserved certificate-mapping patterns** — additional patterns a cluster ran *before* Apchi,
   kept alive while its clients migrate. They are **ordered**, and are evaluated beneath the
   Operator's single pattern, so a subject matching both resolves to the Operator's. This is a
@@ -757,10 +781,11 @@ Honest list. Designing around these is fine; assuming they exist is not.
   The curated property *rules* are readable (§7's data shape), so a form can be built and
   validated client-side before anything is staged — but whether the credentials in it actually
   reach the database is not answerable short of an Apply.
-- **Audit has no export.** One listing endpoint, paged at 500 at a time, and retention is
-  forever by default — so the longest-lived collection in the product is the one that cannot be
-  taken out of it. Filtering is now thorough (§6.11); getting the result into another system is
-  not possible.
+- **The audit export is NDJSON only, and it is all-or-filtered — never a report.** Filtering
+  and export both exist now (§6.11), but the output is one JSON object per line for another
+  system to read. There is no CSV, no spreadsheet, no PDF, and nothing that aggregates or
+  summarises — no "changes per actor this month", no counts of anything. Every total a design
+  shows has to be counted client-side from events it fetched itself.
 - **No user, role or account management in the API at all** — see §2. Provisioning happens
   outside Apchi, and no screen can change it.
 - **No way to see another person's API tokens**, so nothing can inventory the automation running

@@ -20,6 +20,28 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+`GET /api/v1/audit/export` is new, and is the audit listing with no paging: every event
+matching the same filters, as NDJSON, streamed. One JSON object per line, each line exactly the
+`AuditEvent` the listing returns -- so nothing had to decide a column order or how to flatten a
+null, and `openapi.json` already documents the contents. A page holds at most 500 and retention
+is off by default, so until now the longest-lived collection in the product was the one that
+could not be taken out of it.
+
+Two things to know about it. It is **not Admin-only**: the listing is Operator-readable
+deliberately (ADR-0002), and the same data in a different shape does not deserve a different
+gate. And an export is **itself recorded in the trail** -- category `audit`, a new third
+non-Section category, action `exported`, with the filters it used in the detail -- where reading
+a page still is not. Taking a copy leaves somebody holding the trail outside Apchi's rules
+about it; reading a page in a console does not. `Category` and `Action` each gained a value, so
+a client with an exhaustive `switch` over either sees a value it does not know.
+
+`GET /api/v1/cluster` gains `permissions_enforced`. Whether grants are enforced was readable
+only through `GET /api/v1/admin/permissions/enforcement`, which answers `403` to an Operator --
+so the people reading a screen of grants had no way to discover that the rules end in a
+catch-all allowing everything to everyone, and that is the **default**. The switch stays
+Admin-only; only the reading moved, onto the route that is already the one to poll. One more
+MongoDB read and still nothing outbound.
+
 `GET /api/v1/catalogs/connectors` and `GET /api/v1/event-listeners/types` are new, and return
 the curated property schemas the write endpoints already validate against: required, optional,
 branches, open-ended properties, accepted prefixes, and which properties carry a credential.
