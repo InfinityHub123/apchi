@@ -742,6 +742,11 @@ export interface paths {
          *     Snapshot being restored from is not modified; applying this produces a new one, so
          *     history is never rewritten.
          *
+         *     **`dry_run: true` is worth using here above anywhere else.** This discards every staged
+         *     change in all six Sections, including other people's, and the effect reported below is
+         *     the only description of what that amounts to. Without a dry run the way to see it was to
+         *     cause it.
+         *
          *     **Admin values are not included.** Raw files, permission enforcement and the preserved
          *     mapping patterns are the Admin's and never enter a Snapshot (invariant 9), so a Full
          *     Rollback does not restore them. Nor does it reach outside Apchi: a Snapshot naming a
@@ -766,6 +771,38 @@ export interface paths {
         put?: never;
         /** Stage a new Catalog */
         post: operations["create_catalog_api_v1_catalogs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalogs/connectors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What each curated connector accepts
+         * @description The rules `POST` and `PATCH` already enforce, so a form built from this is refused for
+         *     the same reasons and no others -- and a picker stops being a second copy of them that
+         *     drifts.
+         *
+         *     **Only the curated connectors are here, and that is not the list of connectors you may
+         *     use.** Anything Trino has a plugin for is accepted; what an uncurated connector does not
+         *     get is this -- no required-property check, no typo suggestion, nothing until Trino itself
+         *     sees the properties at Apply. `GET /catalogs` reports `supported` per Catalog, which is
+         *     the same distinction from the other direction.
+         *
+         *     Declared before `/{name}` so the path does not resolve to a Catalog called "connectors".
+         *     Static: it changes when Apchi's supported Trino range does, not when anybody edits
+         *     anything.
+         */
+        get: operations["list_connectors_api_v1_catalogs_connectors_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1073,6 +1110,33 @@ export interface paths {
          *     `POST /candidate/rollback` -- a Full Rollback.
          */
         post: operations["revert_api_v1_event_listeners_revert_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-listeners/types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What each curated listener accepts
+         * @description The same rules the write endpoints enforce, for the same reason as
+         *     `GET /catalogs/connectors`: a form that carries its own copy of them drifts.
+         *
+         *     Two curated types against seven connectors, and the asymmetry is real -- a Cluster has
+         *     one event listener configuration and many Catalogs. An uncurated type is still accepted
+         *     and still passes through unvalidated.
+         *
+         *     Declared before `/{name}` so the path does not resolve to a listener called "types".
+         */
+        get: operations["list_types_api_v1_event_listeners_types_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1776,6 +1840,34 @@ export interface components {
             name: string;
         };
         /**
+         * BranchRules
+         * @description One selector property, and what each of its values brings with it.
+         */
+        BranchRules: {
+            /**
+             * Allowed
+             * @description The values the selector accepts. **Null means any value is accepted** -- the names in `values` are then the ones Apchi knows what to do with rather than the only ones permitted, which is the difference between a closed list and a suggestion.
+             */
+            allowed: string[] | null;
+            /**
+             * Default
+             * @description What Apchi assumes when the selector is absent, so the properties its value requires are required too. Null means a missing selector brings nothing.
+             */
+            default?: string | null;
+            /**
+             * Selector
+             * @description The property whose value decides the rest.
+             */
+            selector: string;
+            /**
+             * Values
+             * @description Per selector value, the properties that become required. A value mapping to an empty list is a real answer: that branch requires nothing further.
+             */
+            values: {
+                [key: string]: string[];
+            };
+        };
+        /**
          * BundleReading
          * @description What Apchi made of an archive, having stored nothing.
          */
@@ -2477,6 +2569,40 @@ export interface components {
             section?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners") | null;
         };
         /**
+         * PropertyRules
+         * @description What Apchi will accept for one curated connector or Event Listener type.
+         *
+         *     The same rules the write endpoints enforce, so a form built from this is refused for the
+         *     same reasons and no others. Everything is sorted, because the underlying sets are
+         *     unordered and a response that reshuffled between calls would be a committed contract that
+         *     cannot be diffed.
+         */
+        PropertyRules: {
+            /** Branches */
+            branches: components["schemas"]["BranchRules"][];
+            /** Name */
+            name: string;
+            /**
+             * Open Ended
+             * @description Properties whose value Apchi does not constrain. Present and accepted; what is in them is Trino's business, which is also why nothing here can redact them.
+             */
+            open_ended: string[];
+            /** Optional */
+            optional: string[];
+            /**
+             * Prefixes
+             * @description Any property starting with one of these is accepted, name unchecked.
+             */
+            prefixes: string[];
+            /** Required */
+            required: string[];
+            /**
+             * Secrets
+             * @description Which of the properties above carry a credential. Marked per connector rather than inferred from the name, because the name does not always say: `mongodb.connection-url` embeds the password and the connector has no separate one, while `s3.aws-access-key` reads like a secret and is an identifier. §12 makes all Apchi users trusted, so this is not an access rule -- it is what a form needs to know to mark a field, and what a diff needs to avoid putting a password on a screen somebody is sharing.
+             */
+            secrets: string[];
+        };
+        /**
          * Provenance
          * @description Where a document came from. Informational, and it never gates an import.
          *
@@ -2764,6 +2890,11 @@ export interface components {
              */
             sections: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners")[];
             /**
+             * Staged
+             * @description Whether the Candidate was actually changed. False for a `dry_run`, where everything else in this response is what *would* have happened. The only field that distinguishes a preview from the act, so a client that ignores it cannot tell them apart.
+             */
+            staged: boolean;
+            /**
              * Summary
              * @description What this does, in words, for an Operator to read.
              */
@@ -2775,6 +2906,14 @@ export interface components {
          *     drift into different shapes for the same question.
          */
         RevertRequest: {
+            /**
+             * Dry Run
+             * @description Report what this would do and stage nothing. The answer is the same `RevertEffect` the real call returns, with `staged` false.
+             *
+             *     In the body rather than as a query parameter, and that is a safety property rather than a style: this model forbids unknown fields, so `dryrun` or `dry-run` is a 422. A mistyped query parameter would be ignored, and the request it was meant to make harmless would go through and replace the Section for real.
+             * @default false
+             */
+            dry_run: boolean;
             /** Snapshot */
             snapshot: number;
         };
@@ -4603,6 +4742,35 @@ export interface operations {
             };
         };
     };
+    list_connectors_api_v1_catalogs_connectors_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PropertyRules"][];
+                };
+            };
+            /** @description No usable credential. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
     revert_api_v1_catalogs_revert_post: {
         parameters: {
             query?: never;
@@ -5360,6 +5528,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_types_api_v1_event_listeners_types_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PropertyRules"][];
+                };
+            };
+            /** @description No usable credential. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
                 };
             };
         };

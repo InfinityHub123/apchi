@@ -27,6 +27,11 @@ JDBC_CREDENTIALS = frozenset(
         "keystore-password-credential-name",
     }
 )
+#: The two JDBC credentials that are actually credentials. `connection-user` is a name,
+#: `credential-provider.type` is a strategy, and the `*-credential-name` pair names a secret
+#: stored somewhere else rather than holding one.
+JDBC_SECRETS = frozenset({"connection-password", "keystore-password"})
+
 JDBC_TUNING = frozenset(
     {
         "case-insensitive-name-matching",
@@ -63,6 +68,11 @@ METASTORE = frozenset(
     }
 )
 
+#: Only the secret half of the S3 pair. An access key id is an identifier that travels in
+#: every signed request -- marking it would teach a form to hide something that is not
+#: hidden anywhere else, and a mask that covers identifiers is a mask nobody reads.
+FILE_SYSTEM_SECRETS = frozenset({"s3.aws-secret-key"})
+
 # The object-storage toggles and their credentials, shared by Hive and Iceberg.
 FILE_SYSTEM = frozenset(
     {
@@ -94,6 +104,11 @@ def _tls(prefix: str) -> frozenset[str]:
     )
 
 
+def _tls_secrets(prefix: str) -> frozenset[str]:
+    """The two passwords in that block. Paths are not secrets."""
+    return frozenset({f"{prefix}.keystore-password", f"{prefix}.truststore-password"})
+
+
 # --- the curated seven --------------------------------------------------------
 
 CURATED_SCHEMAS: dict[str, ConnectorSchema] = {
@@ -102,6 +117,7 @@ CURATED_SCHEMAS: dict[str, ConnectorSchema] = {
         optional=JDBC_CREDENTIALS
         | JDBC_TUNING
         | frozenset({"postgresql.array-mapping", "postgresql.include-system-tables"}),
+        secrets=JDBC_SECRETS,
     ),
     "mongodb": ConnectorSchema(
         # The connection URL embeds credentials; there is no separate password.
@@ -122,6 +138,9 @@ CURATED_SCHEMAS: dict[str, ConnectorSchema] = {
             }
         )
         | _tls("mongodb.tls"),
+        # The whole connection URL, because the password is inside it. This is the case a
+        # name test cannot reach, and the reason secrets are marked rather than guessed.
+        secrets=frozenset({"mongodb.connection-url"}) | _tls_secrets("mongodb.tls"),
     ),
     "hive": ConnectorSchema(
         branches=(
@@ -153,6 +172,7 @@ CURATED_SCHEMAS: dict[str, ConnectorSchema] = {
                 "hive.metastore.glue.aws-secret-key",
             }
         ),
+        secrets=FILE_SYSTEM_SECRETS | frozenset({"hive.metastore.glue.aws-secret-key"}),
     ),
     "iceberg": ConnectorSchema(
         branches=(
@@ -209,6 +229,20 @@ CURATED_SCHEMAS: dict[str, ConnectorSchema] = {
             }
         ),
         open_ended=frozenset({"iceberg.rest-catalog.http-headers"}),
+        secrets=FILE_SYSTEM_SECRETS
+        | frozenset(
+            {
+                "iceberg.jdbc-catalog.connection-password",
+                "iceberg.snowflake-catalog.password",
+                "iceberg.rest-catalog.oauth2.token",
+                "iceberg.rest-catalog.oauth2.credential",
+                "iceberg.nessie-catalog.authentication.token",
+                # Open-ended, and the usual contents are an Authorization header. Marked
+                # even though nothing can redact its value, because what this list is for
+                # is keeping a credential off a shared screen.
+                "iceberg.rest-catalog.http-headers",
+            }
+        ),
     ),
     "redis": ConnectorSchema(
         # redis.table-names appears in the minimal example but is optional: the
@@ -231,6 +265,7 @@ CURATED_SCHEMAS: dict[str, ConnectorSchema] = {
             }
         )
         | _tls("redis.tls"),
+        secrets=frozenset({"redis.password"}) | _tls_secrets("redis.tls"),
     ),
     "elasticsearch": ConnectorSchema(
         required=frozenset({"elasticsearch.host"}),
@@ -266,6 +301,10 @@ CURATED_SCHEMAS: dict[str, ConnectorSchema] = {
             }
         )
         | _tls("elasticsearch.tls"),
+        # The password arrives through the PASSWORD branch, so a secret is not always in
+        # `required` or `optional` -- which is why this is one set over the whole schema.
+        secrets=frozenset({"elasticsearch.auth.password", "elasticsearch.aws.secret-key"})
+        | _tls_secrets("elasticsearch.tls"),
     ),
     "kafka": ConnectorSchema(
         required=frozenset({"kafka.nodes"}),
@@ -307,5 +346,12 @@ CURATED_SCHEMAS: dict[str, ConnectorSchema] = {
         # whole Kafka client property space. Trino never sees their contents as
         # catalog properties, so nothing here can validate or redact them.
         open_ended=frozenset({"kafka.config.resources"}),
+        secrets=frozenset(
+            {
+                "kafka.ssl.keystore.password",
+                "kafka.ssl.truststore.password",
+                "kafka.ssl.key.password",
+            }
+        ),
     ),
 }
