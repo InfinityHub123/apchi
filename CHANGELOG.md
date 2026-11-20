@@ -56,6 +56,34 @@ catch-all allowing everything to everyone, and that is the **default**. The swit
 Admin-only; only the reading moved, onto the route that is already the one to poll. One more
 MongoDB read and still nothing outbound.
 
+`GET /api/v1/catalogs/connectors` and `GET /api/v1/event-listeners/types` are new, and return
+the curated property schemas the write endpoints already validate against: required, optional,
+branches, open-ended properties, accepted prefixes, and which properties carry a credential.
+They existed only in code, so anything building a form carried a second copy of them that drifts
+silently -- which is what the frontend was doing for all seven connectors.
+
+`PropertySchema` gains `secrets`, marked per connector rather than inferred from the name.
+A name test cannot do this job: `mongodb.connection-url` embeds the password because that
+connector has no separate one, and `s3.aws-access-key` reads like a secret while being an
+identifier that travels in every signed request. The log redaction filter in `app.logging` stays
+a name test, deliberately -- it errs towards hiding too much, which is right for a log file and
+wrong for a form that has to say which field takes a password.
+
+`POST /{section}/revert` and `POST /api/v1/candidate/rollback` take `dry_run` in the request
+body, and `RevertEffect` gains `staged`. A revert staged immediately and reported its effect
+afterwards, so the only way to see what a Full Rollback amounted to -- every staged change in
+all six Sections discarded, including other people's -- was to cause it. The effect was always
+computed from the Candidate in memory, so a dry run is the real answer rather than an estimate;
+what the real call adds is the save, and a dry run skips it. It therefore records no audit entry
+either, because the audit is written by that save.
+
+`staged` is additive but worth reading: it is the only field distinguishing a preview from the
+act, so a client that ignores it cannot tell them apart.
+
+The flag is in the body rather than a query parameter deliberately. `RevertRequest` forbids
+unknown fields, so `dryrun` is a `422`; a mistyped query parameter would have been ignored and
+the revert it was meant to make harmless would have gone through.
+
 `GET /api/v1/audit` takes four more filters: `outcome`, `resource`, `action` and `apply_id`.
 Additive, so nothing breaks. `outcome=refused` is the one worth knowing about — refusals were
 always recorded, and asking for them meant paging a category and filtering client-side, which

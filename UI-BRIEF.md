@@ -207,6 +207,26 @@ needs to know that three of their six edits are free and one costs every running
   property bag (typically 2–20 key/value pairs, values ranging from short identifiers to long
   JDBC URLs). Some connectors are *curated* (Apchi knows their schema and validates); others
   pass through unvalidated, and the interface should say which.
+- **The curated schemas are readable from the API**, one call per Section, so a form never
+  carries its own copy of them. Each returns, per connector or listener type: the required
+  properties, the optional ones, the *branches*, the open-ended ones, accepted name prefixes,
+  and **which properties carry a credential**. Four facts about that shape:
+  - **A branch is a property whose value decides what else is required.** Iceberg's
+    `iceberg.catalog.type` has six values, each bringing its own required properties and one
+    bringing none; Hive, Kafka and Elasticsearch each have one too. A form that asks for a flat
+    list of fields cannot express this — the second half of the form depends on one answer in
+    the first.
+  - **A branch's allowed values can be a closed list or open.** Null means any value is
+    accepted and the listed ones are merely the values Apchi knows what to do with, which is a
+    dropdown in the first case and something more permissive in the second.
+  - **Which properties are secrets is stated, not guessable from the name.**
+    `mongodb.connection-url` holds the password because that connector has no separate one;
+    `s3.aws-access-key` reads like a secret and is an identifier. A design that masks by name
+    gets both wrong. See §12 for what masking is and is not for.
+  - **Curated is not the same as supported.** Any connector Trino has a plugin for is accepted;
+    an uncurated one just gets no property checking until Apply. The curated list is seven
+    connectors and two listener types, and each Catalog also reports whether its own connector
+    is one of them.
 - **A grant** has an identity, a catalog, optional schema, optional table, and one or more of six privileges.
   Omitting schema means "all schemas"; omitting table means "all tables". There are also
   system-owned rules Apchi maintains that nobody may edit, shown read-only.
@@ -395,9 +415,27 @@ For catalogs, a revert issues real creates and drops against a live cluster. The
 specific, and it must **name the catalogs that will be dropped, not count them** — an operator
 about to lose one should see which one.
 
-The API returns the full effect of a proposed revert before it is taken: which catalogs would be
-created, dropped and replaced, which Snapshot the other Sections stay at, whether it restarts the
-coordinator, and what that costs in queries.
+**Both take a `dry_run` flag, and the effect is the same either way.** Sending
+`{"snapshot": 10, "dry_run": true}` reports exactly what the real call would do — which catalogs
+would be created, dropped and replaced, which Snapshot the other Sections stay at, whether it
+restarts the coordinator, and what that costs in running queries — and stages nothing. The
+response carries `staged`, which is the only field that distinguishes a preview from the act, so
+an interface that ignores it cannot tell them apart.
+
+Three things follow for a design:
+
+- **The confirmation step can show the real consequence rather than a description of one.** A
+  dry run is not an estimate; it is the answer, computed the same way.
+- **The flag belongs in the request body.** A mistyped query parameter would be ignored and the
+  revert would happen for real, so Apchi only accepts it in the body, where an unknown field is
+  refused. Worth knowing because it rules out building the preview as a URL somebody can hand
+  round.
+- **A preview needs the same permission as the act**, so it is refused while Maintenance Mode is
+  engaged or an Apply is in flight. That costs little — when the preview is refused the revert
+  is too — but a design must not rely on previewing during a freeze.
+
+A `dry_run` leaves no audit entry, because it changed nothing. Only the real revert appears in
+the trail.
 
 ### 6.9 Import and export
 
@@ -772,6 +810,9 @@ be purged without breaking Snapshot immutability. This is a recorded, accepted t
 Honest list. Designing around these is fine; assuming they exist is not.
 
 - **No per-catalog "test connection".** Connectivity is only checked inside a full Validation.
+  The curated property *rules* are readable (§7's data shape), so a form can be built and
+  validated client-side before anything is staged — but whether the credentials in it actually
+  reach the database is not answerable short of an Apply.
 - **The audit export is NDJSON only, and it is all-or-filtered — never a report.** Filtering
   and export both exist now (§6.11), but the output is one JSON object per line for another
   system to read. There is no CSV, no spreadsheet, no PDF, and nothing that aggregates or
