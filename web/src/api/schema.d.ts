@@ -2053,6 +2053,11 @@ export interface components {
              */
             common_name: string | null;
             /**
+             * Expiring Within Days
+             * @description The window `status` was computed against, deployment-wide and configured by an Admin. Reported next to the status it explains, because without it `expiring` is a verdict with no stated threshold -- an interface can say *expiring* but not *expiring within 30 days*. It also makes the recomputation visible: `status` is derived from `not_after` on **every read** against this number, so an Admin widening the window moves certificates into `expiring` with nothing about them having changed.
+             */
+            expiring_within_days: number;
+            /**
              * Fingerprint
              * @description SHA-256 of the certificate, for matching it elsewhere.
              */
@@ -2964,8 +2969,18 @@ export interface components {
             cost: components["schemas"]["ApplyCost"];
             /** Has Changes */
             has_changes: boolean;
+            /**
+             * Limit Bytes
+             * @description What `size_bytes` is refused at. Reported beside it rather than left to be configured into a client, because the two are only useful as a ratio and a client holding its own copy of the limit is a client that warns at the wrong number once a deployment changes it.
+             */
+            limit_bytes: number;
             /** Sections */
             sections: components["schemas"]["SectionDiff"][];
+            /**
+             * Size Bytes
+             * @description How large the Candidate is, measured as MongoDB measures it. The Candidate is one document (ADR-0002, §4), so this is a ceiling on everything staged together rather than on any one Section -- and it is shared, so somebody can be refused by configuration they did not stage.
+             */
+            size_bytes: number;
         };
         /**
          * Rollback
