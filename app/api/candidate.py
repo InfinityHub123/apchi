@@ -142,12 +142,17 @@ async def rollback(
     Snapshot being restored from is not modified; applying this produces a new one, so
     history is never rewritten.
 
+    **`dry_run: true` is worth using here above anywhere else.** This discards every staged
+    change in all six Sections, including other people's, and the effect reported below is
+    the only description of what that amounts to. Without a dry run the way to see it was to
+    cause it.
+
     **Admin values are not included.** Raw files, permission enforcement and the preserved
     mapping patterns are the Admin's and never enter a Snapshot (invariant 9), so a Full
     Rollback does not restore them. Nor does it reach outside Apchi: a Snapshot naming a
     database that has since moved restores the configuration, not the world it described.
     """
-    return await full_rollback(store, snapshots, cluster, request.snapshot)
+    return await full_rollback(store, snapshots, cluster, request.snapshot, request.dry_run)
 
 
 @router.get(

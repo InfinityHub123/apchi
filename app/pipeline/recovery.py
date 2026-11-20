@@ -37,6 +37,18 @@ class RevertRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [{"snapshot": 12}]})
 
     snapshot: int
+    dry_run: bool = Field(
+        default=False,
+        description=(
+            "Report what this would do and stage nothing. The answer is the same "
+            "`RevertEffect` the real call returns, with `staged` false.\n\n"
+            "In the body rather than as a query parameter, and that is a safety property "
+            "rather than a style: this model forbids unknown fields, so `dryrun` or "
+            "`dry-run` is a 422. A mistyped query parameter would be ignored, and the "
+            "request it was meant to make harmless would go through and replace the "
+            "Section for real."
+        ),
+    )
 
 
 class RevertEffect(BaseModel):
@@ -55,6 +67,7 @@ class RevertEffect(BaseModel):
             "examples": [
                 {
                     "from_snapshot": 12,
+                    "staged": True,
                     "sections": ["catalogs"],
                     "other_sections_stay_at": 17,
                     "catalogs_dropped": ["events_clickhouse"],
@@ -78,6 +91,14 @@ class RevertEffect(BaseModel):
     )
 
     from_snapshot: int
+    staged: bool = Field(
+        description=(
+            "Whether the Candidate was actually changed. False for a `dry_run`, where "
+            "everything else in this response is what *would* have happened. The only field "
+            "that distinguishes a preview from the act, so a client that ignores it cannot "
+            "tell them apart."
+        )
+    )
     sections: list[SectionName] = Field(description="The Sections replaced in the Candidate.")
     other_sections_stay_at: int | None = Field(
         default=None,
@@ -113,6 +134,7 @@ async def _effect(
     sections: list[SectionName],
     others_stay_at: int | None,
     summary_for: str,
+    staged: bool,
 ) -> RevertEffect:
     """The Apply that would follow, planned but not run.
 
@@ -132,6 +154,7 @@ async def _effect(
 
     effect = RevertEffect(
         from_snapshot=number,
+        staged=staged,
         sections=sections,
         # Stated by the caller, never inferred from how many Sections were replaced: a
         # revert that happens to cover every registered Section is still not a Full
@@ -174,19 +197,30 @@ async def section_revert(
     cluster: Cluster,
     section: SectionName,
     number: int,
+    dry_run: bool = False,
 ) -> RevertEffect:
-    """Replace one Section of the Candidate with its content from an earlier Snapshot."""
+    """Replace one Section of the Candidate with its content from an earlier Snapshot.
+
+    `dry_run` plans the same thing and stores nothing. The effect was always computed from
+    the Candidate in memory, so the preview is the real answer rather than a second reading
+    of the same rules -- what it costs is the save, and skipping the save is the whole of it.
+
+    A dry run also records no audit event, because it changed nothing. The audit is written
+    by `candidates.save`, which is exactly the call being skipped.
+    """
     restored = await _snapshot_sections(snapshots, number)
     candidate = await candidates.load()
     candidate.sections[section] = dict(restored.get(section, {}))
-    # One act on one Section, not the list of resource edits it happens to amount to: what
-    # somebody reading the trail wants to know is that this was a revert, and to what.
-    await candidates.save(
-        candidate,
-        category=section,
-        action="reverted",
-        detail=f"restored from Snapshot {number}",
-    )
+    if not dry_run:
+        # One act on one Section, not the list of resource edits it happens to amount to:
+        # what somebody reading the trail wants to know is that this was a revert, and to
+        # what.
+        await candidates.save(
+            candidate,
+            category=section,
+            action="reverted",
+            detail=f"restored from Snapshot {number}",
+        )
 
     effect = await _effect(
         candidate,
@@ -197,35 +231,43 @@ async def section_revert(
         candidate.base_snapshot,
         f"{section} will be restored to Snapshot {number}; every other Section stays at "
         f"Snapshot {candidate.base_snapshot}. That combination has never run.",
+        staged=not dry_run,
     )
     logger.info(
-        "section reverted",
+        "section revert planned" if dry_run else "section reverted",
         extra={"section": section, "from_snapshot": number, "drops": len(effect.catalogs_dropped)},
     )
     return effect
 
 
 async def full_rollback(
-    candidates: CandidateStore, snapshots: SnapshotStore, cluster: Cluster, number: int
+    candidates: CandidateStore,
+    snapshots: SnapshotStore,
+    cluster: Cluster,
+    number: int,
+    dry_run: bool = False,
 ) -> RevertEffect:
     """Replace the entire Candidate with an earlier Snapshot.
 
     Reserved for a serious mistake, and never implicit: only an Operator asking for it
-    by number gets it.
+    by number gets it -- which is the reason `dry_run` matters more here than anywhere.
+    This discards every staged change in every Section, including other people's, and
+    before this the only way to see what that amounted to was to do it.
     """
     restored = await _snapshot_sections(snapshots, number)
     candidate = await candidates.load()
     candidate.sections = {name: dict(restored.get(name, {})) for name in SECTIONS}
-    # One act on the whole Candidate, not the long list of resource changes it amounts to.
-    # A Full Rollback is reserved for a serious mistake and is never implicit, so the trail
-    # has to say that is what happened and to which Snapshot -- which a derived diff of every
-    # Section would bury.
-    await candidates.save(
-        candidate,
-        category="pipeline",
-        action="rolled_back",
-        detail=f"the whole Candidate restored from Snapshot {number}",
-    )
+    if not dry_run:
+        # One act on the whole Candidate, not the long list of resource changes it amounts
+        # to. A Full Rollback is reserved for a serious mistake and is never implicit, so
+        # the trail has to say that is what happened and to which Snapshot -- which a
+        # derived diff of every Section would bury.
+        await candidates.save(
+            candidate,
+            category="pipeline",
+            action="rolled_back",
+            detail=f"the whole Candidate restored from Snapshot {number}",
+        )
 
     effect = await _effect(
         candidate,
@@ -235,9 +277,10 @@ async def full_rollback(
         list(SECTIONS),
         None,
         f"The entire Candidate will be replaced with Snapshot {number}.",
+        staged=not dry_run,
     )
     logger.warning(
-        "full rollback staged",
+        "full rollback planned" if dry_run else "full rollback staged",
         extra={"from_snapshot": number, "drops": len(effect.catalogs_dropped)},
     )
     return effect
