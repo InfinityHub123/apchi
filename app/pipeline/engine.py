@@ -27,7 +27,7 @@ from app.pipeline.maintenance import MaintenanceStore
 from app.pipeline.rollout import roll_out
 from app.pipeline.snapshots import SnapshotStore
 from app.pipeline.validation import validate_candidate
-from app.pipeline.verification import verify
+from app.pipeline.verification import CheckResult, VerificationFailed, verify
 from app.sections import SectionName
 from app.sections.base import Cluster, Resources, SectionPlan, ValidationFailure
 from app.sections.registry import REGISTERED
@@ -62,6 +62,7 @@ class Engine:
         self._rollout: set[SectionName] = set()
         self._raw_files_changed = False
         self._warnings: list[ValidationFailure] = []
+        self._verification: list[CheckResult] = []
         self._cluster = Cluster(trino=trino, kubernetes=kubernetes, settings=settings)
 
     async def _freeze_admin_values(self) -> None:
@@ -192,12 +193,31 @@ class Engine:
         )
 
     async def verify(self) -> None:
-        await verify(
-            self._cluster,
-            self._desired,
-            self._settings.worker_deployment_name,
-            self._settings.verification_catalog,
-        )
+        """Verification, with its per-check results kept whichever way it goes.
+
+        Kept on failure too, and that is the case worth having them: the Apply is about to
+        be rolled back, and which check decided that is the question its record has to
+        answer afterwards.
+        """
+        try:
+            self._verification = await verify(
+                self._cluster,
+                self._desired,
+                self._settings.worker_deployment_name,
+                self._settings.verification_catalog,
+            )
+        except VerificationFailed as exc:
+            self._verification = exc.checks
+            raise
+
+    def verification(self) -> list[CheckResult]:
+        """How each check came out. Empty until Verification has run.
+
+        This Apply's own Verification only. Auto Rollback verifies again, against the
+        configuration it restored, and that is a different question from whether this
+        Apply's configuration was adopted.
+        """
+        return list(self._verification)
 
     async def roll_back(self) -> None:
         """Put the Cluster back on the latest Snapshot.

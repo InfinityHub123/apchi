@@ -13,6 +13,7 @@ from httpx import ASGITransport, AsyncClient
 from app.config import Settings
 from app.main import create_app
 from app.pipeline.applies import ApplyEngine, ApplyStore, Stage
+from app.pipeline.verification import CheckResult
 from app.sections.base import ValidationFailure
 
 PG = {
@@ -48,6 +49,9 @@ class SlowEngine:
         return False
 
     def warnings(self) -> list[ValidationFailure]:
+        return []
+
+    def verification(self) -> list[CheckResult]:
         return []
 
     async def roll_out(self) -> None: ...

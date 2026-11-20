@@ -59,6 +59,22 @@ class Review(BaseModel):
     cost: ApplyCost = Field(
         description="What applying the Candidate as it stands would cost the Cluster."
     )
+    size_bytes: int = Field(
+        description=(
+            "How large the Candidate is, measured as MongoDB measures it. The Candidate is "
+            "one document (ADR-0002, §4), so this is a ceiling on everything staged "
+            "together rather than on any one Section -- and it is shared, so somebody can "
+            "be refused by configuration they did not stage."
+        )
+    )
+    limit_bytes: int = Field(
+        description=(
+            "What `size_bytes` is refused at. Reported beside it rather than left to be "
+            "configured into a client, because the two are only useful as a ratio and a "
+            "client holding its own copy of the limit is a client that warns at the wrong "
+            "number once a deployment changes it."
+        )
+    )
 
 
 def _diff(before: dict[str, Any], after: dict[str, Any]) -> list[ResourceChange]:
@@ -102,6 +118,8 @@ async def review(
         has_changes=any(section.changes for section in sections),
         sections=sections,
         cost=await cost_of(plans, candidate.sections, cluster),
+        size_bytes=store.size_of(candidate),
+        limit_bytes=store.max_bytes,
     )
 
 
@@ -188,12 +206,17 @@ async def rollback(
     Snapshot being restored from is not modified; applying this produces a new one, so
     history is never rewritten.
 
+    **`dry_run: true` is worth using here above anywhere else.** This discards every staged
+    change in all six Sections, including other people's, and the effect reported below is
+    the only description of what that amounts to. Without a dry run the way to see it was to
+    cause it.
+
     **Admin values are not included.** Raw files, permission enforcement and the preserved
     mapping patterns are the Admin's and never enter a Snapshot (invariant 9), so a Full
     Rollback does not restore them. Nor does it reach outside Apchi: a Snapshot naming a
     database that has since moved restores the configuration, not the world it described.
     """
-    return await full_rollback(store, snapshots, cluster, request.snapshot)
+    return await full_rollback(store, snapshots, cluster, request.snapshot, request.dry_run)
 
 
 @router.get(

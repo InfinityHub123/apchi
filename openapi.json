@@ -337,6 +337,14 @@
             "title": "Started At",
             "type": "string"
           },
+          "verification": {
+            "description": "How each of Verification's checks came out, in the order they run. Empty on an Apply that never reached Verification -- a Validation failure means nothing was delivered and nothing was checked.\n\nVerification **stops at the first failure**, so at most one check is `failed` and everything after it is `not_reached` rather than passed or failed. That is not a gap in the record: there is no point asking a broken Cluster the next question, and Auto Rollback is waiting on the answer.\n\nThis Apply's own Verification only. Auto Rollback verifies again against the configuration it restored, which is a different question and is reported by `rollback`.",
+            "items": {
+              "$ref": "#/components/schemas/CheckResult"
+            },
+            "title": "Verification",
+            "type": "array"
+          },
           "warnings": {
             "description": "What Validation found worth saying and not worth refusing over. An Apply that succeeded with warnings succeeded: these are reported so an Operator can see them next to the Apply that carried them, rather than having to run a separate Validation to find out. A Catalog the probe could not connect to is the one case today (\u00a76).",
             "items": {
@@ -521,6 +529,33 @@
         "title": "AuthMode",
         "type": "string"
       },
+      "Body_inspect_certificate_api_v1_certificates_inspect_post": {
+        "properties": {
+          "archive": {
+            "contentMediaType": "application/octet-stream",
+            "description": "The same ZIP `POST /certificates` takes.",
+            "title": "Archive",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name it would be stored under.",
+            "examples": [
+              "finance-client"
+            ],
+            "maxLength": 63,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "archive"
+        ],
+        "title": "Body_inspect_certificate_api_v1_certificates_inspect_post",
+        "type": "object"
+      },
       "Body_upload_certificate_api_v1_certificates_post": {
         "properties": {
           "archive": {
@@ -602,6 +637,63 @@
           "values"
         ],
         "title": "BranchRules",
+        "type": "object"
+      },
+      "BundleReading": {
+        "additionalProperties": false,
+        "description": "What Apchi made of an archive, having stored nothing.",
+        "properties": {
+          "certificate": {
+            "$ref": "#/components/schemas/ClientCertificate",
+            "description": "What would be staged: subject, issuer, validity and expiry status."
+          },
+          "certificate_member": {
+            "description": "Which member of the ZIP was taken as the certificate. Apchi identifies members by what they parse as and never by their name, so this is the only way somebody notices they zipped the issuing CA instead of their leaf.",
+            "title": "Certificate Member",
+            "type": "string"
+          },
+          "conversions": {
+            "description": "What Apchi would change on the way in, in prose -- a DER certificate stored as PEM, a PKCS#1 key stored as PKCS#8. Empty when nothing is converted, which is its own answer rather than missing information.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Conversions",
+            "type": "array"
+          },
+          "key_member": {
+            "description": "Which member was taken as the private key.",
+            "title": "Key Member",
+            "type": "string"
+          },
+          "replaces": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClientCertificate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The certificate already staged under this name, which this one would replace. Null when the name is new. **This is the field the endpoint exists for**: uploading under an existing name replaces it immediately, so comparing the two expiries is how somebody confirms a renewal is a renewal rather than a mistake."
+          },
+          "used_by": {
+            "description": "Catalogs that currently present this name. Replacing the certificate re-points every one of them, which is how renewal is meant to work and is also what makes a wrong upload reach further than the certificate itself.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Used By",
+            "type": "array"
+          }
+        },
+        "required": [
+          "certificate_member",
+          "key_member",
+          "conversions",
+          "certificate",
+          "replaces",
+          "used_by"
+        ],
+        "title": "BundleReading",
         "type": "object"
       },
       "Catalog": {
@@ -854,12 +946,51 @@
         "title": "CertificateMappingWrite",
         "type": "object"
       },
+      "CheckResult": {
+        "additionalProperties": false,
+        "description": "One check, and how far Verification got.",
+        "properties": {
+          "check": {
+            "description": "Which check. `check_order()` lists them all, in order.",
+            "title": "Check",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it failed, or what it found when it passed -- '3 of 3 workers registered'. Null on a check that was never reached.",
+            "title": "Detail"
+          },
+          "outcome": {
+            "enum": [
+              "passed",
+              "failed",
+              "not_reached"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "check",
+          "outcome"
+        ],
+        "title": "CheckResult",
+        "type": "object"
+      },
       "ClientCertificate": {
         "additionalProperties": false,
         "description": "A certificate as it is listed and returned.",
         "examples": [
           {
             "common_name": "trino-reader.finance.acme.internal",
+            "expiring_within_days": 30,
             "fingerprint": "a12038ec184ace7cc0fb262b40d6c6b70d5624fa8e40c0414b8f575d6c2a37a3",
             "issuer": "C=GB,O=Acme,CN=Acme Internal Issuing CA",
             "name": "finance-client",
@@ -881,6 +1012,11 @@
             ],
             "description": "The subject's CN, if it has one.",
             "title": "Common Name"
+          },
+          "expiring_within_days": {
+            "description": "The window `status` was computed against, deployment-wide and configured by an Admin. Reported next to the status it explains, because without it `expiring` is a verdict with no stated threshold -- an interface can say *expiring* but not *expiring within 30 days*. It also makes the recomputation visible: `status` is derived from `not_after` on **every read** against this number, so an Admin widening the window moves certificates into `expiring` with nothing about them having changed.",
+            "title": "Expiring Within Days",
+            "type": "integer"
           },
           "fingerprint": {
             "description": "SHA-256 of the certificate, for matching it elsewhere.",
@@ -934,6 +1070,7 @@
           "not_before",
           "not_after",
           "status",
+          "expiring_within_days",
           "fingerprint"
         ],
         "title": "ClientCertificate",
@@ -2815,6 +2952,7 @@
             "sections": [
               "catalogs"
             ],
+            "staged": true,
             "summary": "catalogs will be restored to Snapshot 12; every other Section stays at Snapshot 17. That combination has never run. Applying this will drop 1 catalog: events_clickhouse. Snapshot 12 is not modified; applying this produces a new Snapshot."
           }
         ],
@@ -2877,6 +3015,11 @@
             "title": "Sections",
             "type": "array"
           },
+          "staged": {
+            "description": "Whether the Candidate was actually changed. False for a `dry_run`, where everything else in this response is what *would* have happened. The only field that distinguishes a preview from the act, so a client that ignores it cannot tell them apart.",
+            "title": "Staged",
+            "type": "boolean"
+          },
           "summary": {
             "description": "What this does, in words, for an Operator to read.",
             "title": "Summary",
@@ -2885,6 +3028,7 @@
         },
         "required": [
           "from_snapshot",
+          "staged",
           "sections",
           "cost",
           "summary"
@@ -2901,6 +3045,12 @@
           }
         ],
         "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Report what this would do and stage nothing. The answer is the same `RevertEffect` the real call returns, with `staged` false.\n\nIn the body rather than as a query parameter, and that is a safety property rather than a style: this model forbids unknown fields, so `dryrun` or `dry-run` is a 422. A mistyped query parameter would be ignored, and the request it was meant to make harmless would go through and replace the Section for real.",
+            "title": "Dry Run",
+            "type": "boolean"
+          },
           "snapshot": {
             "title": "Snapshot",
             "type": "integer"
@@ -2935,19 +3085,31 @@
             "title": "Has Changes",
             "type": "boolean"
           },
+          "limit_bytes": {
+            "description": "What `size_bytes` is refused at. Reported beside it rather than left to be configured into a client, because the two are only useful as a ratio and a client holding its own copy of the limit is a client that warns at the wrong number once a deployment changes it.",
+            "title": "Limit Bytes",
+            "type": "integer"
+          },
           "sections": {
             "items": {
               "$ref": "#/components/schemas/SectionDiff"
             },
             "title": "Sections",
             "type": "array"
+          },
+          "size_bytes": {
+            "description": "How large the Candidate is, measured as MongoDB measures it. The Candidate is one document (ADR-0002, \u00a74), so this is a ceiling on everything staged together rather than on any one Section -- and it is shared, so somebody can be refused by configuration they did not stage.",
+            "title": "Size Bytes",
+            "type": "integer"
           }
         },
         "required": [
           "base_snapshot",
           "has_changes",
           "sections",
-          "cost"
+          "cost",
+          "size_bytes",
+          "limit_bytes"
         ],
         "title": "Review",
         "type": "object"
@@ -5770,7 +5932,7 @@
     },
     "/api/v1/candidate/rollback": {
       "post": {
-        "description": "Full Rollback: for a serious mistake, and never implicit.\n\nReplaces **all six Sections** at once, which is what distinguishes this from the\nper-Section `POST /{section}/revert`: those leave the other Sections where they are, and\nthe result is a combination that has never run anywhere.\n\nLike a Section Revert this only stages -- an ordinary `POST /applies` follows. The\nSnapshot being restored from is not modified; applying this produces a new one, so\nhistory is never rewritten.\n\n**Admin values are not included.** Raw files, permission enforcement and the preserved\nmapping patterns are the Admin's and never enter a Snapshot (invariant 9), so a Full\nRollback does not restore them. Nor does it reach outside Apchi: a Snapshot naming a\ndatabase that has since moved restores the configuration, not the world it described.",
+        "description": "Full Rollback: for a serious mistake, and never implicit.\n\nReplaces **all six Sections** at once, which is what distinguishes this from the\nper-Section `POST /{section}/revert`: those leave the other Sections where they are, and\nthe result is a combination that has never run anywhere.\n\nLike a Section Revert this only stages -- an ordinary `POST /applies` follows. The\nSnapshot being restored from is not modified; applying this produces a new one, so\nhistory is never rewritten.\n\n**`dry_run: true` is worth using here above anywhere else.** This discards every staged\nchange in all six Sections, including other people's, and the effect reported below is\nthe only description of what that amounts to. Without a dry run the way to see it was to\ncause it.\n\n**Admin values are not included.** Raw files, permission enforcement and the preserved\nmapping patterns are the Admin's and never enter a Snapshot (invariant 9), so a Full\nRollback does not restore them. Nor does it reach outside Apchi: a Snapshot naming a\ndatabase that has since moved restores the configuration, not the world it described.",
         "operationId": "rollback_api_v1_candidate_rollback_post",
         "requestBody": {
           "content": {
@@ -6509,6 +6671,58 @@
           }
         },
         "summary": "Upload a certificate and its key as a ZIP",
+        "tags": [
+          "client certificates"
+        ]
+      }
+    },
+    "/api/v1/certificates/inspect": {
+      "post": {
+        "description": "What the upload would do, having done none of it.\n\nA separate route rather than a flag on the upload, deliberately. The other previews in\nthis API take `dry_run` in a JSON body, where an unknown field is refused and a\nmisspelling is a 422 -- but this endpoint takes multipart form data, and an unknown form\nfield cannot be refused the same way. A mistyped flag would be ignored and the\ncertificate staged for real, which is the one outcome somebody asking for a preview is\ntrying to avoid. A path with no save in it cannot do that whatever is misspelled.\n\nIt refuses in exactly the cases the upload refuses, because the half of\n`store_certificate` that validates is the half this calls. An inspection that said yes\nwhere the upload says no would be worse than none at all.",
+        "operationId": "inspect_certificate_api_v1_certificates_inspect_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_inspect_certificate_api_v1_certificates_inspect_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BundleReading"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read an archive without staging it",
         "tags": [
           "client certificates"
         ]

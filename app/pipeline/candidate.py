@@ -74,6 +74,25 @@ class CandidateStore:
             candidate.sections.setdefault(name, {})
         return candidate
 
+    @property
+    def max_bytes(self) -> int:
+        """The ceiling a Candidate is refused at, so a client can say how close it is.
+
+        Below MongoDB's 16MB document limit deliberately (see `_refuse_if_too_large`), which
+        is why it is this number and not that one: an interface warning at the BSON limit
+        would warn after Apchi had already started refusing edits.
+        """
+        return self._max_bytes
+
+    def size_of(self, candidate: Candidate) -> int:
+        """How large this Candidate is, measured the way the ceiling is measured.
+
+        BSON of the document as it would be stored, `_id` included, because that is what the
+        limit applies to -- the JSON text is a different number by enough to matter at this
+        size, and reporting it would put the warning in the wrong place.
+        """
+        return len(bson_encode({"_id": CANDIDATE_ID, **candidate.model_dump(mode="json")}))
+
     async def stored(self) -> Candidate | None:
         """What the collection actually holds, or None when it holds nothing.
 

@@ -281,6 +281,13 @@ Point 3 matters more than it looks: the Candidate is *shared*. Two operators can
 simultaneously, and applying ships both. Someone who stages one change and presses Apply must
 see the other five they are also about to ship.
 
+**The Candidate has a size ceiling, and the diff reports how close it is.** It is one database
+document, so the limit is on everything staged together rather than on any one Section — and
+because it is shared, somebody can be refused by configuration they did not stage. The review
+reports the current size and the limit, both in bytes, so an interface can warn before an edit
+is rejected rather than explain afterwards. The limit is reported rather than something a
+client should carry its own copy of: a deployment may change it.
+
 ### 6.2 Reviewing what is staged
 
 Two questions have to be answerable, and they are different questions:
@@ -311,6 +318,29 @@ Create, edit and delete for each, shaped by the data in §5. What each one deman
 - **Client certificates arrive as an uploaded ZIP.** Apchi opens it, works out which part is the
   certificate and which the key, checks they match, converts formats, and reports what it found.
   The person never converts anything by hand. Upload can fail in ways worth explaining.
+
+  **The archive can be read before it is staged**, on a separate endpoint, and this is worth
+  designing around rather than treating as a nicety. Uploading under a name that already exists
+  **replaces that certificate immediately** — which is how renewal works — so a wrong file
+  silently swaps out something that works. The inspection answers, without staging anything:
+  which member of the ZIP was taken as the certificate and which as the key, what would be
+  converted, what the resulting certificate is, **what it would replace** (the whole certificate,
+  so two expiry dates can be compared), and **which Catalogs currently present that name** and
+  would therefore be re-pointed. It refuses in exactly the cases the upload refuses.
+
+  Two things follow. Apchi identifies ZIP members by **what they parse as, never by their
+  name** — so "we took `ca.pem` as your certificate" is the only way somebody notices they
+  zipped the issuing CA instead of their leaf, and the interface should show it. And the
+  inspection is a **separate request, not a flag**, because this is a file upload: a mistyped
+  flag on a form submission cannot be refused the way one in a JSON body can, so it would have
+  staged the certificate for real.
+
+  **Each certificate reports the expiry window its status was computed against.** `status` is
+  one of valid, expiring or expired, and it is derived from the expiry date on **every read**
+  against a deployment-wide setting — so the same certificate reads `valid` under a 30-day
+  window and `expiring` under a 400-day one, with nothing about it having changed. An interface
+  that shows the status should be able to say *expiring within 30 days* rather than just
+  *expiring*, and that number is on the certificate.
 - **Permissions is the high-volume one**: many rows of five fields, usually read filtered to one
   identity or one catalog. It also contains system-owned rules nobody may edit.
 - **Every Section can be reverted** to its content from an earlier Snapshot.
@@ -407,9 +437,27 @@ For catalogs, a revert issues real creates and drops against a live cluster. The
 specific, and it must **name the catalogs that will be dropped, not count them** — an operator
 about to lose one should see which one.
 
-The API returns the full effect of a proposed revert before it is taken: which catalogs would be
-created, dropped and replaced, which Snapshot the other Sections stay at, whether it restarts the
-coordinator, and what that costs in queries.
+**Both take a `dry_run` flag, and the effect is the same either way.** Sending
+`{"snapshot": 10, "dry_run": true}` reports exactly what the real call would do — which catalogs
+would be created, dropped and replaced, which Snapshot the other Sections stay at, whether it
+restarts the coordinator, and what that costs in running queries — and stages nothing. The
+response carries `staged`, which is the only field that distinguishes a preview from the act, so
+an interface that ignores it cannot tell them apart.
+
+Three things follow for a design:
+
+- **The confirmation step can show the real consequence rather than a description of one.** A
+  dry run is not an estimate; it is the answer, computed the same way.
+- **The flag belongs in the request body.** A mistyped query parameter would be ignored and the
+  revert would happen for real, so Apchi only accepts it in the body, where an unknown field is
+  refused. Worth knowing because it rules out building the preview as a URL somebody can hand
+  round.
+- **A preview needs the same permission as the act**, so it is refused while Maintenance Mode is
+  engaged or an Apply is in flight. That costs little — when the preview is refused the revert
+  is too — but a design must not rely on previewing during a freeze.
+
+A `dry_run` leaves no audit entry, because it changed nothing. Only the real revert appears in
+the trail.
 
 ### 6.9 Import and export
 
@@ -436,6 +484,23 @@ Both are durable records with their own browsable histories, not just a transien
 An operator investigating "what happened last Tuesday" reads these: every past Apply with its
 stages, outcome, warnings, whether it rolled out, whether it was interrupted, and which Snapshot
 it produced; every past Validation with its failures.
+
+**An Apply records each of Verification's checks, not only whether it passed.** In order: the
+coordinator responding, workers registered, a smoke query, and then one per Section confirming
+the cluster adopted it — nine in all today, and the per-Section ones follow the Sections, so the
+count is not a constant to design around. Each check is one of **three** outcomes:
+
+- **passed**, often with what it found ("3 of 3 workers registered");
+- **failed**, with why — and at most one check is ever failed;
+- **not reached.** Verification stops at the first failure, deliberately: there is no point
+  asking a broken cluster the next question, and Auto Rollback is waiting on the answer. The
+  checks after a failure therefore did not pass and did not fail, and must not be rendered as
+  either. A row of nine red marks for one failure is the wrong picture.
+
+The list is **empty** for an Apply that never reached Verification — a Validation failure means
+nothing was delivered and nothing was checked, which is a different statement from "Verification
+started and stopped". And it is this Apply's own Verification only: Auto Rollback verifies again
+against what it restored, and that result is reported separately as the rollback's outcome.
 
 ### 6.11 Audit
 
@@ -815,7 +880,10 @@ Honest list. Designing around these is fine; assuming they exist is not.
   fires for a failed Auto Rollback.
 - **No scheduling.** Nothing can be applied later or during a window.
 - **No search** across configuration.
-- **One expiry window** for certificates, configured deployment-wide, not per certificate.
+- **One expiry window** for certificates, configured deployment-wide, not per certificate. It
+  is now *reported* on every certificate (§6.3), so an interface can name the threshold it is
+  rendering — but it cannot be set per certificate, so "warn me 90 days before this one" is not
+  expressible.
 
 ---
 

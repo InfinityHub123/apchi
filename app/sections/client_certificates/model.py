@@ -52,6 +52,7 @@ class ClientCertificate(BaseModel):
                     "not_before": "2026-03-14T09:12:07Z",
                     "not_after": "2027-03-14T09:12:07Z",
                     "status": "valid",
+                    "expiring_within_days": 30,
                     "fingerprint": (
                         "a12038ec184ace7cc0fb262b40d6c6b70d5624fa8e40c0414b8f575d6c2a37a3"
                     ),
@@ -68,6 +69,17 @@ class ClientCertificate(BaseModel):
     not_after: datetime = Field(description="When it stops being accepted.")
     status: Status = Field(
         description="valid, expiring within the configured window, or already expired."
+    )
+    expiring_within_days: int = Field(
+        description=(
+            "The window `status` was computed against, deployment-wide and configured by an "
+            "Admin. Reported next to the status it explains, because without it `expiring` "
+            "is a verdict with no stated threshold -- an interface can say *expiring* but "
+            "not *expiring within 30 days*. It also makes the recomputation visible: "
+            "`status` is derived from `not_after` on **every read** against this number, so "
+            "an Admin widening the window moves certificates into `expiring` with nothing "
+            "about them having changed."
+        )
     )
     fingerprint: str = Field(description="SHA-256 of the certificate, for matching it elsewhere.")
 
@@ -117,5 +129,6 @@ def describe(name: str, certificate_pem: str, expiring_within_days: int) -> Clie
         not_before=certificate.not_valid_before_utc,
         not_after=expires,
         status=status,
+        expiring_within_days=expiring_within_days,
         fingerprint=certificate.fingerprint(hashes.SHA256()).hex(),
     )

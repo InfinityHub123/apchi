@@ -34,6 +34,7 @@ from app.audit.events import Action, AuditStore, Category, Outcome
 from app.auth.identity import Identity
 from app.logging import apply_id_var
 from app.pipeline.auto_rollback import INCIDENT_MESSAGE
+from app.pipeline.verification import CheckResult
 from app.sections.base import ValidationFailure
 
 logger = logging.getLogger(__name__)
@@ -128,6 +129,21 @@ class ApplyRecord(BaseModel):
             "them next to the Apply that carried them, rather than having to run a separate "
             "Validation to find out. A Catalog the probe could not connect to is the one "
             "case today (§6)."
+        ),
+    )
+    verification: list[CheckResult] = Field(
+        default_factory=list,
+        description=(
+            "How each of Verification's checks came out, in the order they run. Empty on an "
+            "Apply that never reached Verification -- a Validation failure means nothing was "
+            "delivered and nothing was checked.\n\n"
+            "Verification **stops at the first failure**, so at most one check is `failed` "
+            "and everything after it is `not_reached` rather than passed or failed. That is "
+            "not a gap in the record: there is no point asking a broken Cluster the next "
+            "question, and Auto Rollback is waiting on the answer.\n\n"
+            "This Apply's own Verification only. Auto Rollback verifies again against the "
+            "configuration it restored, which is a different question and is reported by "
+            "`rollback`."
         ),
     )
     base_snapshot: int | None = None
@@ -233,6 +249,14 @@ class ApplyStore:
             {"$set": {"warnings": [warning.model_dump(mode="json") for warning in warnings]}},
         )
 
+    async def record_verification(self, apply_id: str, checks: Sequence[CheckResult]) -> None:
+        """Which checks ran and how they came out. Written on both paths, because the
+        failing one is where this is read."""
+        await self._collection.update_one(
+            {"_id": apply_id},
+            {"$set": {"verification": [check.model_dump(mode="json") for check in checks]}},
+        )
+
     async def fail(self, apply_id: str, reason: str) -> None:
         await self._collection.update_one({"_id": apply_id}, {"$set": {"failure_reason": reason}})
         await self.advance(apply_id, Stage.FAILED, detail=reason)
@@ -273,6 +297,11 @@ class ApplyEngine(Protocol):
         Validation has run; empty before that, and empty most of the time after."""
         ...
 
+    def verification(self) -> list[CheckResult]:
+        """How each of Verification's checks came out. Empty until Verification has run,
+        and kept when it fails -- which is when anybody reads it."""
+        ...
+
     async def roll_out(self) -> None:
         """Restart Trino and wait for it to come back."""
         ...
@@ -299,6 +328,9 @@ class NoOpEngine:
         return False
 
     def warnings(self) -> list[ValidationFailure]:
+        return []
+
+    def verification(self) -> list[CheckResult]:
         return []
 
     async def roll_out(self) -> None: ...
@@ -406,6 +438,8 @@ class ApplyRunner:
                     # Recorded here rather than at the end, so an Apply that fails a later
                     # stage still carries what Validation found.
                     await self._store.record_warnings(apply_id, engine.warnings())
+                if stage is Stage.VERIFYING:
+                    await self._store.record_verification(apply_id, engine.verification())
                 if stage is Stage.COMMITTING and isinstance(result, int):
                     snapshot = result
             if snapshot is not None:
@@ -417,6 +451,10 @@ class ApplyRunner:
             await self._audited(who, apply_id, "applied", snapshot=snapshot)
         except Exception as exc:
             logger.exception("apply failed")
+            # Before anything else in this handler: a failed Verification is the most likely
+            # reason to be here, and which check failed is what the record has to carry once
+            # Auto Rollback has moved the Cluster on.
+            await self._store.record_verification(apply_id, engine.verification())
             reason = f"{type(exc).__name__}: {exc}"
             # The stage is the detail worth keeping. §10 sends a partially applied Apply to an
             # incident state rather than improvising compensating statements, and a human

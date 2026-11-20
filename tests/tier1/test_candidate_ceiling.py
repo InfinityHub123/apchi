@@ -222,3 +222,64 @@ def test_the_ceiling_leaves_headroom_under_mongodbs_limit() -> None:
     from app.pipeline.candidate import BSON_DOCUMENT_LIMIT
 
     assert Settings().candidate_max_bytes < BSON_DOCUMENT_LIMIT
+
+
+# --- the ceiling, reported -------------------------------------------------------------------
+
+
+async def test_review_reports_the_candidate_size_and_its_ceiling(tight: AsyncClient) -> None:
+    """Both, because they are only useful as a ratio -- and the limit is reported rather than
+    configured into a client, which would warn at the wrong number on a deployment that
+    changed it."""
+    review = (await tight.get("/api/v1/review")).json()
+
+    assert review["limit_bytes"] == CEILING
+    assert 0 < review["size_bytes"] < review["limit_bytes"]
+
+
+async def test_the_reported_size_grows_with_what_is_staged(tight: AsyncClient) -> None:
+    """Measured as MongoDB measures it, so padding really inside the stored document shows
+    up. A size read off the JSON text would be a different number, and at this scale the
+    difference is where a warning would fire too early or too late."""
+    before = (await tight.get("/api/v1/review")).json()["size_bytes"]
+
+    staged = await tight.post(
+        CATALOGS, json={"name": "big", "connector": "postgresql", "properties": _properties(4000)}
+    )
+    assert staged.status_code == 201, staged.text
+
+    after = (await tight.get("/api/v1/review")).json()["size_bytes"]
+    assert after - before >= 4000
+
+
+async def test_the_reported_headroom_predicts_the_refusal(tight: AsyncClient) -> None:
+    """The property that makes the number worth showing at all.
+
+    A size and a limit an interface displays are worth nothing if Apchi refuses at a
+    different point. So: stage until an edit is refused, and the headroom Review last
+    reported has to be smaller than the thing that was refused -- the number was already
+    saying there was no room for it.
+    """
+    padding = 4000
+    for index in range(50):
+        response = await tight.post(
+            CATALOGS,
+            json={
+                "name": f"c_{index}",
+                "connector": "postgresql",
+                "properties": _properties(padding),
+            },
+        )
+        if response.status_code != 201:
+            break
+    else:
+        raise AssertionError("nothing was ever refused; the ceiling is too high for this test")
+
+    assert response.status_code == 422
+    review = (await tight.get("/api/v1/review")).json()
+    headroom = review["limit_bytes"] - review["size_bytes"]
+
+    assert 0 <= headroom < padding, (
+        f"Review reported {headroom} bytes of headroom while refusing a catalog of at least "
+        f"{padding}, so the number an interface would show does not predict the refusal"
+    )

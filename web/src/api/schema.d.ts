@@ -777,6 +777,11 @@ export interface paths {
          *     Snapshot being restored from is not modified; applying this produces a new one, so
          *     history is never rewritten.
          *
+         *     **`dry_run: true` is worth using here above anywhere else.** This discards every staged
+         *     change in all six Sections, including other people's, and the effect reported below is
+         *     the only description of what that amounts to. Without a dry run the way to see it was to
+         *     cause it.
+         *
          *     **Admin values are not included.** Raw files, permission enforcement and the preserved
          *     mapping patterns are the Admin's and never enter a Snapshot (invariant 9), so a Full
          *     Rollback does not restore them. Nor does it reach outside Apchi: a Snapshot naming a
@@ -948,6 +953,37 @@ export interface paths {
          *     works: the Catalogs referencing it reference the name.
          */
         post: operations["upload_certificate_api_v1_certificates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/certificates/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read an archive without staging it
+         * @description What the upload would do, having done none of it.
+         *
+         *     A separate route rather than a flag on the upload, deliberately. The other previews in
+         *     this API take `dry_run` in a JSON body, where an unknown field is refused and a
+         *     misspelling is a 422 -- but this endpoint takes multipart form data, and an unknown form
+         *     field cannot be refused the same way. A mistyped flag would be ignored and the
+         *     certificate staged for real, which is the one outcome somebody asking for a preview is
+         *     trying to avoid. A path with no save in it cannot do that whatever is misspelled.
+         *
+         *     It refuses in exactly the cases the upload refuses, because the half of
+         *     `store_certificate` that validates is the half this calls. An inspection that said yes
+         *     where the upload says no would be worse than none at all.
+         */
+        post: operations["inspect_certificate_api_v1_certificates_inspect_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1732,6 +1768,15 @@ export interface components {
              */
             started_at: string;
             /**
+             * Verification
+             * @description How each of Verification's checks came out, in the order they run. Empty on an Apply that never reached Verification -- a Validation failure means nothing was delivered and nothing was checked.
+             *
+             *     Verification **stops at the first failure**, so at most one check is `failed` and everything after it is `not_reached` rather than passed or failed. That is not a gap in the record: there is no point asking a broken Cluster the next question, and Auto Rollback is waiting on the answer.
+             *
+             *     This Apply's own Verification only. Auto Rollback verifies again against the configuration it restored, which is a different question and is reported by `rollback`.
+             */
+            verification?: components["schemas"]["CheckResult"][];
+            /**
              * Warnings
              * @description What Validation found worth saying and not worth refusing over. An Apply that succeeded with warnings succeeded: these are reported so an Operator can see them next to the Apply that carried them, rather than having to run a separate Validation to find out. A Catalog the probe could not connect to is the one case today (§6).
              */
@@ -1812,6 +1857,19 @@ export interface components {
          * @enum {string}
          */
         AuthMode: "none" | "password" | "sso";
+        /** Body_inspect_certificate_api_v1_certificates_inspect_post */
+        Body_inspect_certificate_api_v1_certificates_inspect_post: {
+            /**
+             * Archive
+             * @description The same ZIP `POST /certificates` takes.
+             */
+            archive: string;
+            /**
+             * Name
+             * @description The name it would be stored under.
+             */
+            name: string;
+        };
         /** Body_upload_certificate_api_v1_certificates_post */
         Body_upload_certificate_api_v1_certificates_post: {
             /**
@@ -1852,6 +1910,36 @@ export interface components {
             values: {
                 [key: string]: string[];
             };
+        };
+        /**
+         * BundleReading
+         * @description What Apchi made of an archive, having stored nothing.
+         */
+        BundleReading: {
+            /** @description What would be staged: subject, issuer, validity and expiry status. */
+            certificate: components["schemas"]["ClientCertificate"];
+            /**
+             * Certificate Member
+             * @description Which member of the ZIP was taken as the certificate. Apchi identifies members by what they parse as and never by their name, so this is the only way somebody notices they zipped the issuing CA instead of their leaf.
+             */
+            certificate_member: string;
+            /**
+             * Conversions
+             * @description What Apchi would change on the way in, in prose -- a DER certificate stored as PEM, a PKCS#1 key stored as PKCS#8. Empty when nothing is converted, which is its own answer rather than missing information.
+             */
+            conversions: string[];
+            /**
+             * Key Member
+             * @description Which member was taken as the private key.
+             */
+            key_member: string;
+            /** @description The certificate already staged under this name, which this one would replace. Null when the name is new. **This is the field the endpoint exists for**: uploading under an existing name replaces it immediately, so comparing the two expiries is how somebody confirms a renewal is a renewal rather than a mistake. */
+            replaces: components["schemas"]["ClientCertificate"] | null;
+            /**
+             * Used By
+             * @description Catalogs that currently present this name. Replacing the certificate re-points every one of them, which is how renewal is meant to work and is also what makes a wrong upload reach further than the certificate itself.
+             */
+            used_by: string[];
         };
         /**
          * Catalog
@@ -1969,6 +2057,27 @@ export interface components {
             user: string;
         };
         /**
+         * CheckResult
+         * @description One check, and how far Verification got.
+         */
+        CheckResult: {
+            /**
+             * Check
+             * @description Which check. `check_order()` lists them all, in order.
+             */
+            check: string;
+            /**
+             * Detail
+             * @description Why it failed, or what it found when it passed -- '3 of 3 workers registered'. Null on a check that was never reached.
+             */
+            detail?: string | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "passed" | "failed" | "not_reached";
+        };
+        /**
          * ClientCertificate
          * @description A certificate as it is listed and returned.
          */
@@ -1978,6 +2087,11 @@ export interface components {
              * @description The subject's CN, if it has one.
              */
             common_name: string | null;
+            /**
+             * Expiring Within Days
+             * @description The window `status` was computed against, deployment-wide and configured by an Admin. Reported next to the status it explains, because without it `expiring` is a verdict with no stated threshold -- an interface can say *expiring* but not *expiring within 30 days*. It also makes the recomputation visible: `status` is derived from `not_after` on **every read** against this number, so an Admin widening the window moves certificates into `expiring` with nothing about them having changed.
+             */
+            expiring_within_days: number;
             /**
              * Fingerprint
              * @description SHA-256 of the certificate, for matching it elsewhere.
@@ -2862,6 +2976,11 @@ export interface components {
              */
             sections: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners")[];
             /**
+             * Staged
+             * @description Whether the Candidate was actually changed. False for a `dry_run`, where everything else in this response is what *would* have happened. The only field that distinguishes a preview from the act, so a client that ignores it cannot tell them apart.
+             */
+            staged: boolean;
+            /**
              * Summary
              * @description What this does, in words, for an Operator to read.
              */
@@ -2873,6 +2992,14 @@ export interface components {
          *     drift into different shapes for the same question.
          */
         RevertRequest: {
+            /**
+             * Dry Run
+             * @description Report what this would do and stage nothing. The answer is the same `RevertEffect` the real call returns, with `staged` false.
+             *
+             *     In the body rather than as a query parameter, and that is a safety property rather than a style: this model forbids unknown fields, so `dryrun` or `dry-run` is a 422. A mistyped query parameter would be ignored, and the request it was meant to make harmless would go through and replace the Section for real.
+             * @default false
+             */
+            dry_run: boolean;
             /** Snapshot */
             snapshot: number;
         };
@@ -2893,8 +3020,18 @@ export interface components {
             cost: components["schemas"]["ApplyCost"];
             /** Has Changes */
             has_changes: boolean;
+            /**
+             * Limit Bytes
+             * @description What `size_bytes` is refused at. Reported beside it rather than left to be configured into a client, because the two are only useful as a ratio and a client holding its own copy of the limit is a client that warns at the wrong number once a deployment changes it.
+             */
+            limit_bytes: number;
             /** Sections */
             sections: components["schemas"]["SectionDiff"][];
+            /**
+             * Size Bytes
+             * @description How large the Candidate is, measured as MongoDB measures it. The Candidate is one document (ADR-0002, §4), so this is a ceiling on everything staged together rather than on any one Section -- and it is shared, so somebody can be refused by configuration they did not stage.
+             */
+            size_bytes: number;
         };
         /**
          * Rollback
@@ -5135,6 +5272,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClientCertificate"];
+                };
+            };
+            /** @description No usable credential. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_certificate_api_v1_certificates_inspect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_inspect_certificate_api_v1_certificates_inspect_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BundleReading"];
                 };
             };
             /** @description No usable credential. */

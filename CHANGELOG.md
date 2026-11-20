@@ -20,6 +20,47 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+`ApplyRecord` gains `verification`: one entry per check, in the order Verification runs them,
+each `passed`, `failed` or `not_reached`. Before this an Apply recorded only that Verification
+passed or a sentence saying why it did not, so "which check failed" meant parsing prose.
+
+`not_reached` is the third value because Verification stops at the first failure -- there is no
+point asking a broken Cluster the next question, and Auto Rollback is waiting -- so at most one
+check is ever `failed` and the rest after it were never asked. The per-Section checks come from
+the registry, so the list grows with the Sections; a client should not count on its length. Empty
+when Verification never ran, and never overwritten by Auto Rollback's own Verification of what it
+restored, which would otherwise read as every check passing on an Apply that failed.
+
+`POST /api/v1/certificates/inspect` is new, and reads an uploaded archive without staging it:
+which member was taken as the certificate and which as the key, what would be converted, the
+resulting certificate, the certificate it would replace, and which Catalogs present that name
+today. Uploading under an existing name replaces it immediately -- that is how renewal works --
+so a wrong file silently swapped out a working certificate and the only way to see what was in
+an archive was to stage it.
+
+A separate route rather than a flag on the upload. The reverts take `dry_run` in a JSON body,
+where an unknown field is a `422`; this endpoint takes multipart form data, where an unknown
+form field cannot be refused the same way, so a mistyped flag would have been ignored and the
+certificate staged for real. A path with no save in it cannot do that.
+
+It refuses in exactly the cases the upload refuses, because the validating half of
+`store_certificate` was split out and is what both call. `Bundle` gains the two member names
+and the conversions, which the ZIP reader previously discarded.
+
+`GET /api/v1/review` gains `size_bytes` and `limit_bytes`, and `ClientCertificate` gains
+`expiring_within_days`. Both are numbers an interface was already rendering something about
+without being able to name it: how close the Candidate is to the ceiling it gets refused at,
+and the window `status` was computed against.
+
+`size_bytes` is measured as BSON of the document as stored, which is what the ceiling applies
+to -- the JSON text is a different number by enough to matter at that size. `limit_bytes` is
+reported beside it rather than left for a client to carry, since a deployment may change
+`candidate_max_bytes` and a client holding its own copy would warn at the wrong number.
+
+`expiring_within_days` sits next to the `status` it explains. The warning at the top of this
+file -- that `status` is recomputed on every read, so a client branching on it reads a different
+answer once an Admin changes the setting -- is now something a response says for itself.
+
 `POST /api/v1/candidate/reset-resource` is new, and Resets one staged change: the resource goes
 back as the Candidate's base Snapshot has it, and every other staged change stays -- including
 other people's in the same Section. The smallest undo used to be a Section Revert, which takes
@@ -66,6 +107,21 @@ connector has no separate one, and `s3.aws-access-key` reads like a secret while
 identifier that travels in every signed request. The log redaction filter in `app.logging` stays
 a name test, deliberately -- it errs towards hiding too much, which is right for a log file and
 wrong for a form that has to say which field takes a password.
+
+`POST /{section}/revert` and `POST /api/v1/candidate/rollback` take `dry_run` in the request
+body, and `RevertEffect` gains `staged`. A revert staged immediately and reported its effect
+afterwards, so the only way to see what a Full Rollback amounted to -- every staged change in
+all six Sections discarded, including other people's -- was to cause it. The effect was always
+computed from the Candidate in memory, so a dry run is the real answer rather than an estimate;
+what the real call adds is the save, and a dry run skips it. It therefore records no audit entry
+either, because the audit is written by that save.
+
+`staged` is additive but worth reading: it is the only field distinguishing a preview from the
+act, so a client that ignores it cannot tell them apart.
+
+The flag is in the body rather than a query parameter deliberately. `RevertRequest` forbids
+unknown fields, so `dryrun` is a `422`; a mistyped query parameter would have been ignored and
+the revert it was meant to make harmless would have gone through.
 
 `GET /api/v1/audit` takes four more filters: `outcome`, `resource`, `action` and `apply_id`.
 Additive, so nothing breaks. `outcome=refused` is the one worth knowing about — refusals were
