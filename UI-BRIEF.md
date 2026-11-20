@@ -311,6 +311,22 @@ Create, edit and delete for each, shaped by the data in §5. What each one deman
 - **Client certificates arrive as an uploaded ZIP.** Apchi opens it, works out which part is the
   certificate and which the key, checks they match, converts formats, and reports what it found.
   The person never converts anything by hand. Upload can fail in ways worth explaining.
+
+  **The archive can be read before it is staged**, on a separate endpoint, and this is worth
+  designing around rather than treating as a nicety. Uploading under a name that already exists
+  **replaces that certificate immediately** — which is how renewal works — so a wrong file
+  silently swaps out something that works. The inspection answers, without staging anything:
+  which member of the ZIP was taken as the certificate and which as the key, what would be
+  converted, what the resulting certificate is, **what it would replace** (the whole certificate,
+  so two expiry dates can be compared), and **which Catalogs currently present that name** and
+  would therefore be re-pointed. It refuses in exactly the cases the upload refuses.
+
+  Two things follow. Apchi identifies ZIP members by **what they parse as, never by their
+  name** — so "we took `ca.pem` as your certificate" is the only way somebody notices they
+  zipped the issuing CA instead of their leaf, and the interface should show it. And the
+  inspection is a **separate request, not a flag**, because this is a file upload: a mistyped
+  flag on a form submission cannot be refused the way one in a JSON body can, so it would have
+  staged the certificate for real.
 - **Permissions is the high-volume one**: many rows of five fields, usually read filtered to one
   identity or one catalog. It also contains system-owned rules nobody may edit.
 - **Every Section can be reverted** to its content from an earlier Snapshot.

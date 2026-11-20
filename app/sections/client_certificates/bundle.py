@@ -41,9 +41,35 @@ class Bundle:
     certificate: x509.Certificate
     certificate_pem: str
     private_key_pem: str
+    #: Which member of the archive each half came from. Kept because the member names are
+    #: the only thing an Operator can check the reading against: Apchi identifies members by
+    #: what they parse as and never by their name, so "we took `ca.pem` as your certificate"
+    #: is how somebody notices they zipped the wrong file.
+    certificate_member: str
+    key_member: str
+    #: What Apchi changed on the way in, in prose, so an inspection can say so. Empty when
+    #: the archive already held PEM and a PKCS#8 key.
+    conversions: tuple[str, ...] = ()
 
 
-def _members(archive: bytes) -> list[bytes]:
+#: A PEM key's own header says which format it is in; DER has no header to read. Only the
+#: formats `_as_private_key` can load are here -- an encrypted key is refused before this.
+_PEM_KEY_FORMATS = (
+    (b"BEGIN PRIVATE KEY", "PKCS#8 PEM"),
+    (b"BEGIN RSA PRIVATE KEY", "PKCS#1 PEM"),
+    (b"BEGIN EC PRIVATE KEY", "SEC1 PEM"),
+)
+
+
+def _key_format(data: bytes) -> str:
+    """What arrived, for the record of what was converted."""
+    for marker, name in _PEM_KEY_FORMATS:
+        if marker in data:
+            return name
+    return "DER"
+
+
+def _members(archive: bytes) -> list[tuple[str, bytes]]:
     try:
         zipped = zipfile.ZipFile(io.BytesIO(archive))
     except zipfile.BadZipFile as exc:
@@ -72,14 +98,18 @@ def _members(archive: bytes) -> list[bytes]:
                 f"{info.filename!r} is {info.file_size} bytes, which is far larger than any "
                 "certificate or key."
             )
-        contents.append(zipped.read(info))
+        contents.append((info.filename, zipped.read(info)))
     return contents
 
 
-def _as_certificate(data: bytes) -> x509.Certificate | None:
-    for load in (x509.load_pem_x509_certificate, x509.load_der_x509_certificate):
+def _as_certificate(data: bytes) -> tuple[x509.Certificate, str] | None:
+    """The certificate and the encoding it arrived in, or None when this is not one."""
+    for load, encoding in (
+        (x509.load_pem_x509_certificate, "PEM"),
+        (x509.load_der_x509_certificate, "DER"),
+    ):
         try:
-            return load(data)
+            return load(data), encoding
         except Exception:
             continue
     return None
@@ -121,13 +151,13 @@ def read(archive: bytes) -> Bundle:
     configuration of its own, and guessing at it would put key material in files nobody
     asked for.
     """
-    certificates: list[x509.Certificate] = []
-    keys: list[PrivateKeyTypes] = []
-    for data in _members(archive):
-        if (certificate := _as_certificate(data)) is not None:
-            certificates.append(certificate)
+    certificates: list[tuple[str, x509.Certificate, str]] = []
+    keys: list[tuple[str, PrivateKeyTypes, str]] = []
+    for member, data in _members(archive):
+        if (found := _as_certificate(data)) is not None:
+            certificates.append((member, *found))
         elif (key := _as_private_key(data)) is not None:
-            keys.append(key)
+            keys.append((member, key, _key_format(data)))
 
     if not certificates:
         raise BundleProblem("The ZIP archive holds no certificate Apchi can read.")
@@ -139,10 +169,17 @@ def read(archive: bytes) -> Bundle:
             "belongs to the certificate; upload one certificate and its key."
         )
 
-    key = keys[0]
+    key_member, key, key_format = keys[0]
     wanted = _public_bytes(key.public_key())
-    for certificate in certificates:
+    for member, certificate, encoding in certificates:
         if _public_bytes(certificate.public_key()) == wanted:
+            conversions = []
+            if encoding != "PEM":
+                conversions.append(f"the certificate arrived as {encoding} and is stored as PEM")
+            if key_format != "PKCS#8 PEM":
+                conversions.append(
+                    f"the private key arrived as {key_format} and is stored as PKCS#8 PEM"
+                )
             return Bundle(
                 certificate=certificate,
                 certificate_pem=certificate.public_bytes(serialization.Encoding.PEM).decode(),
@@ -151,6 +188,9 @@ def read(archive: bytes) -> Bundle:
                     serialization.PrivateFormat.PKCS8,
                     serialization.NoEncryption(),
                 ).decode(),
+                certificate_member=member,
+                key_member=key_member,
+                conversions=tuple(conversions),
             )
 
     raise BundleProblem(

@@ -924,6 +924,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/certificates/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read an archive without staging it
+         * @description What the upload would do, having done none of it.
+         *
+         *     A separate route rather than a flag on the upload, deliberately. The other previews in
+         *     this API take `dry_run` in a JSON body, where an unknown field is refused and a
+         *     misspelling is a 422 -- but this endpoint takes multipart form data, and an unknown form
+         *     field cannot be refused the same way. A mistyped flag would be ignored and the
+         *     certificate staged for real, which is the one outcome somebody asking for a preview is
+         *     trying to avoid. A path with no save in it cannot do that whatever is misspelled.
+         *
+         *     It refuses in exactly the cases the upload refuses, because the half of
+         *     `store_certificate` that validates is the half this calls. An inspection that said yes
+         *     where the upload says no would be worse than none at all.
+         */
+        post: operations["inspect_certificate_api_v1_certificates_inspect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/certificates/revert": {
         parameters: {
             query?: never;
@@ -1791,6 +1822,19 @@ export interface components {
          * @enum {string}
          */
         AuthMode: "none" | "password" | "sso";
+        /** Body_inspect_certificate_api_v1_certificates_inspect_post */
+        Body_inspect_certificate_api_v1_certificates_inspect_post: {
+            /**
+             * Archive
+             * @description The same ZIP `POST /certificates` takes.
+             */
+            archive: string;
+            /**
+             * Name
+             * @description The name it would be stored under.
+             */
+            name: string;
+        };
         /** Body_upload_certificate_api_v1_certificates_post */
         Body_upload_certificate_api_v1_certificates_post: {
             /**
@@ -1831,6 +1875,36 @@ export interface components {
             values: {
                 [key: string]: string[];
             };
+        };
+        /**
+         * BundleReading
+         * @description What Apchi made of an archive, having stored nothing.
+         */
+        BundleReading: {
+            /** @description What would be staged: subject, issuer, validity and expiry status. */
+            certificate: components["schemas"]["ClientCertificate"];
+            /**
+             * Certificate Member
+             * @description Which member of the ZIP was taken as the certificate. Apchi identifies members by what they parse as and never by their name, so this is the only way somebody notices they zipped the issuing CA instead of their leaf.
+             */
+            certificate_member: string;
+            /**
+             * Conversions
+             * @description What Apchi would change on the way in, in prose -- a DER certificate stored as PEM, a PKCS#1 key stored as PKCS#8. Empty when nothing is converted, which is its own answer rather than missing information.
+             */
+            conversions: string[];
+            /**
+             * Key Member
+             * @description Which member was taken as the private key.
+             */
+            key_member: string;
+            /** @description The certificate already staged under this name, which this one would replace. Null when the name is new. **This is the field the endpoint exists for**: uploading under an existing name replaces it immediately, so comparing the two expiries is how somebody confirms a renewal is a renewal rather than a mistake. */
+            replaces: components["schemas"]["ClientCertificate"] | null;
+            /**
+             * Used By
+             * @description Catalogs that currently present this name. Replacing the certificate re-points every one of them, which is how renewal is meant to work and is also what makes a wrong upload reach further than the certificate itself.
+             */
+            used_by: string[];
         };
         /**
          * Catalog
@@ -5092,6 +5166,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClientCertificate"];
+                };
+            };
+            /** @description No usable credential. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_certificate_api_v1_certificates_inspect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_inspect_certificate_api_v1_certificates_inspect_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BundleReading"];
                 };
             };
             /** @description No usable credential. */
