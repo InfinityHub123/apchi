@@ -8,8 +8,10 @@ what is being validated supplied by the Section.
 
 import difflib
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PropertyProblem(Exception):
@@ -39,6 +41,16 @@ class PropertySchema:
     #: Properties whose value is open-ended: present, but not otherwise constrained.
     open_ended: frozenset[str] = frozenset()
     prefixes: tuple[str, ...] = field(default=())
+    #: Which of the above carry a credential, marked here rather than guessed from the name.
+    #:
+    #: A name test cannot do this job. `mongodb.connection-url` embeds the password and the
+    #: connector has no separate one, so nothing in its name says credential; a set of
+    #: HTTP headers can carry a bearer token; and `s3.aws-access-key` reads exactly like a
+    #: secret and is an identifier that travels in every signed request. The log redaction
+    #: filter in `app.logging` is a name test, and it is deliberately not this: it errs
+    #: towards hiding too much, which is right for a log file and wrong for a form that has
+    #: to tell somebody which field to put a password in.
+    secrets: frozenset[str] = frozenset()
 
     def known(self) -> frozenset[str]:
         names = set(self.required) | set(self.optional) | set(self.open_ended)
@@ -47,6 +59,104 @@ class PropertySchema:
             for required in branch.values.values():
                 names |= required
         return frozenset(names)
+
+
+class BranchRules(BaseModel):
+    """One selector property, and what each of its values brings with it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    selector: str = Field(description="The property whose value decides the rest.")
+    default: str | None = Field(
+        default=None,
+        description=(
+            "What Apchi assumes when the selector is absent, so the properties its value "
+            "requires are required too. Null means a missing selector brings nothing."
+        ),
+    )
+    allowed: list[str] | None = Field(
+        description=(
+            "The values the selector accepts. **Null means any value is accepted** -- the "
+            "names in `values` are then the ones Apchi knows what to do with rather than "
+            "the only ones permitted, which is the difference between a closed list and a "
+            "suggestion."
+        )
+    )
+    values: dict[str, list[str]] = Field(
+        description=(
+            "Per selector value, the properties that become required. A value mapping to an "
+            "empty list is a real answer: that branch requires nothing further."
+        )
+    )
+
+
+class PropertyRules(BaseModel):
+    """What Apchi will accept for one curated connector or Event Listener type.
+
+    The same rules the write endpoints enforce, so a form built from this is refused for the
+    same reasons and no others. Everything is sorted, because the underlying sets are
+    unordered and a response that reshuffled between calls would be a committed contract that
+    cannot be diffed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    required: list[str]
+    optional: list[str]
+    branches: list[BranchRules]
+    open_ended: list[str] = Field(
+        description=(
+            "Properties whose value Apchi does not constrain. Present and accepted; what is "
+            "in them is Trino's business, which is also why nothing here can redact them."
+        )
+    )
+    prefixes: list[str] = Field(
+        description="Any property starting with one of these is accepted, name unchecked."
+    )
+    secrets: list[str] = Field(
+        description=(
+            "Which of the properties above carry a credential. Marked per connector rather "
+            "than inferred from the name, because the name does not always say: "
+            "`mongodb.connection-url` embeds the password and the connector has no separate "
+            "one, while `s3.aws-access-key` reads like a secret and is an identifier. §12 "
+            "makes all Apchi users trusted, so this is not an access rule -- it is what a "
+            "form needs to know to mark a field, and what a diff needs to avoid putting a "
+            "password on a screen somebody is sharing."
+        )
+    )
+
+
+def describe(name: str, schema: PropertySchema) -> PropertyRules:
+    """One curated schema, as the API returns it.
+
+    Exhaustive over `PropertySchema`'s fields by construction, and a test asserts that --
+    a field added to the schema and not to this projection would be a rule the write
+    endpoints enforce and no client can discover.
+    """
+    return PropertyRules(
+        name=name,
+        required=sorted(schema.required),
+        optional=sorted(schema.optional),
+        branches=[
+            BranchRules(
+                selector=branch.selector,
+                default=branch.default,
+                # Empty means "unconstrained" inside the validator, which is not what an
+                # empty list says to a client reading JSON. Null says it.
+                allowed=sorted(branch.allowed) if branch.allowed else None,
+                values={value: sorted(names) for value, names in sorted(branch.values.items())},
+            )
+            for branch in schema.branches
+        ],
+        open_ended=sorted(schema.open_ended),
+        prefixes=sorted(schema.prefixes),
+        secrets=sorted(schema.secrets),
+    )
+
+
+#: Every field of `PropertySchema`, so a test can assert `describe` carries all of them.
+SCHEMA_FIELDS = tuple(f.name for f in fields(PropertySchema))
 
 
 def _required_for(schema: PropertySchema, properties: dict[str, str]) -> set[str]:

@@ -34,6 +34,9 @@ HTTP = PropertySchema(
             "http-event-listener.connect-max-delay",
         }
     ),
+    # Nothing else here carries a credential: the ingest URI is an address, and the retry
+    # and backoff settings are numbers. The headers are where a bearer token goes.
+    secrets=frozenset({"http-event-listener.connect-http-headers"}),
     branches=(
         Branch(
             selector="http-event-listener.connect-http-method",
