@@ -7,7 +7,7 @@ designer or a design system starting from nothing, so it assumes no prior knowle
 interface to inherit from, no existing layout, navigation, palette or component language to
 preserve or react against. Every visual and interaction decision is open.
 
-The product is backed by a public REST API of 87 operations across 17 areas. Every screen
+The product is backed by a public REST API of 91 operations across 17 areas. Every screen
 described here is a consumer of it, and the API is the limit of what any interface can know or
 do — which is why this document describes capability and data rather than screens.
 
