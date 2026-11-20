@@ -4,7 +4,7 @@ import logging
 from typing import Any, Literal
 
 from fastapi import APIRouter, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import (
     CandidateStoreDep,
@@ -118,6 +118,52 @@ async def reset(store: CandidateStoreDep) -> None:
     """
     current = await store.load()
     await store.reset(base_snapshot=current.base_snapshot)
+
+
+class ResourceReset(BaseModel):
+    """Which one resource to Reset."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"section": "catalogs", "resource": "finance_pg"}]},
+    )
+
+    section: SectionName
+    resource: str = Field(
+        description=(
+            "The resource's name exactly as Review reports it in `changes[].resource`. In "
+            "the body rather than the path because some of those names cannot travel in a "
+            "path: Resource Groups keys its selector list as `#selectors`, and `#` in a URL "
+            "starts the fragment, so the server would receive a truncated name."
+        )
+    )
+
+
+@router.post(
+    "/candidate/reset-resource",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Reset one staged change, leaving every other one",
+    dependencies=[OperatorMutationAllowed],
+)
+async def reset_resource(request: ResourceReset, store: CandidateStoreDep) -> None:
+    """Undo one resource's staged change: it goes back as the base Snapshot has it.
+
+    An edit gets the Snapshot's version back, a removal is restored, an addition is removed.
+    Every other staged change stays -- in this Section and every other, including other
+    people's. Before this the smallest unit was a Section Revert, which discards everyone's
+    edits to the Section along with the one being undone.
+
+    A separate route rather than an optional body on `POST /candidate/reset`, deliberately.
+    That one discards **everything**, and a client that forgot the body would get it.
+
+    Works for Client Certificates too, which re-sending a Snapshot's version cannot do from
+    outside: their upload takes a ZIP, and the Snapshot's copy never leaves Apchi.
+
+    404 when the resource has nothing staged, rather than a silent success that would read
+    as "undone" to somebody who typed the wrong name. Recorded in the audit as a `reset` with
+    the resource named, so it cannot be mistaken for discarding everything.
+    """
+    await store.reset_resource(request.section, request.resource)
 
 
 @router.post(

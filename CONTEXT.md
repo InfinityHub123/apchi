@@ -128,7 +128,10 @@ Recording a verified Candidate as a new Snapshot.
 **Reset**:
 Discarding the Candidate's changes and re-deriving it from the latest Snapshot. Because
 nothing reaches the Cluster before Apply, Reset leaves the Effective Cluster State
-untouched.
+untouched. A Reset can be scoped to one resource, which puts that resource back as the
+Candidate's base Snapshot has it and leaves every other staged change alone; it is still a
+Reset, not a Section Revert, because it goes back to where the Candidate started rather than
+to an earlier Snapshot.
 
 **Section Revert**:
 Replacing one Section of the Candidate with its content from an earlier Snapshot, leaving

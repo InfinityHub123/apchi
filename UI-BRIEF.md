@@ -314,6 +314,12 @@ Create, edit and delete for each, shaped by the data in §5. What each one deman
 - **Permissions is the high-volume one**: many rows of five fields, usually read filtered to one
   identity or one catalog. It also contains system-owned rules nobody may edit.
 - **Every Section can be reverted** to its content from an earlier Snapshot.
+- **Any one staged change can be undone on its own** — a Reset of a single resource. It goes
+  back as the Snapshot the Candidate was derived from has it: an edit loses its edit, a removal
+  is restored, an addition disappears. Every other staged change stays, including other
+  people's in the same Section, which is the difference from a Section Revert and why this is
+  the natural per-row action in a diff. It works for every Section, certificates included, and
+  it is refused when the resource has nothing staged rather than quietly succeeding.
 
 ### 6.4 Validating
 
@@ -790,7 +796,10 @@ Honest list. Designing around these is fine; assuming they exist is not.
   outside Apchi, and no screen can change it.
 - **No way to see another person's API tokens**, so nothing can inventory the automation running
   against a deployment.
-- **No per-resource revert** — the smallest unit is a whole Section.
+- **No per-resource revert to an *older* Snapshot.** A single staged change can be undone
+  (§6.3), which takes it back to the Snapshot the Candidate started from. Taking one resource
+  back to Snapshot 10 while the rest stay put is still only possible a whole Section at a
+  time.
 - **Drift is detectable but not watched, and not for catalogs.** Apchi can compare what it
   would write against what the cluster holds, on demand, per Section (§6.15) — but nothing
   checks on a timer, so drift is only ever found because somebody asked, and catalogs cannot be
