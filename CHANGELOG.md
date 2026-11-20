@@ -20,6 +20,33 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+`ApplyRecord` gains `verification`: one entry per check, in the order Verification runs them,
+each `passed`, `failed` or `not_reached`. Before this an Apply recorded only that Verification
+passed or a sentence saying why it did not, so "which check failed" meant parsing prose.
+
+`not_reached` is the third value because Verification stops at the first failure -- there is no
+point asking a broken Cluster the next question, and Auto Rollback is waiting -- so at most one
+check is ever `failed` and the rest after it were never asked. The per-Section checks come from
+the registry, so the list grows with the Sections; a client should not count on its length. Empty
+when Verification never ran, and never overwritten by Auto Rollback's own Verification of what it
+restored, which would otherwise read as every check passing on an Apply that failed.
+
+`POST /api/v1/certificates/inspect` is new, and reads an uploaded archive without staging it:
+which member was taken as the certificate and which as the key, what would be converted, the
+resulting certificate, the certificate it would replace, and which Catalogs present that name
+today. Uploading under an existing name replaces it immediately -- that is how renewal works --
+so a wrong file silently swapped out a working certificate and the only way to see what was in
+an archive was to stage it.
+
+A separate route rather than a flag on the upload. The reverts take `dry_run` in a JSON body,
+where an unknown field is a `422`; this endpoint takes multipart form data, where an unknown
+form field cannot be refused the same way, so a mistyped flag would have been ignored and the
+certificate staged for real. A path with no save in it cannot do that.
+
+It refuses in exactly the cases the upload refuses, because the validating half of
+`store_certificate` was split out and is what both call. `Bundle` gains the two member names
+and the conversions, which the ZIP reader previously discarded.
+
 `GET /api/v1/review` gains `size_bytes` and `limit_bytes`, and `ClientCertificate` gains
 `expiring_within_days`. Both are numbers an interface was already rendering something about
 without being able to name it: how close the Candidate is to the ceiling it gets refused at,

@@ -337,6 +337,14 @@
             "title": "Started At",
             "type": "string"
           },
+          "verification": {
+            "description": "How each of Verification's checks came out, in the order they run. Empty on an Apply that never reached Verification -- a Validation failure means nothing was delivered and nothing was checked.\n\nVerification **stops at the first failure**, so at most one check is `failed` and everything after it is `not_reached` rather than passed or failed. That is not a gap in the record: there is no point asking a broken Cluster the next question, and Auto Rollback is waiting on the answer.\n\nThis Apply's own Verification only. Auto Rollback verifies again against the configuration it restored, which is a different question and is reported by `rollback`.",
+            "items": {
+              "$ref": "#/components/schemas/CheckResult"
+            },
+            "title": "Verification",
+            "type": "array"
+          },
           "warnings": {
             "description": "What Validation found worth saying and not worth refusing over. An Apply that succeeded with warnings succeeded: these are reported so an Operator can see them next to the Apply that carried them, rather than having to run a separate Validation to find out. A Catalog the probe could not connect to is the one case today (\u00a76).",
             "items": {
@@ -521,6 +529,33 @@
         "title": "AuthMode",
         "type": "string"
       },
+      "Body_inspect_certificate_api_v1_certificates_inspect_post": {
+        "properties": {
+          "archive": {
+            "contentMediaType": "application/octet-stream",
+            "description": "The same ZIP `POST /certificates` takes.",
+            "title": "Archive",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name it would be stored under.",
+            "examples": [
+              "finance-client"
+            ],
+            "maxLength": 63,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "archive"
+        ],
+        "title": "Body_inspect_certificate_api_v1_certificates_inspect_post",
+        "type": "object"
+      },
       "Body_upload_certificate_api_v1_certificates_post": {
         "properties": {
           "archive": {
@@ -602,6 +637,63 @@
           "values"
         ],
         "title": "BranchRules",
+        "type": "object"
+      },
+      "BundleReading": {
+        "additionalProperties": false,
+        "description": "What Apchi made of an archive, having stored nothing.",
+        "properties": {
+          "certificate": {
+            "$ref": "#/components/schemas/ClientCertificate",
+            "description": "What would be staged: subject, issuer, validity and expiry status."
+          },
+          "certificate_member": {
+            "description": "Which member of the ZIP was taken as the certificate. Apchi identifies members by what they parse as and never by their name, so this is the only way somebody notices they zipped the issuing CA instead of their leaf.",
+            "title": "Certificate Member",
+            "type": "string"
+          },
+          "conversions": {
+            "description": "What Apchi would change on the way in, in prose -- a DER certificate stored as PEM, a PKCS#1 key stored as PKCS#8. Empty when nothing is converted, which is its own answer rather than missing information.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Conversions",
+            "type": "array"
+          },
+          "key_member": {
+            "description": "Which member was taken as the private key.",
+            "title": "Key Member",
+            "type": "string"
+          },
+          "replaces": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClientCertificate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The certificate already staged under this name, which this one would replace. Null when the name is new. **This is the field the endpoint exists for**: uploading under an existing name replaces it immediately, so comparing the two expiries is how somebody confirms a renewal is a renewal rather than a mistake."
+          },
+          "used_by": {
+            "description": "Catalogs that currently present this name. Replacing the certificate re-points every one of them, which is how renewal is meant to work and is also what makes a wrong upload reach further than the certificate itself.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Used By",
+            "type": "array"
+          }
+        },
+        "required": [
+          "certificate_member",
+          "key_member",
+          "conversions",
+          "certificate",
+          "replaces",
+          "used_by"
+        ],
+        "title": "BundleReading",
         "type": "object"
       },
       "Catalog": {
@@ -852,6 +944,44 @@
           "pattern"
         ],
         "title": "CertificateMappingWrite",
+        "type": "object"
+      },
+      "CheckResult": {
+        "additionalProperties": false,
+        "description": "One check, and how far Verification got.",
+        "properties": {
+          "check": {
+            "description": "Which check. `check_order()` lists them all, in order.",
+            "title": "Check",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it failed, or what it found when it passed -- '3 of 3 workers registered'. Null on a check that was never reached.",
+            "title": "Detail"
+          },
+          "outcome": {
+            "enum": [
+              "passed",
+              "failed",
+              "not_reached"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "check",
+          "outcome"
+        ],
+        "title": "CheckResult",
         "type": "object"
       },
       "ClientCertificate": {
@@ -6461,6 +6591,58 @@
           }
         },
         "summary": "Upload a certificate and its key as a ZIP",
+        "tags": [
+          "client certificates"
+        ]
+      }
+    },
+    "/api/v1/certificates/inspect": {
+      "post": {
+        "description": "What the upload would do, having done none of it.\n\nA separate route rather than a flag on the upload, deliberately. The other previews in\nthis API take `dry_run` in a JSON body, where an unknown field is refused and a\nmisspelling is a 422 -- but this endpoint takes multipart form data, and an unknown form\nfield cannot be refused the same way. A mistyped flag would be ignored and the\ncertificate staged for real, which is the one outcome somebody asking for a preview is\ntrying to avoid. A path with no save in it cannot do that whatever is misspelled.\n\nIt refuses in exactly the cases the upload refuses, because the half of\n`store_certificate` that validates is the half this calls. An inspection that said yes\nwhere the upload says no would be worse than none at all.",
+        "operationId": "inspect_certificate_api_v1_certificates_inspect_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_inspect_certificate_api_v1_certificates_inspect_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BundleReading"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read an archive without staging it",
         "tags": [
           "client certificates"
         ]

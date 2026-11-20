@@ -319,6 +319,22 @@ Create, edit and delete for each, shaped by the data in §5. What each one deman
   certificate and which the key, checks they match, converts formats, and reports what it found.
   The person never converts anything by hand. Upload can fail in ways worth explaining.
 
+  **The archive can be read before it is staged**, on a separate endpoint, and this is worth
+  designing around rather than treating as a nicety. Uploading under a name that already exists
+  **replaces that certificate immediately** — which is how renewal works — so a wrong file
+  silently swaps out something that works. The inspection answers, without staging anything:
+  which member of the ZIP was taken as the certificate and which as the key, what would be
+  converted, what the resulting certificate is, **what it would replace** (the whole certificate,
+  so two expiry dates can be compared), and **which Catalogs currently present that name** and
+  would therefore be re-pointed. It refuses in exactly the cases the upload refuses.
+
+  Two things follow. Apchi identifies ZIP members by **what they parse as, never by their
+  name** — so "we took `ca.pem` as your certificate" is the only way somebody notices they
+  zipped the issuing CA instead of their leaf, and the interface should show it. And the
+  inspection is a **separate request, not a flag**, because this is a file upload: a mistyped
+  flag on a form submission cannot be refused the way one in a JSON body can, so it would have
+  staged the certificate for real.
+
   **Each certificate reports the expiry window its status was computed against.** `status` is
   one of valid, expiring or expired, and it is derived from the expiry date on **every read**
   against a deployment-wide setting — so the same certificate reads `valid` under a 30-day
@@ -462,6 +478,23 @@ Both are durable records with their own browsable histories, not just a transien
 An operator investigating "what happened last Tuesday" reads these: every past Apply with its
 stages, outcome, warnings, whether it rolled out, whether it was interrupted, and which Snapshot
 it produced; every past Validation with its failures.
+
+**An Apply records each of Verification's checks, not only whether it passed.** In order: the
+coordinator responding, workers registered, a smoke query, and then one per Section confirming
+the cluster adopted it — nine in all today, and the per-Section ones follow the Sections, so the
+count is not a constant to design around. Each check is one of **three** outcomes:
+
+- **passed**, often with what it found ("3 of 3 workers registered");
+- **failed**, with why — and at most one check is ever failed;
+- **not reached.** Verification stops at the first failure, deliberately: there is no point
+  asking a broken cluster the next question, and Auto Rollback is waiting on the answer. The
+  checks after a failure therefore did not pass and did not fail, and must not be rendered as
+  either. A row of nine red marks for one failure is the wrong picture.
+
+The list is **empty** for an Apply that never reached Verification — a Validation failure means
+nothing was delivered and nothing was checked, which is a different statement from "Verification
+started and stopped". And it is this Apply's own Verification only: Auto Rollback verifies again
+against what it restored, and that result is reported separately as the rollback's outcome.
 
 ### 6.11 Audit
 
