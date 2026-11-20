@@ -465,6 +465,23 @@ An operator investigating "what happened last Tuesday" reads these: every past A
 stages, outcome, warnings, whether it rolled out, whether it was interrupted, and which Snapshot
 it produced; every past Validation with its failures.
 
+**An Apply records each of Verification's checks, not only whether it passed.** In order: the
+coordinator responding, workers registered, a smoke query, and then one per Section confirming
+the cluster adopted it — nine in all today, and the per-Section ones follow the Sections, so the
+count is not a constant to design around. Each check is one of **three** outcomes:
+
+- **passed**, often with what it found ("3 of 3 workers registered");
+- **failed**, with why — and at most one check is ever failed;
+- **not reached.** Verification stops at the first failure, deliberately: there is no point
+  asking a broken cluster the next question, and Auto Rollback is waiting on the answer. The
+  checks after a failure therefore did not pass and did not fail, and must not be rendered as
+  either. A row of nine red marks for one failure is the wrong picture.
+
+The list is **empty** for an Apply that never reached Verification — a Validation failure means
+nothing was delivered and nothing was checked, which is a different statement from "Verification
+started and stopped". And it is this Apply's own Verification only: Auto Rollback verifies again
+against what it restored, and that result is reported separately as the rollback's outcome.
+
 ### 6.11 Audit
 
 Every action, newest first, attributed. A listing endpoint, cursor-paginated, and an export

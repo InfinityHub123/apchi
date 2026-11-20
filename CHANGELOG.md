@@ -20,6 +20,17 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+`ApplyRecord` gains `verification`: one entry per check, in the order Verification runs them,
+each `passed`, `failed` or `not_reached`. Before this an Apply recorded only that Verification
+passed or a sentence saying why it did not, so "which check failed" meant parsing prose.
+
+`not_reached` is the third value because Verification stops at the first failure -- there is no
+point asking a broken Cluster the next question, and Auto Rollback is waiting -- so at most one
+check is ever `failed` and the rest after it were never asked. The per-Section checks come from
+the registry, so the list grows with the Sections; a client should not count on its length. Empty
+when Verification never ran, and never overwritten by Auto Rollback's own Verification of what it
+restored, which would otherwise read as every check passing on an Apply that failed.
+
 `POST /api/v1/certificates/inspect` is new, and reads an uploaded archive without staging it:
 which member was taken as the certificate and which as the key, what would be converted, the
 resulting certificate, the certificate it would replace, and which Catalogs present that name
