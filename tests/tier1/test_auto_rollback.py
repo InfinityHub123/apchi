@@ -146,6 +146,46 @@ async def test_the_record_carries_the_failure_reason(rolled_back: dict) -> None:
     assert "workers have registered" in rolled_back["failure_reason"]
 
 
+async def test_the_record_names_the_check_that_failed(rolled_back: dict) -> None:
+    """Which check decided the Apply's fate, not only that one did.
+
+    "Verification failed" and "workers_registered failed, 2 of 3" are different amounts of
+    help, and the second is the one the failure reason used to bury in a sentence.
+    """
+    outcomes = {check["check"]: check["outcome"] for check in rolled_back["verification"]}
+    [failed] = [check for check in rolled_back["verification"] if check["outcome"] == "failed"]
+
+    assert outcomes["coordinator_responding"] == "passed"
+    assert failed["check"] == "workers_registered"
+    assert "workers have registered" in failed["detail"]
+
+
+async def test_the_checks_after_a_failure_are_not_reached_rather_than_failed(
+    rolled_back: dict,
+) -> None:
+    """Verification stops at the first failure, which is right: there is no point asking a
+    broken Cluster the next question, and Auto Rollback is waiting. What would be wrong is
+    reporting those later checks as passed or as failed -- nobody asked them."""
+    checks = [check["check"] for check in rolled_back["verification"]]
+    after = checks[checks.index("workers_registered") + 1 :]
+
+    assert after, "the smoke query and every Section's adoption come after it"
+    for check in rolled_back["verification"]:
+        if check["check"] in after:
+            assert check["outcome"] == "not_reached", check
+            assert check["detail"] is None
+
+
+async def test_the_record_is_this_applys_verification_not_the_rollbacks(
+    rolled_back: dict,
+) -> None:
+    """Auto Rollback verifies again, against the configuration it restored, and that one
+    *passes* -- it is why `rollback` reads succeeded. Had it overwritten the record, every
+    check would read passed on an Apply that failed Verification."""
+    assert rolled_back["rollback"] == "succeeded"
+    assert any(check["outcome"] == "failed" for check in rolled_back["verification"])
+
+
 async def test_the_rollback_appears_in_the_stage_history(rolled_back: dict) -> None:
     """So a client watching the stream sees the recovery, not a silent gap."""
     assert [event["stage"] for event in rolled_back["history"]] == [

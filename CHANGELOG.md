@@ -20,6 +20,17 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+`ApplyRecord` gains `verification`: one entry per check, in the order Verification runs them,
+each `passed`, `failed` or `not_reached`. Before this an Apply recorded only that Verification
+passed or a sentence saying why it did not, so "which check failed" meant parsing prose.
+
+`not_reached` is the third value because Verification stops at the first failure -- there is no
+point asking a broken Cluster the next question, and Auto Rollback is waiting -- so at most one
+check is ever `failed` and the rest after it were never asked. The per-Section checks come from
+the registry, so the list grows with the Sections; a client should not count on its length. Empty
+when Verification never ran, and never overwritten by Auto Rollback's own Verification of what it
+restored, which would otherwise read as every check passing on an Apply that failed.
+
 `GET /api/v1/audit/export` is new, and is the audit listing with no paging: every event
 matching the same filters, as NDJSON, streamed. One JSON object per line, each line exactly the
 `AuditEvent` the listing returns -- so nothing had to decide a column order or how to flatten a

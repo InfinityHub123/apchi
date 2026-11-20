@@ -1638,6 +1638,15 @@ export interface components {
              */
             started_at: string;
             /**
+             * Verification
+             * @description How each of Verification's checks came out, in the order they run. Empty on an Apply that never reached Verification -- a Validation failure means nothing was delivered and nothing was checked.
+             *
+             *     Verification **stops at the first failure**, so at most one check is `failed` and everything after it is `not_reached` rather than passed or failed. That is not a gap in the record: there is no point asking a broken Cluster the next question, and Auto Rollback is waiting on the answer.
+             *
+             *     This Apply's own Verification only. Auto Rollback verifies again against the configuration it restored, which is a different question and is reported by `rollback`.
+             */
+            verification?: components["schemas"]["CheckResult"][];
+            /**
              * Warnings
              * @description What Validation found worth saying and not worth refusing over. An Apply that succeeded with warnings succeeded: these are reported so an Operator can see them next to the Apply that carried them, rather than having to run a separate Validation to find out. A Catalog the probe could not connect to is the one case today (§6).
              */
@@ -1845,6 +1854,27 @@ export interface components {
              * @default $1
              */
             user: string;
+        };
+        /**
+         * CheckResult
+         * @description One check, and how far Verification got.
+         */
+        CheckResult: {
+            /**
+             * Check
+             * @description Which check. `check_order()` lists them all, in order.
+             */
+            check: string;
+            /**
+             * Detail
+             * @description Why it failed, or what it found when it passed -- '3 of 3 workers registered'. Null on a check that was never reached.
+             */
+            detail?: string | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "passed" | "failed" | "not_reached";
         };
         /**
          * ClientCertificate
