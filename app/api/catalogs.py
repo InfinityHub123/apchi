@@ -16,6 +16,8 @@ from app.pipeline.recovery import RevertEffect, RevertRequest, section_revert
 from app.sections.catalogs import SECTION as CATALOGS
 from app.sections.catalogs import section
 from app.sections.catalogs.model import Catalog, CatalogUpdate, CatalogWrite
+from app.sections.catalogs.schemas import CURATED_SCHEMAS
+from app.sections.properties import PropertyRules, describe
 
 router = APIRouter(prefix="/catalogs", tags=["catalogs"])
 
@@ -171,6 +173,29 @@ async def create_catalog(
     created = section.create_catalog(candidate.resources(CATALOGS), write)
     await store.save(candidate)
     return created
+
+
+@router.get(
+    "/connectors",
+    response_model=list[PropertyRules],
+    summary="What each curated connector accepts",
+)
+async def list_connectors() -> list[PropertyRules]:
+    """The rules `POST` and `PATCH` already enforce, so a form built from this is refused for
+    the same reasons and no others -- and a picker stops being a second copy of them that
+    drifts.
+
+    **Only the curated connectors are here, and that is not the list of connectors you may
+    use.** Anything Trino has a plugin for is accepted; what an uncurated connector does not
+    get is this -- no required-property check, no typo suggestion, nothing until Trino itself
+    sees the properties at Apply. `GET /catalogs` reports `supported` per Catalog, which is
+    the same distinction from the other direction.
+
+    Declared before `/{name}` so the path does not resolve to a Catalog called "connectors".
+    Static: it changes when Apchi's supported Trino range does, not when anybody edits
+    anything.
+    """
+    return [describe(name, schema) for name, schema in sorted(CURATED_SCHEMAS.items())]
 
 
 @router.get("/{name}", response_model=Catalog, summary="Fetch a staged Catalog")
