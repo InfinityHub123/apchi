@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from pymongo import ReturnDocument
 from pymongo.asynchronous.database import AsyncDatabase
 
-from app.api.errors import CandidateTooLarge
+from app.api.errors import CandidateTooLarge, NotFound
 from app.audit.actor import actor
 from app.audit.changes import Sections, changes_between
 from app.audit.events import Action, AuditStore, Category, Entry
@@ -122,6 +122,7 @@ class CandidateStore:
         category: Category | None = None,
         action: Action | None = None,
         detail: str | None = None,
+        resource: str | None = None,
     ) -> None:
         """Store the Candidate, and record who changed what (§20).
 
@@ -142,6 +143,10 @@ class CandidateStore:
         Section Revert is one act on one Section. Deriving those would record a plausible
         list of resource changes and lose the only thing somebody reading the trail wants to
         know, which is that it was a revert.
+
+        `resource` names what such an act was about, when it was about one thing: a Reset of a
+        single resource is still a Reset, and recording it without the resource would make it
+        indistinguishable in the trail from discarding everything.
 
         `detail` carries the Snapshot such an act restored *from*. Not the `snapshot` field:
         that one means the Snapshot an Apply **produced** (§20), and a staged act has produced
@@ -169,7 +174,9 @@ class CandidateStore:
         )
         # After the write, never before. An event naming a change that then failed to store is
         # worse than no event: it attributes something to somebody that never happened.
-        await self._record(_sections_of(previous), dumped["sections"], category, action, detail)
+        await self._record(
+            _sections_of(previous), dumped["sections"], category, action, detail, resource
+        )
 
     async def _record(
         self,
@@ -178,11 +185,18 @@ class CandidateStore:
         category: Category | None,
         action: Action | None,
         detail: str | None,
+        resource: str | None = None,
     ) -> None:
         who = actor()
         if category is not None and action is not None:
             await self._audit.record(
-                who.subject, who.via, category, action, detail=detail, token_id=who.token_id
+                who.subject,
+                who.via,
+                category,
+                action,
+                resource=resource,
+                detail=detail,
+                token_id=who.token_id,
             )
             return
         # One write for however many resources moved. A request that edited five of them is
@@ -239,6 +253,46 @@ class CandidateStore:
             detail=_from_snapshot(fresh.base_snapshot),
         )
         return fresh
+
+    async def reset_resource(self, section: SectionName, resource: str) -> None:
+        """Reset one resource: put it back as the Candidate's base Snapshot has it.
+
+        Reset scoped to a single resource, so the Candidate's other staged changes -- in this
+        Section and every other, including other people's -- stay where they are. The
+        smallest unit used to be a Section Revert, which discards everyone's edits to that
+        Section along with the one being undone.
+
+        "Back as the base Snapshot has it" covers all three shapes of staged change: an
+        edited resource gets the Snapshot's version, a removed one comes back, and an added
+        one is removed. Against the base Snapshot rather than the latest, for the reason
+        Review diffs against it -- that is what the Candidate was derived from, and so what
+        "staged" is measured against.
+
+        Refused when the resource has nothing staged. A silent success there would read as
+        "undone" to somebody who typed the wrong name.
+        """
+        candidate = await self.load()
+        baseline = await self._snapshots.sections_of(candidate.base_snapshot)
+        base = baseline.get(section, {})
+        staged = candidate.sections.setdefault(section, {})
+        if staged.get(resource) == base.get(resource):
+            raise NotFound(
+                f"{section} has no staged change to {resource!r}: it is already as Snapshot "
+                f"{candidate.base_snapshot} has it."
+                if candidate.base_snapshot is not None
+                else f"{section} has no staged change to {resource!r}."
+            )
+        if resource in base:
+            staged[resource] = base[resource]
+        else:
+            del staged[resource]
+        await self.save(
+            candidate,
+            category=section,
+            action="reset",
+            resource=resource,
+            detail=_from_snapshot(candidate.base_snapshot),
+        )
 
 
 def _sections_of(document: dict[str, Any] | None) -> Sections:

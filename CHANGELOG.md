@@ -61,6 +61,18 @@ reported beside it rather than left for a client to carry, since a deployment ma
 file -- that `status` is recomputed on every read, so a client branching on it reads a different
 answer once an Admin changes the setting -- is now something a response says for itself.
 
+`POST /api/v1/candidate/reset-resource` is new, and Resets one staged change: the resource goes
+back as the Candidate's base Snapshot has it, and every other staged change stays -- including
+other people's in the same Section. The smallest undo used to be a Section Revert, which takes
+everyone's edits to that Section with it. It works for Client Certificates, which re-sending a
+Snapshot's version from outside cannot, and it is a `404` when the resource has nothing staged.
+
+The resource is named in the body rather than the path, because Resource Groups keys its
+selector list as `#selectors` and `#` in a URL starts the fragment. A separate route rather than
+an optional body on `POST /candidate/reset`, because that one discards everything and a client
+that forgot the body would get exactly that. Audited as `reset` with `resource` set, which is
+what distinguishes it from a Reset of the whole Candidate.
+
 `GET /api/v1/audit/export` is new, and is the audit listing with no paging: every event
 matching the same filters, as NDJSON, streamed. One JSON object per line, each line exactly the
 `AuditEvent` the listing returns -- so nothing had to decide a column order or how to flatten a

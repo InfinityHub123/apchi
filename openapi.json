@@ -2897,6 +2897,41 @@
         "title": "ResourceGroupWrite",
         "type": "object"
       },
+      "ResourceReset": {
+        "additionalProperties": false,
+        "description": "Which one resource to Reset.",
+        "examples": [
+          {
+            "resource": "finance_pg",
+            "section": "catalogs"
+          }
+        ],
+        "properties": {
+          "resource": {
+            "description": "The resource's name exactly as Review reports it in `changes[].resource`. In the body rather than the path because some of those names cannot travel in a path: Resource Groups keys its selector list as `#selectors`, and `#` in a URL starts the fragment, so the server would receive a truncated name.",
+            "title": "Resource",
+            "type": "string"
+          },
+          "section": {
+            "enum": [
+              "catalogs",
+              "client_certificates",
+              "certificate_mapping",
+              "permissions",
+              "resource_groups",
+              "event_listeners"
+            ],
+            "title": "Section",
+            "type": "string"
+          }
+        },
+        "required": [
+          "section",
+          "resource"
+        ],
+        "title": "ResourceReset",
+        "type": "object"
+      },
       "RevertEffect": {
         "description": "What was staged, and what an Apply would then do to the Cluster.\n\nThe catalog lists are the point of this model. A revert is not a paper change:\napplying it issues real DROP CATALOG statements, and \"3 catalogs will be dropped\"\nis a materially different warning from \"the configuration will be rewritten\".",
         "examples": [
@@ -5845,6 +5880,51 @@
           }
         },
         "summary": "Discard everything staged",
+        "tags": [
+          "candidate"
+        ]
+      }
+    },
+    "/api/v1/candidate/reset-resource": {
+      "post": {
+        "description": "Undo one resource's staged change: it goes back as the base Snapshot has it.\n\nAn edit gets the Snapshot's version back, a removal is restored, an addition is removed.\nEvery other staged change stays -- in this Section and every other, including other\npeople's. Before this the smallest unit was a Section Revert, which discards everyone's\nedits to the Section along with the one being undone.\n\nA separate route rather than an optional body on `POST /candidate/reset`, deliberately.\nThat one discards **everything**, and a client that forgot the body would get it.\n\nWorks for Client Certificates too, which re-sending a Snapshot's version cannot do from\noutside: their upload takes a ZIP, and the Snapshot's copy never leaves Apchi.\n\n404 when the resource has nothing staged, rather than a silent success that would read\nas \"undone\" to somebody who typed the wrong name. Recorded in the audit as a `reset` with\nthe resource named, so it cannot be mistaken for discarding everything.",
+        "operationId": "reset_resource_api_v1_candidate_reset_resource_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResourceReset"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reset one staged change, leaving every other one",
         "tags": [
           "candidate"
         ]

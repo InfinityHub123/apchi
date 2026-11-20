@@ -721,6 +721,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/candidate/reset-resource": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset one staged change, leaving every other one
+         * @description Undo one resource's staged change: it goes back as the base Snapshot has it.
+         *
+         *     An edit gets the Snapshot's version back, a removal is restored, an addition is removed.
+         *     Every other staged change stays -- in this Section and every other, including other
+         *     people's. Before this the smallest unit was a Section Revert, which discards everyone's
+         *     edits to the Section along with the one being undone.
+         *
+         *     A separate route rather than an optional body on `POST /candidate/reset`, deliberately.
+         *     That one discards **everything**, and a client that forgot the body would get it.
+         *
+         *     Works for Client Certificates too, which re-sending a Snapshot's version cannot do from
+         *     outside: their upload takes a ZIP, and the Snapshot's copy never leaves Apchi.
+         *
+         *     404 when the resource has nothing staged, rather than a silent success that would read
+         *     as "undone" to somebody who typed the wrong name. Recorded in the audit as a `reset` with
+         *     the resource named, so it cannot be mistaken for discarding everything.
+         */
+        post: operations["reset_resource_api_v1_candidate_reset_resource_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/candidate/rollback": {
         parameters: {
             query?: never;
@@ -2893,6 +2928,22 @@ export interface components {
             soft_memory_limit?: string | null;
         };
         /**
+         * ResourceReset
+         * @description Which one resource to Reset.
+         */
+        ResourceReset: {
+            /**
+             * Resource
+             * @description The resource's name exactly as Review reports it in `changes[].resource`. In the body rather than the path because some of those names cannot travel in a path: Resource Groups keys its selector list as `#selectors`, and `#` in a URL starts the fragment, so the server would receive a truncated name.
+             */
+            resource: string;
+            /**
+             * Section
+             * @enum {string}
+             */
+            section: "catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners";
+        };
+        /**
          * RevertEffect
          * @description What was staged, and what an Apply would then do to the Cluster.
          *
@@ -4670,6 +4721,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    reset_resource_api_v1_candidate_reset_resource_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourceReset"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No usable credential. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
