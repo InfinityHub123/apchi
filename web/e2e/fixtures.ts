@@ -185,7 +185,33 @@ export const CATALOGS = [
   { name: "marketing_mysql", connector: "mysql", supported: false, certificate: null, properties: {} },
   { name: "lake_iceberg", connector: "iceberg", supported: true, certificate: null, properties: { "iceberg.catalog.type": "rest", "iceberg.rest-catalog.uri": "https://rest" } },
 ];
-export const LISTENER_TYPES = [rules("kafka", { secrets: [] })];
+export const LISTENER_TYPES = [
+  rules("kafka", { required: ["kafka-event-listener.broker-endpoints"], optional: ["kafka-event-listener.client-id"], secrets: [] }),
+];
+
+export const GRANTS = [
+  { key: "analyst_ro:finance_pg:reporting:*", identity: "analyst_ro", catalog: "finance_pg", schema: "reporting", table: null, privileges: ["SELECT"] },
+  { key: "analyst_ro:lake_iceberg:*:*", identity: "analyst_ro", catalog: "lake_iceberg", schema: null, table: null, privileges: ["SELECT"] },
+  { key: "etl:lake_iceberg:raw:*", identity: "etl", catalog: "lake_iceberg", schema: "raw", table: null, privileges: ["SELECT", "INSERT"] },
+];
+
+export const GROUPS = [
+  { path: "global", hard_concurrency_limit: 100, soft_memory_limit: "100%" },
+  { path: "global.etl", hard_concurrency_limit: 10, soft_memory_limit: "60%" },
+  { path: "global.etl.batch", hard_concurrency_limit: 6, soft_memory_limit: "50GB", hard_cpu_limit: "4h" },
+];
+
+export const SELECTORS = [
+  { group: "global.dashboards", source: "^(superset|tableau)$" },
+  { group: "global.etl.batch", user: "^svc_etl_.*", query_type: "INSERT" },
+  { group: "global.adhoc", user_group: "analysts" },
+  { group: "global.etl", user: "^svc_.*" },
+];
+
+export const LISTENERS = [
+  { name: "events_kafka", type: "kafka", supported: true, properties: { "kafka-event-listener.broker-endpoints": "broker-1:9092" } },
+  { name: "audit_sink", type: "http", supported: false, properties: { "http-event-listener.connect-ingest-uri": "https://audit" } },
+];
 
 export const DRIFT = {
   at: NOW,
@@ -200,6 +226,14 @@ export const DRIFT = {
     { section: "event_listeners", status: "in_sync", restarts_coordinator: true },
   ],
 };
+
+/** A response the handler wants sent as-is, with a status. */
+export class Reply {
+  constructor(
+    readonly status: number,
+    readonly body: unknown,
+  ) {}
+}
 
 export type Handler = (route: Route, url: URL) => unknown | Promise<unknown>;
 export type Stubs = Record<string, unknown | Handler>;
@@ -233,17 +267,20 @@ export const DEFAULTS: Stubs = {
   "GET /api/v1/event-listeners/types": LISTENER_TYPES,
   "GET /api/v1/cluster/drift": DRIFT,
   "GET /api/v1/catalogs": CATALOGS,
+  "GET /api/v1/permissions": GRANTS,
+  "GET /api/v1/permissions/system": {
+    rules: [{ rule: "Apchi's verification user may query the system catalog", why: "Verification runs a real query after every Apply." }],
+  },
+  "GET /api/v1/resource-groups": GROUPS,
+  "GET /api/v1/resource-groups/selectors": { selectors: SELECTORS },
+  "GET /api/v1/resource-groups/settings": { cpu_quota_period: null },
+  "GET /api/v1/event-listeners": LISTENERS,
+  "GET /api/v1/event-listeners/*": (_route: Route, url: URL) => LISTENERS.find((l) => url.pathname.endsWith(`/${l.name}`)) ?? new Reply(404, { message: "no" }),
+  "GET /api/v1/certificate-mapping": new Reply(404, { code: "not_found", message: "No pattern.", request_id: "r" }),
+  "GET /api/v1/admin/certificate-mapping/preserved": { patterns: [] },
   "GET /api/v1/catalogs/*": (_route: Route, url: URL) =>
     CATALOGS.find((c) => url.pathname.endsWith(`/${c.name}`)) ?? new Reply(404, { code: "not_found", message: "No such catalog.", request_id: "r" }),
 };
-
-/** A response the handler wants sent as-is, with a status. */
-export class Reply {
-  constructor(
-    readonly status: number,
-    readonly body: unknown,
-  ) {}
-}
 
 export async function stubApi(page: Page, overrides: Stubs = {}) {
   const stubs: Stubs = { ...DEFAULTS, ...overrides };
