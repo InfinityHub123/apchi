@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { S, SectionName } from "../api/client";
 import { useResetResource, useSchemas } from "../api/queries";
-import { section } from "../sections";
+import { resourceLabel as labelOf, section } from "../sections";
 import { clock } from "../ui/format";
 import { ChangePill, CostPill } from "../ui/Pill";
 import { ErrorNote } from "../ui/States";
@@ -29,7 +29,7 @@ export function ChangeCard({
 }) {
   const meta = section(sectionName);
   const reset = useResetResource();
-  const resourceLabel = change.resource === "#selectors" ? "selectors" : change.resource;
+  const resourceLabel = labelOf(change.resource);
   const baseName = base == null ? "the empty configuration" : `Snapshot ${base}`;
 
   return (

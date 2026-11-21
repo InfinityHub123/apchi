@@ -5,7 +5,7 @@ import { authorLabel, key, useAuthorship } from "../review/authorship";
 import { candidateCounts } from "../review/counts";
 import { fieldChanges, secretTest } from "../review/diff";
 import { Value } from "../review/ChangeCard";
-import { sectionLabel } from "../sections";
+import { resourceLabel, sectionLabel } from "../sections";
 import type { S } from "../api/client";
 import { clock, date, dateTime, dayTime, plural } from "../ui/format";
 import { CostPill, Pill } from "../ui/Pill";
@@ -217,7 +217,7 @@ function StagedTable() {
                               {mark}
                             </span>{" "}
                             <span className="sr-only">{c.change} </span>
-                            {c.resource === "#selectors" ? "selectors" : c.resource}
+                            {resourceLabel(c.resource)}
                           </button>
                         </td>
                         <td className="muted" title={a?.kind === "unknown" ? "The audit trail does not attribute this change." : undefined}>

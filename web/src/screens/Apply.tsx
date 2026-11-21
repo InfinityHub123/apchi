@@ -8,7 +8,7 @@ import { useApplyStream } from "../applies/useApplyStream";
 import { useIdentity } from "../auth/useAuth";
 import { authorLabel, key, othersCount, useAuthorship } from "../review/authorship";
 import { candidateCounts } from "../review/counts";
-import { section } from "../sections";
+import { resourceLabel, section } from "../sections";
 import { clockSeconds, duration, plural } from "../ui/format";
 import { Icon } from "../ui/Icon";
 import { CostPill, Pill } from "../ui/Pill";
@@ -126,7 +126,7 @@ function Confirm() {
                   <tr key={key(s, c.resource)}>
                     <td>
                       <b style={{ fontWeight: 600 }}>{section(s).noun}</b> ·{" "}
-                      <span className="mono">{c.resource === "#selectors" ? "selectors" : c.resource}</span>{" "}
+                      <span className="mono">{resourceLabel(c.resource)}</span>{" "}
                       {c.change === "removed" && <Pill tone="r" xs>{s === "catalogs" ? "dropped" : "removed"}</Pill>}
                       {c.change === "added" && <Pill tone="b" xs>added</Pill>}
                     </td>

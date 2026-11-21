@@ -37,3 +37,10 @@ export function section(key: SectionName) {
 }
 
 export const sectionLabel = (key: SectionName) => BY_KEY.get(key)?.label ?? key;
+
+/**
+ * A resource's name as a person reads it. Resource Groups keeps its selector list and its
+ * settings as two resources whose keys start with `#` so they cannot collide with a group
+ * path; on screen they are just "selectors" and "settings".
+ */
+export const resourceLabel = (resource: string) => (resource.startsWith("#") ? resource.slice(1) : resource);
