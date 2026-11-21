@@ -71,7 +71,7 @@ test("adding an Iceberg catalog follows its branch: the catalog type decides wha
     },
     certificate: null,
   });
-  await expect(page.getByText("not on the cluster yet")).toBeVisible();
+  await expect(page.getByText("not on the cluster yet", { exact: true })).toBeVisible();
 });
 
 test("a refusal marks the property it names, in Apchi's words", async ({ page }) => {
