@@ -6,6 +6,7 @@ import { DriftScreen } from "./screens/Drift";
 import { ApplyScreen } from "./screens/Apply";
 import { AppliesScreen } from "./screens/Applies";
 import { ValidationsScreen } from "./screens/Validations";
+import { CatalogsScreen } from "./screens/Catalogs";
 
 /**
  * Every screen, by the path it lives at. One table, so a link anywhere in the console and
@@ -15,7 +16,9 @@ export const routes: RouteObject[] = [
   { index: true, element: <OverviewScreen /> },
   { path: "review", element: <ReviewScreen /> },
   { path: "apply", element: <ApplyScreen /> },
-  { path: "catalogs/*", element: <NotBuilt title="Catalogs" /> },
+  { path: "catalogs", element: <CatalogsScreen /> },
+  { path: "catalogs/:name", element: <CatalogsScreen /> },
+  { path: "catalogs/:name/:action", element: <CatalogsScreen /> },
   { path: "certificates", element: <NotBuilt title="Client certificates" /> },
   { path: "certificate-mapping", element: <NotBuilt title="Certificate mapping" /> },
   { path: "permissions", element: <NotBuilt title="Permissions" /> },
