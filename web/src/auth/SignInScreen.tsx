@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Logo } from "../ui/Icon";
 import { useLogin, useSignIn } from "./useAuth";
 
 /**
@@ -15,47 +16,61 @@ import { useLogin, useSignIn } from "./useAuth";
  */
 export function SignInScreen() {
   const signIn = useSignIn(true);
+  const mode = signIn.data?.mode;
 
   return (
     <div className="signin">
-      <div className="signin__card">
-        <div className="signin__head">
-          <span className="topbar__mark" aria-hidden="true">
-            A
+      <section className="card signin__card">
+        <div className="signin__body">
+          <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <Logo size={20} />
+            <span style={{ fontSize: 18, fontWeight: 600 }}>apchi</span>
           </span>
-          <span className="topbar__name">Apchi</span>
-        </div>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>Sign in</div>
 
-        {signIn.isPending && <p className="note">Asking Apchi how to sign in…</p>}
+          {signIn.isPending && <p className="note note--flush">Asking Apchi how to sign in…</p>}
 
-        {signIn.isError && (
-          <p className="note note--red" role="alert">
-            Apchi could not be reached. {(signIn.error as Error).message}
-          </p>
-        )}
-
-        {signIn.data?.mode === "password" && <PasswordForm />}
-
-        {signIn.data?.mode === "sso" && (
-          <>
-            <p className="signin__lede">
-              Apchi signs in through your organisation's identity provider.
+          {signIn.isError && (
+            <p className="note note--flush note--red" role="alert">
+              Apchi could not be reached. {(signIn.error as Error).message}
             </p>
-            {/* A real link, not a fetch: the provider answers with a redirect and a
-                cross-origin redirect is the browser's job, not the client's. */}
-            <a className="btn btn--primary btn--block" href="/api/v1/auth/sso/login">
-              Continue with single sign-on
-            </a>
-          </>
-        )}
+          )}
 
-        {signIn.data?.mode === "none" && (
-          <p className="note">
-            Apchi is running without authentication, so there is nothing to sign in to. Every
-            caller is treated as an Admin.
-          </p>
+          {mode === "password" && <PasswordForm />}
+
+          {mode === "sso" && (
+            <>
+              {/* A real link, not a fetch: the provider answers with a redirect, and a
+                  cross-origin redirect is the browser's job, not the client's. */}
+              <a className="btn pri" style={{ justifyContent: "center", height: 34 }} href="/api/v1/auth/sso/login">
+                Continue with your organisation's sign-in
+              </a>
+              <span className="sm muted">
+                You will come back here once your identity provider has confirmed who you are.
+                Your role comes from it, not from Apchi.
+              </span>
+            </>
+          )}
+
+          {mode === "none" && (
+            <p className="note note--flush">
+              Apchi is running without authentication, so there is nothing to sign in to.
+              Every caller is treated as an Admin.
+            </p>
+          )}
+        </div>
+        {mode !== undefined && (
+          <div className="cft">
+            <span className="sm muted">
+              {mode === "password"
+                ? "Password mode · the session is a cookie this page cannot read"
+                : mode === "sso"
+                  ? "SSO mode"
+                  : "No sign-in"}
+            </span>
+          </div>
         )}
-      </div>
+      </section>
     </div>
   );
 }
@@ -67,16 +82,16 @@ function PasswordForm() {
 
   return (
     <form
-      className="signin__form"
+      style={{ display: "flex", flexDirection: "column", gap: 16 }}
       onSubmit={(e) => {
         e.preventDefault();
         login.mutate({ username, password });
       }}
     >
-      <label className="field">
-        <span className="field__label">Username</span>
+      <label className="fl">
+        Username
         <input
-          className="field__input"
+          className="inp"
           name="username"
           autoComplete="username"
           required
@@ -84,11 +99,10 @@ function PasswordForm() {
           onChange={(e) => setUsername(e.target.value)}
         />
       </label>
-
-      <label className="field">
-        <span className="field__label">Password</span>
+      <label className="fl">
+        Password
         <input
-          className="field__input"
+          className="inp"
           name="password"
           type="password"
           autoComplete="current-password"
@@ -97,16 +111,19 @@ function PasswordForm() {
           onChange={(e) => setPassword(e.target.value)}
         />
       </label>
-
-      {login.isError && (
-        <p className="note note--red" role="alert">
-          {(login.error as Error).message}
-        </p>
-      )}
-
-      <button type="submit" className="btn btn--primary btn--block" disabled={login.isPending}>
+      <button
+        type="submit"
+        className="btn pri"
+        style={{ justifyContent: "center", height: 34 }}
+        disabled={login.isPending}
+      >
         {login.isPending ? "Signing in…" : "Sign in"}
       </button>
+      {login.isError && (
+        <div className="note note--flush note--red" role="alert">
+          {(login.error as Error).message}
+        </div>
+      )}
     </form>
   );
 }
