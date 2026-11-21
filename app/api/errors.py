@@ -250,6 +250,7 @@ async def _record_refusal(request: Request, reason: str) -> None:
             outcome="refused",
             detail=reason,
             token_id=who.token_id,
+            token_name=who.token_name,
         )
     except PyMongoError:
         logger.exception("could not record a refused mutation in the audit history")

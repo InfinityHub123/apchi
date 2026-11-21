@@ -172,6 +172,7 @@ async def export(audit: AuditStoreDep, who: CallerDep, filters: FiltersDep) -> S
         "exported",
         detail=filters.described(),
         token_id=who.token_id,
+        token_name=who.token_name,
     )
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return StreamingResponse(

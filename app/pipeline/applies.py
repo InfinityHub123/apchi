@@ -452,6 +452,7 @@ class ApplyRunner:
                 outcome=outcome,
                 detail=detail,
                 token_id=who.token_id,
+                token_name=who.token_name,
                 apply_id=apply_id,
             )
         except PyMongoError:

@@ -197,6 +197,7 @@ class CandidateStore:
                 resource=resource,
                 detail=detail,
                 token_id=who.token_id,
+                token_name=who.token_name,
             )
             return
         # One write for however many resources moved. A request that edited five of them is
@@ -210,6 +211,7 @@ class CandidateStore:
                 for change in changes_between(before, after)
             ],
             token_id=who.token_id,
+            token_name=who.token_name,
         )
 
     async def replace(self, sections: dict[SectionName, dict[str, Any]]) -> Candidate:

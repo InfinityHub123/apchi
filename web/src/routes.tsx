@@ -12,6 +12,10 @@ import { CertMappingScreen } from "./screens/CertMapping";
 import { PermissionsScreen } from "./screens/Permissions";
 import { ResourceGroupsScreen } from "./screens/ResourceGroups";
 import { EventListenersScreen } from "./screens/EventListeners";
+import { SnapshotsScreen } from "./screens/Snapshots";
+import { AuditScreen } from "./screens/Audit";
+import { TokensScreen } from "./screens/Tokens";
+import { ImportExportScreen } from "./screens/ImportExport";
 
 /**
  * Every screen, by the path it lives at. One table, so a link anywhere in the console and
@@ -30,18 +34,18 @@ export const routes: RouteObject[] = [
   { path: "resource-groups", element: <ResourceGroupsScreen /> },
   { path: "event-listeners", element: <EventListenersScreen /> },
   { path: "event-listeners/:name", element: <EventListenersScreen /> },
-  { path: "snapshots", element: <NotBuilt title="Snapshots" /> },
+  { path: "snapshots", element: <SnapshotsScreen /> },
   { path: "drift", element: <DriftScreen /> },
   { path: "applies", element: <AppliesScreen /> },
   { path: "applies/:id", element: <AppliesScreen /> },
   { path: "validations", element: <ValidationsScreen /> },
-  { path: "audit", element: <NotBuilt title="Audit" /> },
-  { path: "import-export", element: <NotBuilt title="Import / export" /> },
+  { path: "audit", element: <AuditScreen /> },
+  { path: "import-export", element: <ImportExportScreen /> },
   { path: "admin", element: <NotBuilt title="Admin values" /> },
   { path: "admin/enforcement", element: <NotBuilt title="Permission enforcement" /> },
   { path: "admin/raw-files", element: <NotBuilt title="Raw files" /> },
   { path: "admin/adoption", element: <NotBuilt title="Adoption" /> },
   { path: "maintenance", element: <NotBuilt title="Maintenance Mode" /> },
-  { path: "tokens", element: <NotBuilt title="API tokens" /> },
+  { path: "tokens", element: <TokensScreen /> },
   { path: "*", element: <NotBuilt title="Not found" /> },
 ];

@@ -79,6 +79,7 @@ async def test_a_correct_password_signs_in_and_says_who_you_are(
         "role": "operator",
         "via": "password",
         "token_id": None,
+        "token_name": None,
     }
 
 

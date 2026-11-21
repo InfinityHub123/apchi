@@ -87,7 +87,34 @@ async def test_a_minted_token_authenticates_as_its_owner(password_mode: AsyncCli
         "role": "operator",
         "via": "token",
         "token_id": minted["token"]["id"],
+        "token_name": "nightly",
     }
+
+
+async def test_what_a_token_does_is_audited_under_its_name(password_mode: AsyncClient) -> None:
+    """`GET /tokens` lists only the caller's own, so an Admin reading somebody else's
+    automation in the trail has only what the event itself says."""
+    await _signed_in(password_mode, "jo", "operator")
+    minted = await _minted(password_mode, name="ci-pipeline")
+
+    staged = await password_mode.post(
+        "/api/v1/catalogs",
+        json={"name": "scratch", "connector": "memory", "properties": {}},
+        headers=_bearing(password_mode, minted["secret"]),
+    )
+    assert staged.status_code == 201, staged.text
+
+    trail = await password_mode.get(
+        "/api/v1/audit",
+        params={"resource": "scratch"},
+        headers=_bearing(password_mode, minted["secret"]),
+    )
+    [event] = trail.json()["items"]
+    assert (event["via"], event["token_id"], event["token_name"]) == (
+        "token",
+        minted["token"]["id"],
+        "ci-pipeline",
+    )
 
 
 async def test_the_secret_looks_like_a_secret(password_mode: AsyncClient) -> None:

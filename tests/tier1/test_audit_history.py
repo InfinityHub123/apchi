@@ -377,6 +377,8 @@ async def test_the_event_has_no_field_a_value_could_live_in(client: AsyncClient)
         "actor",
         "via",
         "token_id",
+        # An identity: the name its owner gave the token, never what it was used to send.
+        "token_name",
         "category",
         "resource",
         "action",

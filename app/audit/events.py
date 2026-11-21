@@ -113,6 +113,15 @@ class AuditEvent(BaseModel):
             "trail still has to resolve -- revocation is exactly when somebody reads this."
         ),
     )
+    token_name: str | None = Field(
+        default=None,
+        description=(
+            "That token's name, as it was when the event was written. Here rather than "
+            "looked up from `token_id`, because `GET /tokens` lists only the caller's own: "
+            "an Admin reading the trail could otherwise not say which automation of "
+            "somebody else's acted. Null on events written before Apchi kept it."
+        ),
+    )
     category: Category
     resource: str | None = Field(
         default=None, description="What changed. Null for an act on a whole Section or Cluster."
@@ -262,6 +271,7 @@ class AuditStore:
         outcome: Outcome = "succeeded",
         detail: str | None = None,
         token_id: str | None = None,
+        token_name: str | None = None,
         apply_id: str | None = None,
     ) -> AuditEvent:
         """Append one event. Keyword-only past the first four, because an event with its
@@ -273,6 +283,7 @@ class AuditStore:
             "actor": actor,
             "via": via,
             "token_id": token_id,
+            "token_name": token_name,
             "category": category,
             "resource": resource,
             "action": action,
@@ -294,6 +305,7 @@ class AuditStore:
         entries: list[Entry],
         *,
         token_id: str | None = None,
+        token_name: str | None = None,
         apply_id: str | None = None,
     ) -> list[AuditEvent]:
         """Several events by one actor, in one write.
@@ -312,6 +324,7 @@ class AuditStore:
                 "actor": actor,
                 "via": via,
                 "token_id": token_id,
+                "token_name": token_name,
                 "category": entry.category,
                 "resource": entry.resource,
                 "action": entry.action,
@@ -334,6 +347,7 @@ class AuditStore:
                 actor=actor,
                 via=via,
                 token_id=token_id,
+                token_name=token_name,
                 category=entry.category,
                 resource=entry.resource,
                 action=entry.action,

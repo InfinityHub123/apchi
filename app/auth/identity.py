@@ -38,6 +38,8 @@ class Identity(BaseModel):
     #: Set when `via` is "token": which token, so a revocation has something to name and an
     #: audit trail distinguishes an automation from the person who minted it.
     token_id: str | None = None
+    #: The token's name, carried beside its id so the audit can record it as it was.
+    token_name: str | None = None
 
     @property
     def is_admin(self) -> bool:
