@@ -1,5 +1,5 @@
 import createClient from "openapi-fetch";
-import type { paths } from "./schema";
+import type { components, paths } from "./schema";
 
 /**
  * The one way this app reaches Apchi.
@@ -16,15 +16,49 @@ export const api = createClient<paths>({
   credentials: "same-origin",
 });
 
-export type Schemas = NonNullable<
-  paths["/api/v1/review"]["get"]["responses"][200]["content"]["application/json"]
->;
+export type S = components["schemas"];
+export type Review = S["Review"];
+export type ApplyCost = S["ApplyCost"];
+export type SectionName = S["SectionDiff"]["section"];
 
-/** What `GET /api/v1/review` answers: the whole Candidate, every Section, and its cost. */
-export type Review = Schemas;
+/**
+ * A refusal, carrying what Apchi said.
+ *
+ * `details` is kept because the API names every problem rather than the first -- an invalid
+ * catalog answers one entry per property -- and a form that showed only `message` would make
+ * somebody fix them one round trip at a time.
+ */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string | null,
+    readonly details: Array<Record<string, unknown>>,
+  ) {
+    super(message);
+  }
+}
 
-/** The cost of applying the Candidate as it stands. */
-export type ApplyCost = Review["cost"];
+function asApiError(error: unknown, response: Response): ApiError {
+  const body = (typeof error === "object" && error !== null ? error : {}) as Record<
+    string,
+    unknown
+  >;
+  // `message` is Apchi's own envelope; `detail` is what FastAPI answers for the few refusals
+  // that never reach Apchi's handlers. Both are prose meant for a person.
+  const message =
+    typeof body.message === "string"
+      ? body.message
+      : typeof body.detail === "string"
+        ? body.detail
+        : `${response.status} ${response.statusText}`.trim();
+  return new ApiError(
+    message,
+    response.status,
+    typeof body.code === "string" ? body.code : null,
+    Array.isArray(body.details) ? (body.details as Array<Record<string, unknown>>) : [],
+  );
+}
 
 /**
  * Unwraps an openapi-fetch result, raising the API's own message.
@@ -37,12 +71,15 @@ export async function unwrap<T>(result: {
   error?: unknown;
   response: Response;
 }): Promise<T> {
-  if (result.error !== undefined || result.data === undefined) {
-    const detail =
-      typeof result.error === "object" && result.error !== null && "detail" in result.error
-        ? String((result.error as { detail: unknown }).detail)
-        : `${result.response.status} ${result.response.statusText}`;
-    throw new Error(detail);
+  if (result.error !== undefined || !result.response.ok) {
+    throw asApiError(result.error, result.response);
   }
-  return result.data;
+  return result.data as T;
+}
+
+/** For the 204s: the request succeeded or it raised. */
+export async function done(result: { error?: unknown; response: Response }): Promise<void> {
+  if (result.error !== undefined || !result.response.ok) {
+    throw asApiError(result.error, result.response);
+  }
 }

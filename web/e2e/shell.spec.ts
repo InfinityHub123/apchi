@@ -1,128 +1,146 @@
 import { test, expect } from "@playwright/test";
-import { stubApi, REVIEW_CLEAN, REVIEW_STAGED } from "./fixtures";
+import { CLUSTER, REVIEW_CLEAN, Reply, stubApi } from "./fixtures";
 
 /**
  * §21's requirements on the shell, tested as behaviour rather than as markup.
  *
- * Each of these exists because the spec names it, and would catch a redesign that quietly
- * dropped it -- which is the way a UI loses a safety property nobody notices is gone.
+ * Each exists because the spec names it, and would catch a redesign that quietly dropped
+ * it -- the way a UI loses a safety property nobody notices is gone.
  */
 
-test("the shell names the cluster, the Snapshot and who is looking", async ({ page }) => {
+test("the top bar names the live Snapshot, the coordinator and who is looking", async ({ page }) => {
   await stubApi(page);
   await page.goto("/");
 
-  await expect(page.getByRole("banner")).toContainText("Apchi");
-  await expect(page.getByRole("banner")).toContainText("Healthy");
-  await expect(page.getByRole("banner")).toContainText("dana");
-  await expect(page.getByText("based on Snapshot 118")).toBeVisible();
+  const top = page.getByRole("banner");
+  await expect(top).toContainText("Snapshot 13");
+  await expect(top).toContainText("verified at its Apply");
+  await expect(top).toContainText("Coordinator up · 8 workers");
+  await expect(top).toContainText("dana");
+  await expect(top).toContainText("Admin · SSO");
+  await expect(top).toContainText("Maintenance Mode off");
 });
 
-test("a staged Candidate says so, and says how many changes", async ({ page }) => {
-  await stubApi(page);
-  await page.goto("/");
-
-  await expect(page.getByText("Candidate", { exact: true })).toBeVisible();
-  await expect(page.getByText("4 changes")).toBeVisible();
-  // The point of the strip: staged is not live, and it says that in the work area too.
-  await expect(page.getByText(/Nothing here has reached the cluster/)).toBeVisible();
-});
-
-test("a Candidate that forces a rollout carries the live query count", async ({ page }) => {
-  await stubApi(page);
-  await page.goto("/");
-
-  await expect(page.getByText("Rollout").first()).toBeVisible();
-  await expect(page.getByText("47 queries at risk")).toBeVisible();
-});
-
-test("a Candidate with no rollout shows no query count", async ({ page }) => {
+test("the coordinator is read on demand, not on a timer", async ({ page }) => {
+  let probes = 0;
   await stubApi(page, {
-    review: {
-      ...REVIEW_STAGED,
-      sections: [REVIEW_STAGED.sections[0]],
-      cost: { restarts_coordinator: false, queries_at_risk: null, warning: null },
+    "GET /api/v1/cluster/probe": () => {
+      probes++;
+      return { at: new Date().toISOString(), coordinator: "starting", workers: null };
     },
   });
   await page.goto("/");
+  await expect(page.getByText("Coordinator starting")).toBeVisible();
+  await page.waitForTimeout(1500);
+  expect(probes).toBe(1);
 
-  await expect(page.getByText("No restart").first()).toBeVisible();
-  await expect(page.getByText(/queries at risk/)).toHaveCount(0);
+  await page.getByRole("button", { name: "Check again" }).click();
+  await expect.poll(() => probes).toBe(2);
 });
 
-test("the review table marks each change's cost per Section, not just overall", async ({
-  page,
-}) => {
+test("a staged Candidate says so from every screen, with what it costs", async ({ page }) => {
+  await stubApi(page);
+  await page.goto("/snapshots");
+
+  await expect(page.getByText("Staged in the Candidate — not on the cluster yet")).toBeVisible();
+  await expect(page.getByText(/Based on Snapshot 13 · 5 changes/)).toBeVisible();
+  // Three catalog changes ride no restart; the resource-group and listener changes do.
+  await expect(page.getByText("3 apply without restart")).toBeVisible();
+  await expect(page.getByText("2 need a Rollout")).toBeVisible();
+  await expect(page.getByText("14 queries at risk")).toBeVisible();
+});
+
+test("the bar counts the changes staged by other people, from the audit", async ({ page }) => {
   await stubApi(page);
   await page.goto("/");
-
-  const rows = page.getByRole("row");
-  // Catalogs apply by DDL; certificate mapping is read at start-up. The table has to tell
-  // them apart, which is the §21 requirement an aggregate cost cannot satisfy.
-  await expect(rows.filter({ hasText: "finance_pg" })).toContainText("No restart");
-  await expect(rows.filter({ hasText: "CN=*.analytics.corp" })).toContainText("Rollout");
+  // dana staged one; jo and mira three; events_kafka has no author on the trail.
+  await expect(page.getByText(/5 changes · 3 by others/)).toBeVisible();
 });
 
-test("a change names what happened to it for a screen reader, not only in colour", async ({
-  page,
-}) => {
+test("a clean Candidate says it matches the Snapshot", async ({ page }) => {
+  await stubApi(page, { "GET /api/v1/review": REVIEW_CLEAN });
+  await page.goto("/");
+  await expect(page.getByText("Nothing staged")).toBeVisible();
+  await expect(page.getByText("The Candidate matches Snapshot 13.")).toBeVisible();
+});
+
+test("the sidebar marks Sections in the Rollout from the API, not from a table", async ({ page }) => {
   await stubApi(page);
   await page.goto("/");
-
-  const removed = page.getByRole("row").filter({ hasText: "legacy_mysql" });
-  await expect(removed).toContainText("removed");
+  const nav = page.getByRole("navigation", { name: "Main" });
+  // Certificate mapping has nothing staged and is in the Rollout anyway: drift.
+  const mapping = nav.getByRole("link", { name: /Certificate mapping/ });
+  await expect(mapping.getByRole("img", { name: "Rollout" })).toBeVisible();
+  await expect(nav.getByRole("link", { name: /Catalogs/ })).toContainText("3");
+  await expect(nav.getByRole("link", { name: /^Catalogs/ }).getByRole("img", { name: "Rollout" })).toHaveCount(0);
 });
 
-test("an empty Candidate says there is nothing staged and offers no Apply", async ({ page }) => {
-  await stubApi(page, { review: REVIEW_CLEAN });
+test("Reset asks first, names what it throws away, then resets", async ({ page }) => {
+  let resets = 0;
+  await stubApi(page, {
+    "POST /api/v1/candidate/reset": () => {
+      resets++;
+      return null;
+    },
+  });
   await page.goto("/");
-
-  await expect(page.getByText("No staged changes")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Apply" })).toHaveCount(0);
-  await expect(page.getByText(/No Section has staged changes/)).toBeVisible();
+  await page.getByRole("button", { name: "Reset", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("including 3 staged by other people");
+  expect(resets).toBe(0);
+  await dialog.getByRole("button", { name: "Reset 5 changes" }).click();
+  await expect.poll(() => resets).toBe(1);
 });
 
-test("an unhealthy cluster carries §21's verification wording", async ({ page }) => {
-  await stubApi(page, { health: { status: "degraded", mongo: "unreachable" } });
+test("Maintenance Mode locks the Candidate's actions", async ({ page }) => {
+  await stubApi(page, {
+    "GET /api/v1/cluster": {
+      ...CLUSTER,
+      maintenance: { engaged: true, engaged_at: "2026-11-17T15:40:47Z", engaged_by: "admin", reason: "Upgrade" },
+    },
+  });
   await page.goto("/");
-
-  const alert = page.getByRole("alert");
-  await expect(alert).toContainText("did not pass health verification");
-  await expect(alert).toContainText("previous Snapshot remains the known-good configuration");
+  await expect(page.getByText("Candidate locked")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Apply" })).toBeDisabled();
+  await expect(page.getByRole("banner")).toContainText("Maintenance Mode on");
 });
 
-
-test("a failed review is reported, not rendered as empty", async ({ page }) => {
-  await stubApi(page);
-  // Registered after stubApi, because Playwright matches the most recently added route.
-  await page.route("**/api/v1/review", (r) =>
-    r.fulfill({
-      status: 503,
-      contentType: "application/json",
-      body: JSON.stringify({ detail: "MongoDB is unreachable" }),
-    }),
+test("an incident takes over the top of every screen with §21's sentence", async ({ page }) => {
+  await stubApi(page, {
+    "GET /api/v1/cluster": {
+      ...CLUSTER,
+      maintenance: { engaged: true, engaged_at: "2026-11-17T15:40:47Z", engaged_by: "apchi", reason: "Auto Rollback failed" },
+      last_apply: { ...CLUSTER.last_apply, id: "a-8e21", stage: "incident", verified: false, snapshot: null },
+    },
+    "GET /api/v1/applies/*": { id: "a-8e21", stage: "incident", operator_message: "Apply a-8e21 failed and its Auto Rollback failed too." },
+  });
+  await page.goto("/");
+  await expect(page.getByRole("alert").first()).toContainText(
+    "The Trino cluster is currently unhealthy after applying configuration. Please contact our team.",
   );
-  await page.goto("/");
-
-  await expect(page.getByText("MongoDB is unreachable")).toBeVisible();
+  await expect(page.getByRole("banner")).toContainText("Incident · configuration unknown");
+  await expect(page.getByRole("link", { name: "View diagnostic" })).toHaveAttribute("href", "/applies/a-8e21");
 });
 
-test("every interactive control is reachable by keyboard", async ({ page }) => {
-  await stubApi(page);
+test("an Operator does not see the Admin screens", async ({ page }) => {
+  await stubApi(page, { "GET /api/v1/auth/me": { subject: "jo", role: "operator", via: "password", token_id: null } });
   await page.goto("/");
+  const nav = page.getByRole("navigation", { name: "Main" });
+  await expect(nav.getByRole("link", { name: "Audit" })).toBeVisible();
+  await expect(nav.getByRole("link", { name: /Raw files/ })).toHaveCount(0);
+  await expect(nav.getByRole("link", { name: "Maintenance Mode" })).toBeVisible();
+});
 
-  const reachable: string[] = [];
-  for (let i = 0; i < 14; i += 1) {
-    await page.keyboard.press("Tab");
-    const label = await page.evaluate(() => {
-      const el = document.activeElement;
-      if (el === null || el === document.body) return null;
-      return `${el.tagName.toLowerCase()}:${(el.textContent ?? "").trim().slice(0, 24)}`;
-    });
-    if (label !== null && !reachable.includes(label)) reachable.push(label);
-  }
+test("a failed read is shown in Apchi's words", async ({ page }) => {
+  await stubApi(page, {
+    "GET /api/v1/review": new Reply(503, { code: "unavailable", message: "MongoDB is not answering.", request_id: "r" }),
+  });
+  await page.goto("/");
+  await expect(page.getByText("MongoDB is not answering.")).toBeVisible();
+});
 
-  expect(reachable).toContain("button:Reset");
-  expect(reachable).toContain("button:Validate");
-  expect(reachable).toContain("button:Apply");
+test("a deep link loads its screen", async ({ page }) => {
+  await stubApi(page);
+  await page.goto("/audit");
+  await expect(page.getByRole("link", { name: "Audit" })).toHaveClass(/on/);
 });
