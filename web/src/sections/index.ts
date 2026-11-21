@@ -1,5 +1,5 @@
-import type { SectionName } from "./api/client";
-import type { IconName } from "./ui/Icon";
+import type { SectionName } from "../api/client";
+import type { IconName } from "../ui/Icon";
 
 /**
  * The six Sections as the console names and routes them.

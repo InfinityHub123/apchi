@@ -160,6 +160,30 @@ const rules = (name: string, over: Record<string, unknown> = {}) => ({
 
 export const CONNECTORS = [
   rules("postgresql", { required: ["connection-url"], optional: ["connection-user", "connection-password"], secrets: ["connection-password"] }),
+  rules("iceberg", {
+    optional: ["iceberg.file-format"],
+    branches: [
+      {
+        selector: "iceberg.catalog.type",
+        default: "hive_metastore",
+        allowed: ["hive_metastore", "rest", "glue"],
+        values: { hive_metastore: ["hive.metastore.uri"], rest: ["iceberg.rest-catalog.uri"], glue: [] },
+      },
+    ],
+    prefixes: ["fs."],
+  }),
+];
+
+export const CATALOGS = [
+  {
+    name: "finance_pg",
+    connector: "postgresql",
+    supported: true,
+    certificate: "finance_pg_tls",
+    properties: { "connection-url": "jdbc:postgresql://pg-fin-02:5432/finance", "connection-password": "hunter2" },
+  },
+  { name: "marketing_mysql", connector: "mysql", supported: false, certificate: null, properties: {} },
+  { name: "lake_iceberg", connector: "iceberg", supported: true, certificate: null, properties: { "iceberg.catalog.type": "rest", "iceberg.rest-catalog.uri": "https://rest" } },
 ];
 export const LISTENER_TYPES = [rules("kafka", { secrets: [] })];
 
@@ -208,6 +232,9 @@ export const DEFAULTS: Stubs = {
   "GET /api/v1/catalogs/connectors": CONNECTORS,
   "GET /api/v1/event-listeners/types": LISTENER_TYPES,
   "GET /api/v1/cluster/drift": DRIFT,
+  "GET /api/v1/catalogs": CATALOGS,
+  "GET /api/v1/catalogs/*": (_route: Route, url: URL) =>
+    CATALOGS.find((c) => url.pathname.endsWith(`/${c.name}`)) ?? new Reply(404, { code: "not_found", message: "No such catalog.", request_id: "r" }),
 };
 
 /** A response the handler wants sent as-is, with a status. */
