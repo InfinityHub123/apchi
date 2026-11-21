@@ -12,7 +12,7 @@ const screens = (process.env.SHOT_PATHS ?? "/").split(",");
 
 for (const path of screens) {
   test(`shot ${path}`, async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 1040 });
+    await page.setViewportSize({ width: Number(process.env.SHOT_W ?? 1440), height: 1040 });
     await stubApi(page);
     await page.goto(path);
     await page.waitForTimeout(600);

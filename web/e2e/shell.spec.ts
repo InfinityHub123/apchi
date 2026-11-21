@@ -144,3 +144,15 @@ test("a deep link loads its screen", async ({ page }) => {
   await page.goto("/audit");
   await expect(page.getByRole("link", { name: "Audit" })).toHaveClass(/on/);
 });
+
+test("on a phone the navigation folds behind Menu and closes once a screen is chosen", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await stubApi(page);
+  await page.goto("/");
+  const nav = page.getByRole("navigation", { name: "Main" });
+  await expect(nav).toBeHidden();
+  await page.getByRole("button", { name: "Menu" }).click();
+  await nav.getByRole("link", { name: "Audit" }).click();
+  await expect(page).toHaveURL(/\/audit$/);
+  await expect(nav).toBeHidden();
+});
