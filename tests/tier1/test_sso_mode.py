@@ -111,7 +111,13 @@ async def test_a_login_signs_in_and_says_who_you_are(
     response = await sso.get(CALLBACK, params={"code": code, "state": state})
 
     assert response.status_code == 200, response.text
-    assert response.json() == {"subject": "jo", "role": "operator", "via": "sso", "token_id": None}
+    assert response.json() == {
+        "subject": "jo",
+        "role": "operator",
+        "via": "sso",
+        "token_id": None,
+        "token_name": None,
+    }
 
 
 async def test_the_session_carries_the_identity_afterwards(
