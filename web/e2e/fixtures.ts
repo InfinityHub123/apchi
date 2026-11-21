@@ -242,6 +242,8 @@ export async function stubApi(page: Page, overrides: Stubs = {}) {
     }
     const stub = stubs[match];
     let body = typeof stub === "function" ? await (stub as Handler)(route, url) : stub;
+    // A handler that answered the route itself (a stream, say) returns nothing.
+    if (body === undefined) return;
     let status = 200;
     if (body instanceof Reply) {
       status = body.status;

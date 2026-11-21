@@ -14,7 +14,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field, computed_field
 from pymongo.asynchronous.database import AsyncDatabase
@@ -31,9 +31,10 @@ from app.api.pages import (
 )
 from app.audit.actor import SYSTEM_ACTOR, actor
 from app.audit.events import Action, AuditStore, Category, Outcome
-from app.auth.identity import Identity
+from app.auth.identity import Identity, Via
 from app.logging import apply_id_var
 from app.pipeline.auto_rollback import INCIDENT_MESSAGE
+from app.pipeline.validation import ValidationFailed
 from app.pipeline.verification import CheckResult
 from app.sections.base import ValidationFailure
 
@@ -98,8 +99,36 @@ class StageEvent(BaseModel):
     detail: str | None = None
 
 
+#: An Operator's Apply promotes the Candidate and commits a Snapshot; an Admin Apply
+#: delivers today's Admin values over the latest Snapshot and commits none (§14).
+ApplyKind = Literal["apply", "admin_apply"]
+
+
 class ApplyRecord(BaseModel):
     id: str
+    kind: ApplyKind = Field(
+        default="apply",
+        description=(
+            "Which of the two pipelines ran. Both walk the same stages, so without this an "
+            "Admin Apply reads as an Operator's Apply that never committed a Snapshot -- the "
+            "same record a failure leaves. Applies recorded before this field existed read "
+            "as `apply`."
+        ),
+    )
+    started_by: str | None = Field(
+        default=None,
+        description=(
+            "The subject of whoever started it. Null only on Applies recorded before Apchi "
+            "kept this; the audit's `attempted` event for the same `apply_id` says it too."
+        ),
+    )
+    started_via: Via | None = Field(
+        default=None,
+        description=(
+            "How they authenticated, because an Apply a pipeline started with a token and "
+            "one a person clicked are different answers to *who did this*."
+        ),
+    )
     stage: Stage
     history: list[StageEvent] = Field(default_factory=list)
     failure_reason: str | None = None
@@ -129,6 +158,15 @@ class ApplyRecord(BaseModel):
             "them next to the Apply that carried them, rather than having to run a separate "
             "Validation to find out. A Catalog the probe could not connect to is the one "
             "case today (§6)."
+        ),
+    )
+    failures: list[ValidationFailure] = Field(
+        default_factory=list,
+        description=(
+            "Every reason Validation refused this Apply, when that is how it failed -- the "
+            "same list a Validation's own record carries. `failure_reason` holds them too, "
+            "joined into one sentence; this is what says which Section and resource each "
+            "belongs to. Empty for any other outcome."
         ),
     )
     verification: list[CheckResult] = Field(
@@ -179,10 +217,16 @@ class ApplyStore:
         document.pop("_id", None)
         return ApplyRecord.model_validate(document)
 
-    async def create(self, base_snapshot: int | None) -> ApplyRecord:
+    async def create(self, base_snapshot: int | None, kind: ApplyKind = "apply") -> ApplyRecord:
         now = datetime.now(UTC)
+        # Read on the request that asked for the Apply, where the caller is known -- the
+        # same reason `ApplyRunner.start` reads it there rather than inside its task.
+        who = actor()
         record = ApplyRecord(
             id=f"apl_{uuid.uuid4().hex[:16]}",
+            kind=kind,
+            started_by=who.subject,
+            started_via=who.via,
             stage=Stage.VALIDATING,
             history=[StageEvent(stage=Stage.VALIDATING, at=now)],
             base_snapshot=base_snapshot,
@@ -247,6 +291,12 @@ class ApplyStore:
         await self._collection.update_one(
             {"_id": apply_id},
             {"$set": {"warnings": [warning.model_dump(mode="json") for warning in warnings]}},
+        )
+
+    async def record_failures(self, apply_id: str, failures: Sequence[ValidationFailure]) -> None:
+        await self._collection.update_one(
+            {"_id": apply_id},
+            {"$set": {"failures": [failure.model_dump(mode="json") for failure in failures]}},
         )
 
     async def record_verification(self, apply_id: str, checks: Sequence[CheckResult]) -> None:
@@ -455,6 +505,8 @@ class ApplyRunner:
             # reason to be here, and which check failed is what the record has to carry once
             # Auto Rollback has moved the Cluster on.
             await self._store.record_verification(apply_id, engine.verification())
+            if isinstance(exc, ValidationFailed):
+                await self._store.record_failures(apply_id, exc.failures)
             reason = f"{type(exc).__name__}: {exc}"
             # The stage is the detail worth keeping. §10 sends a partially applied Apply to an
             # incident state rather than improvising compensating statements, and a human

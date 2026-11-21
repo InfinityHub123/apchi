@@ -282,3 +282,15 @@ async def _mounts(fake: FakeKubernetes, state: object) -> list[object]:
         for mount in container.volume_mounts
         if mount.name == state.settings.raw_files_volume_name  # type: ignore[attr-defined]
     ]
+
+
+async def test_an_admin_apply_says_it_is_one(as_admin: AsyncClient) -> None:
+    """Both pipelines walk the same stages and an Admin Apply commits no Snapshot, so without
+    `kind` it is indistinguishable from an Operator's Apply that failed to commit."""
+    started = await as_admin.post(ADMIN_APPLIES)
+    assert started.status_code == 202, started.text
+
+    record = (await as_admin.get(f"/api/v1/applies/{started.json()['id']}")).json()
+    assert record["kind"] == "admin_apply"
+    assert record["started_by"] == "root"
+    assert record["started_via"] == "password"

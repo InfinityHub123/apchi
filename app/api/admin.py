@@ -64,9 +64,12 @@ async def set_maintenance_mode(
     state: MaintenanceState, maintenance: MaintenanceStoreDep
 ) -> MaintenanceState:
     """Releasing is how an incident is closed: an Admin has looked at the Cluster and
-    is satisfied it is in a state Operators can safely edit again."""
+    is satisfied it is in a state Operators can safely edit again.
+
+    A `reason` sent with a release is kept in the audit trail as the event's detail -- the
+    state itself is cleared, so that is the only place it survives."""
     if not state.engaged:
-        return await maintenance.release()
+        return await maintenance.release(state.reason)
     return await maintenance.engage(state.reason or DEFAULT_REASON, EngagedBy.ADMIN)
 
 
@@ -200,7 +203,9 @@ async def start_admin_apply(request: Request, applies: ApplyStoreDep) -> ApplyRe
             f"Apply {running.id} is already in flight. The Candidate is frozen until it finishes."
         )
     latest = await request.app.state.snapshot_store.latest()
-    record = await applies.create(base_snapshot=None if latest is None else latest.number)
+    record = await applies.create(
+        base_snapshot=None if latest is None else latest.number, kind="admin_apply"
+    )
     runner: ApplyRunner = request.app.state.admin_apply_runner
     runner.start(record)
     logger.info("admin apply started", extra={"apply": record.id})

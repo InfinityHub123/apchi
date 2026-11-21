@@ -374,7 +374,9 @@ validating → applying → rolling_out → verifying → committing → succeed
 
 The interface needs to show the current stage, the history of stages, and the final outcome.
 Progress is available as a live stream as well as by polling, and the record is durable — so a
-person who closes the tab and comes back can see what happened.
+person who closes the tab and comes back can see what happened. Each record says which pipeline
+ran (`kind`: an Operator's `apply` or an `admin_apply`) and who started it (`started_by`,
+`started_via`), so a history list needs no second read of the audit to fill either column.
 
 **FIXED — the confirmation before a restarting Apply.** When the Candidate requires a rollout,
 the confirmation must state **that running queries will be terminated, in those words**,
