@@ -7,6 +7,8 @@ import { ApplyScreen } from "./screens/Apply";
 import { AppliesScreen } from "./screens/Applies";
 import { ValidationsScreen } from "./screens/Validations";
 import { CatalogsScreen } from "./screens/Catalogs";
+import { CertificatesScreen } from "./screens/Certificates";
+import { CertMappingScreen } from "./screens/CertMapping";
 
 /**
  * Every screen, by the path it lives at. One table, so a link anywhere in the console and
@@ -19,8 +21,8 @@ export const routes: RouteObject[] = [
   { path: "catalogs", element: <CatalogsScreen /> },
   { path: "catalogs/:name", element: <CatalogsScreen /> },
   { path: "catalogs/:name/:action", element: <CatalogsScreen /> },
-  { path: "certificates", element: <NotBuilt title="Client certificates" /> },
-  { path: "certificate-mapping", element: <NotBuilt title="Certificate mapping" /> },
+  { path: "certificates", element: <CertificatesScreen /> },
+  { path: "certificate-mapping", element: <CertMappingScreen /> },
   { path: "permissions", element: <NotBuilt title="Permissions" /> },
   { path: "resource-groups", element: <NotBuilt title="Resource groups" /> },
   { path: "event-listeners/*", element: <NotBuilt title="Event listeners" /> },

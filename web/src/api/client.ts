@@ -83,3 +83,16 @@ export async function done(result: { error?: unknown; response: Response }): Pro
     throw asApiError(result.error, result.response);
   }
 }
+
+/**
+ * A multipart POST, for the two certificate routes that take a ZIP. Outside openapi-fetch
+ * because its body serialiser is JSON; the response is unwrapped the same way, so a refusal
+ * reads the same here as anywhere else.
+ */
+export async function postForm<T>(path: string, form: FormData): Promise<T> {
+  const response = await fetch(path, { method: "POST", body: form, credentials: "same-origin" });
+  const text = await response.text();
+  const body: unknown = text === "" ? undefined : JSON.parse(text);
+  if (!response.ok) throw asApiError(body ?? {}, response);
+  return body as T;
+}
