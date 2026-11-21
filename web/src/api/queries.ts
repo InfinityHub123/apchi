@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, done, unwrap } from "./client";
+import { api, done, unwrap, type SectionName } from "./client";
 
 /**
  * The reads every screen shares, and the cadence each one is allowed.
@@ -77,4 +77,59 @@ export function useStartValidation() {
     mutationFn: () => api.POST("/api/v1/validations").then(unwrap),
     onSuccess: () => queries.invalidateQueries({ queryKey: ["validations"] }),
   });
+}
+
+export function useResetResource() {
+  const invalidate = useInvalidateCandidate();
+  return useMutation({
+    mutationFn: (body: { section: SectionName; resource: string }) =>
+      api.POST("/api/v1/candidate/reset-resource", { body }).then(done),
+    onSuccess: invalidate,
+  });
+}
+
+export function useSnapshots(limit = 20) {
+  return useQuery({
+    queryKey: ["snapshots", limit],
+    queryFn: () => api.GET("/api/v1/snapshots", { params: { query: { limit } } }).then(unwrap),
+  });
+}
+
+export function useCertificates() {
+  return useQuery({
+    queryKey: ["section", "client_certificates"],
+    queryFn: () => api.GET("/api/v1/certificates").then(unwrap),
+  });
+}
+
+/** The newest Validation, for "last Validation passed" beside the Candidate. */
+export function useLatestValidation() {
+  return useQuery({
+    queryKey: ["validations", "latest"],
+    queryFn: () =>
+      api
+        .GET("/api/v1/validations", { params: { query: { limit: 1 } } })
+        .then(unwrap)
+        .then((page) => page.items[0] ?? null),
+  });
+}
+
+/**
+ * The connector and listener schemas, which say which properties are secrets.
+ *
+ * Fetched once per session: they are the rules the write endpoints enforce, and they change
+ * only with a new Apchi.
+ */
+export function useSchemas() {
+  const connectors = useQuery({
+    queryKey: ["schemas", "connectors"],
+    queryFn: () => api.GET("/api/v1/catalogs/connectors").then(unwrap),
+    staleTime: Infinity,
+  });
+  const listeners = useQuery({
+    queryKey: ["schemas", "listeners"],
+    queryFn: () => api.GET("/api/v1/event-listeners/types").then(unwrap),
+    staleTime: Infinity,
+  });
+  return { connectors: connectors.data, listeners: listeners.data };
 }

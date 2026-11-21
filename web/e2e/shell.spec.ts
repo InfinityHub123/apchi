@@ -34,7 +34,7 @@ test("the coordinator is read on demand, not on a timer", async ({ page }) => {
   await page.waitForTimeout(1500);
   expect(probes).toBe(1);
 
-  await page.getByRole("button", { name: "Check again" }).click();
+  await page.getByRole("banner").getByRole("button", { name: "Check again" }).click();
   await expect.poll(() => probes).toBe(2);
 });
 
@@ -136,7 +136,7 @@ test("a failed read is shown in Apchi's words", async ({ page }) => {
     "GET /api/v1/review": new Reply(503, { code: "unavailable", message: "MongoDB is not answering.", request_id: "r" }),
   });
   await page.goto("/");
-  await expect(page.getByText("MongoDB is not answering.")).toBeVisible();
+  await expect(page.getByText("MongoDB is not answering.").first()).toBeVisible();
 });
 
 test("a deep link loads its screen", async ({ page }) => {
