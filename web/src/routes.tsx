@@ -1,13 +1,16 @@
 import type { RouteObject } from "react-router-dom";
 import { NotBuilt } from "./screens/NotBuilt";
+import { OverviewScreen } from "./screens/Overview";
+import { ReviewScreen } from "./screens/Review";
+import { DriftScreen } from "./screens/Drift";
 
 /**
  * Every screen, by the path it lives at. One table, so a link anywhere in the console and
  * the sidebar cannot disagree about where a screen is.
  */
 export const routes: RouteObject[] = [
-  { index: true, element: <NotBuilt title="Overview" /> },
-  { path: "review", element: <NotBuilt title="Staged changes" /> },
+  { index: true, element: <OverviewScreen /> },
+  { path: "review", element: <ReviewScreen /> },
   { path: "apply", element: <NotBuilt title="Apply" /> },
   { path: "catalogs/*", element: <NotBuilt title="Catalogs" /> },
   { path: "certificates", element: <NotBuilt title="Client certificates" /> },
@@ -16,7 +19,7 @@ export const routes: RouteObject[] = [
   { path: "resource-groups", element: <NotBuilt title="Resource groups" /> },
   { path: "event-listeners/*", element: <NotBuilt title="Event listeners" /> },
   { path: "snapshots", element: <NotBuilt title="Snapshots" /> },
-  { path: "drift", element: <NotBuilt title="Drift" /> },
+  { path: "drift", element: <DriftScreen /> },
   { path: "applies/*", element: <NotBuilt title="Applies" /> },
   { path: "validations", element: <NotBuilt title="Validations" /> },
   { path: "audit", element: <NotBuilt title="Audit" /> },

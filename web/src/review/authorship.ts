@@ -93,7 +93,9 @@ export function useAuthorship(review: Review | undefined): Authorship | null {
 
   if (!enabled || reads.some((r) => r.data === undefined)) return null;
 
-  const pipeline = (reads[0]?.data ?? []).filter((e) => BULK.has(e.action));
+  // `apchi` acting is an Auto Rollback or recovery at start-up, which put the *cluster*
+  // back and never touched the Candidate.
+  const pipeline = (reads[0]?.data ?? []).filter((e) => BULK.has(e.action) && e.actor !== "apchi");
   const out: Authorship = new Map();
 
   changed.forEach((s, i) => {

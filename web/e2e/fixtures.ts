@@ -42,7 +42,10 @@ export const REVIEW_STAGED = {
           resource: "finance_pg",
           change: "changed",
           before: { connector: "postgresql", properties: { "connection-url": "jdbc:postgresql://pg-fin-01:5432/finance" } },
-          after: { connector: "postgresql", properties: { "connection-url": "jdbc:postgresql://pg-fin-02:5432/finance" } },
+          after: {
+            connector: "postgresql",
+            properties: { "connection-url": "jdbc:postgresql://pg-fin-02:5432/finance", "connection-password": "hunter2" },
+          },
         },
         { resource: "marketing_mysql", change: "added", after: { connector: "mysql", properties: {} } },
         { resource: "legacy_oracle", change: "removed", before: { connector: "oracle", properties: {} } },
@@ -101,6 +104,79 @@ export const AUDIT = [
   event({ at: "2026-11-17T10:41:00Z", actor: "jo", category: "catalogs", resource: "finance_pg" }),
 ];
 
+const snapshot = (number: number, created_at: string, apply_id: string) => ({
+  number,
+  created_at,
+  apply_id,
+  sections: {},
+});
+
+export const SNAPSHOTS = [
+  snapshot(13, SNAPSHOT_AT, "a-7f3c"),
+  snapshot(12, "2026-11-06T10:15:00Z", "a-71b0"),
+  snapshot(11, "2026-11-03T09:40:00Z", "a-6c22"),
+  snapshot(10, "2026-10-28T16:12:00Z", "a-6a07"),
+];
+
+const cert = (name: string, not_after: string, status: string) => ({
+  name,
+  common_name: `${name}.acme.internal`,
+  subject: `CN=${name}.acme.internal`,
+  issuer: "CN=Acme Internal Issuing CA",
+  not_before: "2026-01-01T00:00:00Z",
+  not_after,
+  status,
+  expiring_within_days: 30,
+  fingerprint: "ab".repeat(32),
+});
+
+export const CERTIFICATES = [
+  cert("finance_pg_tls", "2027-03-14T09:12:07Z", "valid"),
+  cert("search_tls", "2026-12-09T00:00:00Z", "expiring"),
+];
+
+export const VALIDATIONS = [
+  {
+    id: "v-3190",
+    base_snapshot: 13,
+    started_at: "2026-11-17T11:00:00Z",
+    finished_at: "2026-11-17T11:02:20Z",
+    outcome: "passed",
+    failures: [],
+    warnings: [],
+  },
+];
+
+const rules = (name: string, over: Record<string, unknown> = {}) => ({
+  name,
+  required: [],
+  optional: [],
+  branches: [],
+  open_ended: [],
+  prefixes: [],
+  secrets: [],
+  ...over,
+});
+
+export const CONNECTORS = [
+  rules("postgresql", { required: ["connection-url"], optional: ["connection-user", "connection-password"], secrets: ["connection-password"] }),
+];
+export const LISTENER_TYPES = [rules("kafka", { secrets: [] })];
+
+export const DRIFT = {
+  at: NOW,
+  snapshot: 13,
+  diverged: true,
+  sections: [
+    { section: "catalogs", status: "not_comparable", restarts_coordinator: false },
+    { section: "client_certificates", status: "in_sync", restarts_coordinator: false },
+    { section: "certificate_mapping", status: "diverged", restarts_coordinator: true },
+    { section: "permissions", status: "in_sync", restarts_coordinator: false },
+    { section: "resource_groups", status: "unknown", restarts_coordinator: true },
+    { section: "event_listeners", status: "in_sync", restarts_coordinator: true },
+  ],
+};
+
 export type Handler = (route: Route, url: URL) => unknown | Promise<unknown>;
 export type Stubs = Record<string, unknown | Handler>;
 
@@ -119,11 +195,19 @@ export const DEFAULTS: Stubs = {
         (!q.get("category") || e.category === q.get("category")) &&
         (!q.get("resource") || e.resource === q.get("resource")) &&
         (!q.get("actor") || e.actor === q.get("actor")) &&
-        (!q.get("outcome") || e.outcome === q.get("outcome")),
+        (!q.get("outcome") || e.outcome === q.get("outcome")) &&
+        (!q.get("since") || e.at >= q.get("since")!),
     );
     return { items, next: null };
   },
   "POST /api/v1/candidate/reset": null,
+  "POST /api/v1/candidate/reset-resource": null,
+  "GET /api/v1/snapshots": { items: SNAPSHOTS, next: null },
+  "GET /api/v1/certificates": CERTIFICATES,
+  "GET /api/v1/validations": { items: VALIDATIONS, next: null },
+  "GET /api/v1/catalogs/connectors": CONNECTORS,
+  "GET /api/v1/event-listeners/types": LISTENER_TYPES,
+  "GET /api/v1/cluster/drift": DRIFT,
 };
 
 /** A response the handler wants sent as-is, with a status. */
