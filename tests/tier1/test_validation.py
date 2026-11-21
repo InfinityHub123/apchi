@@ -92,6 +92,11 @@ async def test_a_catalog_trino_rejects_fails_the_apply(
 
     assert record["stage"] == "failed"
     assert "imaginary" in record["failure_reason"]
+    # Structured as well as joined into the sentence, so a client can say *which* Section
+    # failed without parsing it out of prose.
+    assert [(f["section"], f["resource"]) for f in record["failures"]] == [
+        ("catalogs", "imaginary")
+    ]
 
 
 async def test_a_validation_failure_leaves_the_cluster_untouched(

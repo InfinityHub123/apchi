@@ -3,6 +3,9 @@ import { NotBuilt } from "./screens/NotBuilt";
 import { OverviewScreen } from "./screens/Overview";
 import { ReviewScreen } from "./screens/Review";
 import { DriftScreen } from "./screens/Drift";
+import { ApplyScreen } from "./screens/Apply";
+import { AppliesScreen } from "./screens/Applies";
+import { ValidationsScreen } from "./screens/Validations";
 
 /**
  * Every screen, by the path it lives at. One table, so a link anywhere in the console and
@@ -11,7 +14,7 @@ import { DriftScreen } from "./screens/Drift";
 export const routes: RouteObject[] = [
   { index: true, element: <OverviewScreen /> },
   { path: "review", element: <ReviewScreen /> },
-  { path: "apply", element: <NotBuilt title="Apply" /> },
+  { path: "apply", element: <ApplyScreen /> },
   { path: "catalogs/*", element: <NotBuilt title="Catalogs" /> },
   { path: "certificates", element: <NotBuilt title="Client certificates" /> },
   { path: "certificate-mapping", element: <NotBuilt title="Certificate mapping" /> },
@@ -20,8 +23,9 @@ export const routes: RouteObject[] = [
   { path: "event-listeners/*", element: <NotBuilt title="Event listeners" /> },
   { path: "snapshots", element: <NotBuilt title="Snapshots" /> },
   { path: "drift", element: <DriftScreen /> },
-  { path: "applies/*", element: <NotBuilt title="Applies" /> },
-  { path: "validations", element: <NotBuilt title="Validations" /> },
+  { path: "applies", element: <AppliesScreen /> },
+  { path: "applies/:id", element: <AppliesScreen /> },
+  { path: "validations", element: <ValidationsScreen /> },
   { path: "audit", element: <NotBuilt title="Audit" /> },
   { path: "import-export", element: <NotBuilt title="Import / export" /> },
   { path: "admin", element: <NotBuilt title="Admin values" /> },

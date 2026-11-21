@@ -61,13 +61,14 @@ class MaintenanceStore:
         await self._audited("engaged", f"engaged by {by.value}: {reason}", by)
         return state
 
-    async def release(self) -> MaintenanceState:
+    async def release(self, reason: str | None = None) -> MaintenanceState:
         state = MaintenanceState()
         await self._save(state)
-        logger.warning("maintenance mode released")
+        logger.warning("maintenance mode released", extra={"why": reason})
         # Releasing it after a failed Auto Rollback is a human saying the Cluster's state is
-        # understood again. That is a claim worth attributing.
-        await self._audited("released", None, EngagedBy.ADMIN)
+        # understood again. That is a claim worth attributing, and worth its reason: the state
+        # itself is cleared, so the trail is the only place "why was it safe" survives.
+        await self._audited("released", reason, EngagedBy.ADMIN)
         return state
 
     async def _audited(self, action: Action, detail: str | None, by: EngagedBy) -> None:

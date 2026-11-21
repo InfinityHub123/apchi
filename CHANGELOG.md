@@ -20,6 +20,19 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+`ApplyRecord` gains `kind` (`apply` or `admin_apply`), `started_by` and `started_via`. Both
+pipelines walk the same stages and an Admin Apply commits no Snapshot, so an Admin Apply read
+exactly like an Operator's Apply that failed to commit; and who started an Apply was only in the
+audit trail. Records written before this read as `apply` with a null `started_by`.
+
+`ApplyRecord` also gains `failures`: every reason Validation refused the Apply, structured as a
+Validation's own record has them. They were only in `failure_reason`, joined into one sentence,
+so saying which Section failed meant parsing prose.
+
+A `reason` sent when releasing Maintenance Mode is now kept as the `released` audit event's
+`detail`. It was accepted and dropped, and releasing clears the state, so why a Cluster was
+judged safe to edit again was recorded nowhere.
+
 `ApplyRecord` gains `verification`: one entry per check, in the order Verification runs them,
 each `passed`, `failed` or `not_reached`. Before this an Apply recorded only that Verification
 passed or a sentence saying why it did not, so "which check failed" meant parsing prose.

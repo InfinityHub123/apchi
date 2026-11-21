@@ -127,3 +127,29 @@ async def test_events_carry_ids_so_a_client_can_resume(applying_client: AsyncCli
     assert [line for line in body.splitlines() if line.startswith("id: ")] == [
         f"id: {index}" for index in range(5)
     ]
+
+
+async def test_an_apply_records_who_started_it_and_which_kind_it_is(
+    client: AsyncClient,
+) -> None:
+    started = (await client.post("/api/v1/applies")).json()
+
+    record = (await client.get(f"/api/v1/applies/{started['id']}")).json()
+    # The test client runs in `none` mode, where every caller is the anonymous Admin.
+    assert record["kind"] == "apply"
+    assert record["started_by"] == "anonymous"
+    assert record["started_via"] == "none"
+
+
+async def test_a_record_from_before_kind_was_kept_reads_as_an_operator_apply(
+    client: AsyncClient,
+) -> None:
+    """Old documents have neither field; they must still load rather than 500 the listing."""
+    from app.pipeline.applies import ApplyRecord
+
+    legacy = ApplyRecord.model_validate(
+        {"id": "apl_old", "stage": "succeeded", "started_at": "2026-01-01T00:00:00Z"}
+    )
+
+    assert legacy.kind == "apply"
+    assert legacy.started_by is None

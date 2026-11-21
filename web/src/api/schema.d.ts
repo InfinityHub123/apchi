@@ -336,6 +336,9 @@ export interface paths {
          * Disable or re-enable Operator changes
          * @description Releasing is how an incident is closed: an Admin has looked at the Cluster and
          *     is satisfied it is in a state Operators can safely edit again.
+         *
+         *     A `reason` sent with a release is kept in the audit trail as the event's detail -- the
+         *     state itself is cleared, so that is the only place it survives.
          */
         put: operations["set_maintenance_mode_api_v1_admin_maintenance_mode_put"];
         post?: never;
@@ -1727,6 +1730,11 @@ export interface components {
             base_snapshot?: number | null;
             /** Failure Reason */
             failure_reason?: string | null;
+            /**
+             * Failures
+             * @description Every reason Validation refused this Apply, when that is how it failed -- the same list a Validation's own record carries. `failure_reason` holds them too, joined into one sentence; this is what says which Section and resource each belongs to. Empty for any other outcome.
+             */
+            failures?: components["schemas"]["ValidationFailure"][];
             /** Finished At */
             finished_at?: string | null;
             /** History */
@@ -1739,6 +1747,13 @@ export interface components {
              * @default false
              */
             interrupted: boolean;
+            /**
+             * Kind
+             * @description Which of the two pipelines ran. Both walk the same stages, so without this an Admin Apply reads as an Operator's Apply that never committed a Snapshot -- the same record a failure leaves. Applies recorded before this field existed read as `apply`.
+             * @default apply
+             * @enum {string}
+             */
+            kind: "apply" | "admin_apply";
             /**
              * Operator Message
              * @description What to show an Operator. Set when an Apply ends in an incident.
@@ -1767,6 +1782,16 @@ export interface components {
              * Format: date-time
              */
             started_at: string;
+            /**
+             * Started By
+             * @description The subject of whoever started it. Null only on Applies recorded before Apchi kept this; the audit's `attempted` event for the same `apply_id` says it too.
+             */
+            started_by?: string | null;
+            /**
+             * Started Via
+             * @description How they authenticated, because an Apply a pipeline started with a token and one a person clicked are different answers to *who did this*.
+             */
+            started_via?: ("none" | "password" | "sso" | "token") | null;
             /**
              * Verification
              * @description How each of Verification's checks came out, in the order they run. Empty on an Apply that never reached Verification -- a Validation failure means nothing was delivered and nothing was checked.

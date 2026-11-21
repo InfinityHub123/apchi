@@ -127,6 +127,19 @@ async def test_engaging_and_releasing_maintenance_mode_are_distinguishable(
     assert actions == ["released", "engaged"]
 
 
+async def test_the_reason_for_releasing_is_kept(as_admin: AsyncClient) -> None:
+    """Releasing clears the state, so the trail is the only place "why it was safe to edit
+    this Cluster again" survives -- the question an incident review starts from."""
+    await as_admin.put(MAINTENANCE, json={"engaged": True, "reason": "upgrade"})
+    await as_admin.put(
+        MAINTENANCE, json={"engaged": False, "reason": "coordinator recovered after node fix"}
+    )
+
+    [released, _] = [e for e in await _events(as_admin) if e.resource == "maintenance_mode"]
+    assert released.action == "released"
+    assert released.detail == "coordinator recovered after node fix"
+
+
 async def test_maintenance_mode_engaged_by_apchi_is_attributed_to_apchi(
     as_admin: AsyncClient,
 ) -> None:
