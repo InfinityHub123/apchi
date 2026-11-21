@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import type { Review, S } from "../api/client";
 import {
   useApply,
@@ -33,6 +33,15 @@ export function Shell() {
   const cluster = useCluster();
   const review = useReview();
 
+  const [menu, setMenu] = useState(false);
+  const location = useLocation();
+  const [path, setPath] = useState(location.pathname);
+  if (path !== location.pathname) {
+    // A screen was chosen: fold the phone menu away again.
+    setPath(location.pathname);
+    setMenu(false);
+  }
+
   const state = cluster.data;
   const incident = state?.last_apply?.stage === "incident";
   const inFlight =
@@ -40,7 +49,7 @@ export function Shell() {
 
   return (
     <div className="app">
-      <TopBar identity={identity.data} state={state} incident={incident} />
+      <TopBar identity={identity.data} state={state} incident={incident} menu={menu} onMenu={() => setMenu((m) => !m)} />
       {incident && state?.last_apply != null && <IncidentAlarm applyId={state.last_apply.id} snapshot={state.snapshot ?? null} />}
       <CandidateBar
         review={review.data}
@@ -50,6 +59,7 @@ export function Shell() {
       />
       <div className="body">
         <Sidebar
+          open={menu}
           review={review.data}
           admin={identity.data?.role === "admin"}
           enforced={state?.permissions_enforced}
@@ -73,15 +83,22 @@ function TopBar({
   identity,
   state,
   incident,
+  menu,
+  onMenu,
 }: {
   identity: S["Identity"] | undefined;
   state: S["ClusterState"] | undefined;
   incident: boolean;
+  menu: boolean;
+  onMenu: () => void;
 }) {
   const logout = useLogout();
 
   return (
     <header className="top">
+      <button type="button" className="btn btn--sm menu-btn" aria-expanded={menu} aria-controls="main-nav" onClick={onMenu}>
+        Menu
+      </button>
       <Link to="/" style={{ display: "flex", alignItems: "center", gap: 9, textDecoration: "none" }}>
         <Logo />
         <span className="wordmark">apchi</span>
@@ -443,10 +460,12 @@ function Item({
 }
 
 function Sidebar({
+  open,
   review,
   admin,
   enforced,
 }: {
+  open: boolean;
   review: Review | undefined;
   admin: boolean;
   enforced: boolean | undefined;
@@ -458,7 +477,7 @@ function Sidebar({
   const total = [...changed.values()].reduce((a, b) => a + b, 0);
 
   return (
-    <nav className="side" aria-label="Main">
+    <nav className={`side${open ? " open" : ""}`} id="main-nav" aria-label="Main">
       <div style={{ paddingTop: 6 }}>
         <Item to="/" end icon="overview" label="Overview" />
         <Item to="/review" icon="candidate" label="Candidate">

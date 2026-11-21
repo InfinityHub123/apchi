@@ -138,8 +138,17 @@ button { font: inherit; }
 }
 .main { flex: 999 1 600px; min-width: 0; }
 
+.menu-btn { display: none; }
 @media (max-width: 860px) {
   .side { max-width: none; border-right: 0; border-bottom: 1px solid var(--line); }
+  /* On a phone the navigation would push every screen a full page down, so it folds
+     behind a Menu button and closes again once a screen is chosen. */
+  .side:not(.open) { display: none; }
+  .menu-btn { display: inline-flex; }
+  /* Label-beside-value rows stack: a 170px label column leaves a phone 150px for the value.
+     `!important` because several rows set their own columns inline, from the design. */
+  .cr { grid-template-columns: minmax(0, 1fr) !important; }
+  .page { padding: 16px 16px 32px; }
 }
 
 /* ---- Page --------------------------------------------------------------------------- */
