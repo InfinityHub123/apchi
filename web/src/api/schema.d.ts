@@ -1866,6 +1866,11 @@ export interface components {
              */
             token_id?: string | null;
             /**
+             * Token Name
+             * @description That token's name, as it was when the event was written. Here rather than looked up from `token_id`, because `GET /tokens` lists only the caller's own: an Admin reading the trail could otherwise not say which automation of somebody else's acted. Null on events written before Apchi kept it.
+             */
+            token_name?: string | null;
+            /**
              * Via
              * @description How the actor authenticated. On the record rather than derivable, because 'jo did this' and 'an automation jo minted did this' are different answers.
              * @enum {string}
@@ -2445,6 +2450,8 @@ export interface components {
             subject: string;
             /** Token Id */
             token_id?: string | null;
+            /** Token Name */
+            token_name?: string | null;
             /**
              * Via
              * @enum {string}

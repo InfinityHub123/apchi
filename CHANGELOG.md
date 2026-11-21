@@ -20,6 +20,11 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+`AuditEvent` gains `token_name`: the acting token's name as it was when the event was written.
+Only `token_id` was recorded, and `GET /tokens` lists only the caller's own, so an Admin reading
+the trail could not say which automation of somebody else's acted. `GET /auth/me` reports it too
+for a caller authenticated by a token. Events written before this carry null.
+
 `ApplyRecord` gains `kind` (`apply` or `admin_apply`), `started_by` and `started_via`. Both
 pipelines walk the same stages and an Admin Apply commits no Snapshot, so an Admin Apply read
 exactly like an Operator's Apply that failed to commit; and who started an Apply was only in the

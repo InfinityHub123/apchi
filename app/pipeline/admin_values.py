@@ -140,7 +140,9 @@ class AdminStore:
             if json.dumps(before.get(key), sort_keys=True)
             != json.dumps(after.get(key), sort_keys=True)
         ]
-        await self._audit.record_each(who.subject, who.via, entries, token_id=who.token_id)
+        await self._audit.record_each(
+            who.subject, who.via, entries, token_id=who.token_id, token_name=who.token_name
+        )
 
 
 def _as_values(document: dict[str, Any] | None) -> AdminValues:

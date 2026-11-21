@@ -544,6 +544,18 @@
             "description": "Which token acted, when `via` is 'token'. Kept because a revoked token in the trail still has to resolve -- revocation is exactly when somebody reads this.",
             "title": "Token Id"
           },
+          "token_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "That token's name, as it was when the event was written. Here rather than looked up from `token_id`, because `GET /tokens` lists only the caller's own: an Admin reading the trail could otherwise not say which automation of somebody else's acted. Null on events written before Apchi kept it.",
+            "title": "Token Name"
+          },
           "via": {
             "description": "How the actor authenticated. On the record rather than derivable, because 'jo did this' and 'an automation jo minted did this' are different answers.",
             "enum": [
@@ -1768,6 +1780,17 @@
               }
             ],
             "title": "Token Id"
+          },
+          "token_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Name"
           },
           "via": {
             "enum": [

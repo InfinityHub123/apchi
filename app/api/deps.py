@@ -178,7 +178,13 @@ async def _from_bearer(request: Request) -> Identity | None:
         )
 
     await tokens.touch(token.id)
-    return Identity(subject=owner.username, role=owner.role, via="token", token_id=token.id)
+    return Identity(
+        subject=owner.username,
+        role=owner.role,
+        via="token",
+        token_id=token.id,
+        token_name=token.name,
+    )
 
 
 async def _from_session(request: Request) -> Identity | None:

@@ -232,6 +232,7 @@ class TokenStore:
                 resource=token_id,
                 detail=detail,
                 token_id=who.token_id,
+                token_name=who.token_name,
             )
         except PyMongoError:
             logger.exception("could not record a token change in the audit history")
