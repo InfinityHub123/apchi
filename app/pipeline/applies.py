@@ -217,9 +217,7 @@ class ApplyStore:
         document.pop("_id", None)
         return ApplyRecord.model_validate(document)
 
-    async def create(
-        self, base_snapshot: int | None, kind: ApplyKind = "apply"
-    ) -> ApplyRecord:
+    async def create(self, base_snapshot: int | None, kind: ApplyKind = "apply") -> ApplyRecord:
         now = datetime.now(UTC)
         # Read on the request that asked for the Apply, where the caller is known -- the
         # same reason `ApplyRunner.start` reads it there rather than inside its task.
@@ -295,9 +293,7 @@ class ApplyStore:
             {"$set": {"warnings": [warning.model_dump(mode="json") for warning in warnings]}},
         )
 
-    async def record_failures(
-        self, apply_id: str, failures: Sequence[ValidationFailure]
-    ) -> None:
+    async def record_failures(self, apply_id: str, failures: Sequence[ValidationFailure]) -> None:
         await self._collection.update_one(
             {"_id": apply_id},
             {"$set": {"failures": [failure.model_dump(mode="json") for failure in failures]}},
