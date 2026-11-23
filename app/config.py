@@ -253,6 +253,10 @@ class Settings(BaseSettings):
     # level can be raised during a production incident without a rebuild.
     log_level: str | None = None
     log_json: bool | None = None
+    #: Debugging mode: DEBUG unless `log_level` says otherwise, and every line names the
+    #: logger and line it came from. It never turns on a dependency's own debug output --
+    #: see `configure_logging` for why that is not safe at any level of redaction.
+    debug: bool = False
 
     @property
     def admin_groups(self) -> frozenset[str]:
@@ -266,6 +270,8 @@ class Settings(BaseSettings):
     def effective_log_level(self) -> str:
         if self.log_level is not None:
             return self.log_level.upper()
+        if self.debug:
+            return "DEBUG"
         return "DEBUG" if self.environment in (Environment.NP, Environment.TEST) else "INFO"
 
     @property

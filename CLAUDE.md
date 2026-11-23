@@ -198,6 +198,10 @@ whole story of a failure. Log resource names and diff summaries (`catalogs: +fin
 redaction filter keyed on secret-bearing field names runs at every level in every
 environment, because Snapshots hold real credentials.
 
+`APCHI_DEBUG` is debugging mode. It never raises a dependency's logger: PyMongo's debug output
+prints Snapshots and the Kubernetes client's prints Secrets, past any name-keyed redaction.
+The adapters log their own calls by name and timing instead -- never a payload.
+
 ## OpenAPI
 
 `openapi.json` is committed. CI regenerates it and fails on a diff, so every contract change
