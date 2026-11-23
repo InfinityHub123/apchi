@@ -121,7 +121,35 @@ class Trino:
         self._connectors: frozenset[str] | None = None
         self._connectors_read_at: float | None = None
 
-    def _query_sync(self, sql: str, patience: _Patience | None = None) -> Query:
+    def _query_sync(
+        self, sql: str, patience: _Patience | None = None, shown: str | None = None
+    ) -> Query:
+        """One statement, logged at DEBUG with its timing and query id.
+
+        `shown` stands in for `sql` in that line when the statement carries values that must
+        not be logged. The redaction filter cannot do it: it finds a secret by the name next
+        to it, and in `'connection-password' = 'x'` a quote stands between the two.
+        """
+        started = time.monotonic()
+        try:
+            result = self._execute(sql, patience)
+        except Exception as exc:
+            # The class only. The caller decides what the failure means and logs it, and a
+            # connector's message can quote the connection it was handed.
+            logger.debug(
+                "trino: %s -> %s in %dms", shown or sql, type(exc).__name__, _elapsed(started)
+            )
+            raise
+        logger.debug(
+            "trino: %s -> %d rows in %dms (%s)",
+            shown or sql,
+            len(result.rows),
+            _elapsed(started),
+            result.query_id,
+        )
+        return result
+
+    def _execute(self, sql: str, patience: _Patience | None) -> Query:
         import trino
         import trino.auth
 
@@ -152,8 +180,8 @@ class Trino:
         finally:
             conn.close()
 
-    async def query(self, sql: str) -> list[tuple[Any, ...]]:
-        return (await run_in_threadpool(self._query_sync, sql)).rows
+    async def query(self, sql: str, shown: str | None = None) -> list[tuple[Any, ...]]:
+        return (await run_in_threadpool(self._query_sync, sql, None, shown)).rows
 
     async def run(self, sql: str) -> Query:
         """The rows and the query id. Used where what happened to the query matters as much
@@ -166,9 +194,12 @@ class Trino:
             async with httpx.AsyncClient(timeout=5, verify=self._verification) as client:
                 response = await client.get(f"{self._base}/v1/info")
                 response.raise_for_status()
-                return bool(response.json().get("starting", True))
-        except Exception:
+                starting = bool(response.json().get("starting", True))
+        except Exception as exc:
+            logger.debug("trino: GET /v1/info -> %s", type(exc).__name__)
             return None
+        logger.debug("trino: GET /v1/info -> starting=%s", starting)
+        return starting
 
     async def active_worker_count(self) -> int:
         rows = await self.query(
@@ -215,9 +246,8 @@ class Trino:
             f"{_identifier(key)} = {_literal(value)}" for key, value in sorted(properties.items())
         )
         clause = f" WITH ({rendered})" if rendered else ""
-        await self.query(
-            f"CREATE CATALOG {_identifier(name)} USING {_connector_name(connector)}{clause}"
-        )
+        statement = f"CREATE CATALOG {_identifier(name)} USING {_connector_name(connector)}"
+        await self.query(statement + clause, shown=statement + _withheld(properties))
 
     async def connector_factories(self) -> frozenset[str] | None:
         """The connectors this coordinator can load, cached, or None if it would not say.
@@ -337,6 +367,21 @@ def _identifier(value: str) -> str:
     pass-through property keys are arbitrary strings and often contain hyphens."""
     escaped = value.replace('"', '""')
     return f'"{escaped}"'
+
+
+def _withheld(properties: dict[str, str]) -> str:
+    """A WITH clause naming every property and showing no value, for the log.
+
+    Every value is withheld, not only the ones a schema calls secret: a connector Apchi has
+    no schema for is accepted, so there is nothing to say which of its values are safe.
+    """
+    if not properties:
+        return ""
+    return " WITH (" + ", ".join(f"{_identifier(key)} = ..." for key in sorted(properties)) + ")"
+
+
+def _elapsed(started: float) -> int:
+    return round((time.monotonic() - started) * 1000)
 
 
 def _literal(value: str) -> str:
