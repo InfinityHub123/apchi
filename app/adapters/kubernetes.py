@@ -6,12 +6,16 @@ mention threads. Keeping the whole surface in one protocol is also what lets the
 fast test tier substitute it while MongoDB and Trino stay real.
 """
 
-from collections.abc import Sequence
+import logging
+import time
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 #: The mode for a Secret file that carries credentials.
 #:
@@ -186,6 +190,41 @@ class RealKubernetes:
         self._load()
         return self._apps_api
 
+    async def _call(self, method: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """One API call in the threadpool, logged at DEBUG by verb, object and timing.
+
+        Never the body, in either direction: a request or response here can be a Secret, and
+        its values are base64 with no field name next to them for the redaction filter to
+        recognise. The client's own debug logging prints exactly that, which is why it stays
+        off and this exists.
+        """
+        from kubernetes.client.exceptions import ApiException
+
+        target = _target(method.__name__, args, kwargs, self._namespace)
+        started = time.monotonic()
+        try:
+            result = await run_in_threadpool(method, *args, **kwargs)
+        except ApiException as exc:
+            logger.debug(
+                "kubernetes: %s %s -> %s in %dms",
+                method.__name__,
+                target,
+                exc.status,
+                _elapsed(started),
+            )
+            raise
+        except Exception as exc:
+            logger.debug(
+                "kubernetes: %s %s -> %s in %dms",
+                method.__name__,
+                target,
+                type(exc).__name__,
+                _elapsed(started),
+            )
+            raise
+        logger.debug("kubernetes: %s %s -> ok in %dms", method.__name__, target, _elapsed(started))
+        return result
+
     async def read_secret(self, name: str) -> dict[str, str]:
         """A Secret's contents, or empty when there is no such Secret.
 
@@ -244,13 +283,13 @@ class RealKubernetes:
         from kubernetes.client.exceptions import ApiException
 
         try:
-            await run_in_threadpool(
+            await self._call(
                 self._core.patch_namespaced_config_map, name, self._namespace, {"data": data}
             )
         except ApiException as exc:
             if exc.status != 404:
                 raise
-            await run_in_threadpool(
+            await self._call(
                 self._core.create_namespaced_config_map,
                 self._namespace,
                 {
@@ -272,7 +311,7 @@ class RealKubernetes:
         from kubernetes.client.exceptions import ApiException
 
         try:
-            return await run_in_threadpool(read, name, self._namespace)
+            return await self._call(read, name, self._namespace)
         except ApiException as exc:
             if exc.status == 404:
                 return None
@@ -293,7 +332,7 @@ class RealKubernetes:
         from kubernetes.client.exceptions import ApiException
 
         try:
-            await run_in_threadpool(
+            await self._call(
                 self._core.patch_namespaced_secret,
                 name,
                 self._namespace,
@@ -306,7 +345,7 @@ class RealKubernetes:
             # exist yet -- so the seed that writes them for the first time got a 404 from
             # the API server (§15). Creating is the same operation from Apchi's side: the
             # Secret's contents become exactly `data` either way.
-            await run_in_threadpool(
+            await self._call(
                 self._core.create_namespaced_secret,
                 self._namespace,
                 {
@@ -318,17 +357,13 @@ class RealKubernetes:
             )
 
     async def ready_replicas(self, deployment: str) -> int:
-        dep = await run_in_threadpool(
-            self._apps.read_namespaced_deployment, deployment, self._namespace
-        )
+        dep = await self._call(self._apps.read_namespaced_deployment, deployment, self._namespace)
         return int(dep.status.ready_replicas or 0)
 
     async def deployment_image(self, deployment: str, container: str) -> str:
         """Read from the live Deployment rather than configured separately, so the
         validation pod cannot drift from the version the Cluster actually runs."""
-        dep = await run_in_threadpool(
-            self._apps.read_namespaced_deployment, deployment, self._namespace
-        )
+        dep = await self._call(self._apps.read_namespaced_deployment, deployment, self._namespace)
         for spec in dep.spec.template.spec.containers:
             if spec.name == container:
                 return str(spec.image)
@@ -342,9 +377,7 @@ class RealKubernetes:
         """
         from kubernetes import client
 
-        dep = await run_in_threadpool(
-            self._apps.read_namespaced_deployment, deployment, self._namespace
-        )
+        dep = await self._call(self._apps.read_namespaced_deployment, deployment, self._namespace)
         serialised = client.ApiClient().sanitize_for_serialization(dep.spec.template.spec)
         return dict(serialised)
 
@@ -387,9 +420,7 @@ class RealKubernetes:
         )
 
     async def rollout_state(self, deployment: str) -> RolloutState:
-        dep = await run_in_threadpool(
-            self._apps.read_namespaced_deployment, deployment, self._namespace
-        )
+        dep = await self._call(self._apps.read_namespaced_deployment, deployment, self._namespace)
         status = dep.status
         return RolloutState(
             generation=int(dep.metadata.generation or 0),
@@ -491,16 +522,14 @@ class RealKubernetes:
         )
 
     async def _patch_deployment(self, deployment: str, patch: dict[str, Any]) -> None:
-        await run_in_threadpool(
-            self._apps.patch_namespaced_deployment, deployment, self._namespace, patch
-        )
+        await self._call(self._apps.patch_namespaced_deployment, deployment, self._namespace, patch)
 
     async def create_pod(self, manifest: dict[str, Any]) -> None:
-        await run_in_threadpool(self._core.create_namespaced_pod, self._namespace, manifest)
+        await self._call(self._core.create_namespaced_pod, self._namespace, manifest)
 
     async def create_secret(self, name: str, data: dict[str, str], labels: dict[str, str]) -> None:
         """Created rather than patched, because this one is born and dies with a pod."""
-        await run_in_threadpool(
+        await self._call(
             self._core.create_namespaced_secret,
             self._namespace,
             {
@@ -516,13 +545,13 @@ class RealKubernetes:
         from kubernetes.client.exceptions import ApiException
 
         try:
-            await run_in_threadpool(self._core.delete_namespaced_secret, name, self._namespace)
+            await self._call(self._core.delete_namespaced_secret, name, self._namespace)
         except ApiException as exc:
             if exc.status != 404:
                 raise
 
     async def delete_secrets(self, label_selector: str) -> list[str]:
-        secrets = await run_in_threadpool(
+        secrets = await self._call(
             self._core.list_namespaced_secret, self._namespace, label_selector=label_selector
         )
         names = [secret.metadata.name for secret in secrets.items]
@@ -546,7 +575,7 @@ class RealKubernetes:
             # of. Taking the raw body and decoding it is the only way to get a log back.
             # An earlier attempt at this guarded on `isinstance(logs, bytes)`, which never
             # fires: what comes back is a str that *contains* the repr.
-            response = await run_in_threadpool(
+            response = await self._call(
                 self._core.read_namespaced_pod_log,
                 name,
                 self._namespace,
@@ -562,7 +591,7 @@ class RealKubernetes:
         from kubernetes.client.exceptions import ApiException
 
         try:
-            pod = await run_in_threadpool(self._core.read_namespaced_pod, name, self._namespace)
+            pod = await self._call(self._core.read_namespaced_pod, name, self._namespace)
         except ApiException as exc:
             if exc.status == 404:
                 return PodState(phase="Missing", problem="the pod no longer exists")
@@ -584,16 +613,34 @@ class RealKubernetes:
         from kubernetes.client.exceptions import ApiException
 
         try:
-            await run_in_threadpool(self._core.delete_namespaced_pod, name, self._namespace)
+            await self._call(self._core.delete_namespaced_pod, name, self._namespace)
         except ApiException as exc:
             if exc.status != 404:
                 raise
 
     async def delete_pods(self, label_selector: str) -> list[str]:
-        pods = await run_in_threadpool(
+        pods = await self._call(
             self._core.list_namespaced_pod, self._namespace, label_selector=label_selector
         )
         names = [pod.metadata.name for pod in pods.items]
         for name in names:
             await self.delete_pod(name)
         return names
+
+
+def _target(verb: str, args: tuple[Any, ...], kwargs: dict[str, Any], namespace: str) -> str:
+    """What a call acted on, in words: an object's name, or the selector a list used.
+
+    A create is passed the namespace and then the whole object, so its name is read out of
+    the object's metadata rather than from the arguments.
+    """
+    if "label_selector" in kwargs:
+        return f"[{kwargs['label_selector']}]"
+    if verb.startswith("create_") and len(args) >= 2 and isinstance(args[1], dict):
+        return str(args[1].get("metadata", {}).get("name", "?"))
+    named = [a for a in args if isinstance(a, str) and a != namespace]
+    return named[0] if named else ""
+
+
+def _elapsed(started: float) -> int:
+    return round((time.monotonic() - started) * 1000)

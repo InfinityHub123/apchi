@@ -2595,6 +2595,18 @@ The goal is that a runtime failure is diagnosable from the logs without reproduc
 prod, overridable at runtime without a rebuild. The level is wanted most during a production
 incident, so it must not be a pure function of environment type.
 
+**Debugging mode.** One `debug` setting: DEBUG unless the level is set explicitly, and every
+line names the logger and line it came from. It does **not** turn on dependencies' own debug
+output, which is the leak this section exists to prevent: `pymongo.command` prints each
+document Apchi sends and the Kubernetes client prints every response body, and neither can be
+redacted by name. Apchi logs its own outbound calls instead -- verb, object, outcome and
+timing. A warning says debugging mode is on, since it is most often switched on during an
+incident and then forgotten.
+
+**Timestamps.** ISO 8601 in UTC, to the millisecond, on every line including uvicorn's. Its
+loggers are re-pointed at Apchi's handler, so its startup and request lines are timestamped
+and redacted like everything else.
+
 **Correlation.** Stdlib `logging`. A `contextvar` holds the id of the Apply in progress and a
 filter injects it into every record, so filtering on one id yields the complete story of a
 failure. During an Apply several things run concurrently — polling `/v1/query`, watching a

@@ -203,3 +203,181 @@ def test_a_dependencys_debug_output_stays_off() -> None:
         "and private keys (§12) -- past a filter that keys on field names and would never "
         "see them."
     )
+
+
+# --- Timestamps and debugging mode ------------------------------------------------------------
+
+import json  # noqa: E402
+import re  # noqa: E402
+from typing import Any  # noqa: E402
+
+from testcontainers.community.mongodb import MongoDbContainer  # noqa: E402
+
+from app.adapters.kubernetes import RealKubernetes  # noqa: E402
+from app.adapters.mongo import Mongo  # noqa: E402
+from app.adapters.trino import Query, Trino  # noqa: E402
+from app.logging import ConsoleFormatter, JsonFormatter  # noqa: E402
+
+#: 2026-11-22T14:03:07.512Z
+ISO_UTC = re.compile(r"\A\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z")
+
+
+def _record(message: str = "applying", exc_info: Any = None) -> logging.LogRecord:
+    record = logging.LogRecord(
+        "app.pipeline.applies", logging.INFO, "", 42, message, None, exc_info
+    )
+    record.apply_id = None
+    return record
+
+
+def test_console_lines_carry_an_iso_timestamp_in_utc() -> None:
+    """Not `formatTime`'s local time with no zone: Apchi's lines are read beside Trino's and
+    the API server's, and only UTC lets a reader line the three up."""
+    assert ISO_UTC.match(ConsoleFormatter().format(_record()))
+
+
+def test_json_lines_carry_an_iso_timestamp_in_utc() -> None:
+    assert ISO_UTC.match(json.loads(JsonFormatter().format(_record()))["time"])
+
+
+def test_console_lines_keep_the_traceback() -> None:
+    """`format` is overridden whole, so nothing appended the exception: every
+    `logger.exception` in np and test -- the chart's default -- printed no stack trace."""
+    try:
+        raise ValueError("the actual cause")
+    except ValueError:
+        import sys
+
+        line = ConsoleFormatter().format(_record("it failed", sys.exc_info()))
+
+    assert "Traceback" in line
+    assert "ValueError: the actual cause" in line
+
+
+def test_debugging_mode_names_where_each_line_came_from() -> None:
+    assert "app.pipeline.applies:42 " in ConsoleFormatter(debug=True).format(_record())
+    assert "app.pipeline.applies:42" not in ConsoleFormatter().format(_record())
+    assert json.loads(JsonFormatter(debug=True).format(_record()))["line"] == 42
+    assert "line" not in json.loads(JsonFormatter().format(_record()))
+
+
+def test_debugging_mode_lowers_the_level_even_in_production() -> None:
+    assert Settings(environment=Environment.PROD, debug=True).effective_log_level == "DEBUG"
+
+
+def test_an_explicit_level_still_wins_over_debugging_mode() -> None:
+    settings = Settings(environment=Environment.PROD, debug=True, log_level="info")
+
+    assert settings.effective_log_level == "INFO"
+
+
+def test_debugging_mode_leaves_dependencies_debug_output_off() -> None:
+    """The obvious debugging mode -- everything at DEBUG -- is the one that leaks Snapshots
+    and Secrets. See `test_a_dependencys_debug_output_stays_off`."""
+    configure_logging(Settings(debug=True))
+
+    at_debug = [
+        name
+        for name in ("pymongo", "pymongo.command", "httpx", "httpcore", "kubernetes", "urllib3")
+        if logging.getLogger(name).getEffectiveLevel() <= logging.DEBUG
+    ]
+
+    assert at_debug == []
+    assert logging.getLogger("app").getEffectiveLevel() == logging.DEBUG
+
+
+def test_debugging_mode_announces_itself(capsys: pytest.CaptureFixture[str]) -> None:
+    """At WARNING, because it is most often switched on in an incident and forgotten."""
+    configure_logging(Settings(debug=True, log_json=False))
+
+    assert re.search(r"WARNING +app\.logging:\d+ debugging mode is on", capsys.readouterr().err)
+
+
+def test_uvicorns_lines_are_timestamped_and_redacted(capsys: pytest.CaptureFixture[str]) -> None:
+    """Uvicorn's own handlers printed its startup and request lines with no time and past the
+    redaction filter. Its loggers are configured before the app is imported, so that is
+    reproduced here before `configure_logging` runs."""
+    access = logging.getLogger("uvicorn.access")
+    access.handlers = [logging.StreamHandler()]
+    access.propagate = False
+
+    configure_logging(Settings(log_json=False))
+    access.info('%s - "%s %s HTTP/%s" %d', "10.0.0.1", "GET", "/x?token=hunter2", "1.1", 200)
+
+    err = capsys.readouterr().err
+    line = next(line for line in err.splitlines() if "GET /x" in line)
+    assert ISO_UTC.match(line)
+    assert "hunter2" not in err
+
+
+async def test_kubernetes_calls_are_logged_by_name_never_by_body(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A Secret's body is base64 with no field name beside it, so no redaction catches it --
+    which is why the client's own debug output stays off and this line exists."""
+
+    def create_namespaced_secret(namespace: str, body: dict[str, Any]) -> None:
+        return None
+
+    kubernetes = RealKubernetes(namespace="trino")
+    body = {"metadata": {"name": "trino-catalog-seed"}, "stringData": {"pg": "aHVudGVyMg=="}}
+
+    with caplog.at_level(logging.DEBUG, logger="app.adapters.kubernetes"):
+        await kubernetes._call(create_namespaced_secret, "trino", body)
+
+    assert re.search(
+        r"kubernetes: create_namespaced_secret trino-catalog-seed -> ok in \d+ms", caplog.text
+    )
+    assert "aHVudGVyMg" not in caplog.text
+
+
+async def test_a_refused_kubernetes_call_logs_its_status(caplog: pytest.LogCaptureFixture) -> None:
+    from kubernetes.client.exceptions import ApiException
+
+    def read_namespaced_secret(name: str, namespace: str) -> None:
+        raise ApiException(status=404)
+
+    with (
+        caplog.at_level(logging.DEBUG, logger="app.adapters.kubernetes"),
+        pytest.raises(ApiException),
+    ):
+        await RealKubernetes(namespace="trino")._call(read_namespaced_secret, "absent", "trino")
+
+    assert "kubernetes: read_namespaced_secret absent -> 404" in caplog.text
+
+
+async def test_create_catalog_is_logged_without_its_values(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The redaction filter finds a secret by the name beside it, and in
+    `'connection-password' = 'hunter2'` a quote stands between them. So the statement is
+    logged with every value withheld, rather than trusted to the filter."""
+    trino = Trino("http://trino:8080")
+    monkeypatch.setattr(trino, "_execute", lambda sql, patience: Query(rows=[], query_id="q_1"))
+
+    with caplog.at_level(logging.DEBUG, logger="app.adapters.trino"):
+        await trino.create_catalog(
+            "finance", "postgresql", {"connection-password": "hunter2", "connection-user": "u"}
+        )
+
+    assert (
+        'trino: CREATE CATALOG "finance" USING postgresql WITH '
+        '("connection-password" = ..., "connection-user" = ...) -> 0 rows' in caplog.text
+    )
+    assert "hunter2" not in caplog.text
+    assert "(q_1)" in caplog.text
+
+
+async def test_mongo_commands_are_logged_by_collection_never_by_document(
+    caplog: pytest.LogCaptureFixture, mongo_container: MongoDbContainer
+) -> None:
+    """`pymongo.command` would print the document -- a Snapshot, with real credentials."""
+    mongo = Mongo(Settings(mongo_uri=mongo_container.get_connection_url()))
+    try:
+        with caplog.at_level(logging.DEBUG, logger="app.adapters.mongo"):
+            await mongo.database["debug_log"].insert_one({"password": "hunter2"})
+    finally:
+        await mongo.close()
+
+    assert re.search(r"mongo: insert \w+\.debug_log -> ok in \d+ms", caplog.text)
+    assert "hunter2" not in caplog.text

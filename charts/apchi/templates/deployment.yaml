@@ -198,6 +198,10 @@ spec:
             - name: APCHI_LOG_JSON
               value: {{ .Values.logging.json | quote }}
             {{- end }}
+            {{- if .Values.logging.debug }}
+            - name: APCHI_DEBUG
+              value: "true"
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

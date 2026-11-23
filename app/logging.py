@@ -9,6 +9,7 @@ import json
 import logging
 import re
 from contextvars import ContextVar
+from datetime import UTC, datetime
 from typing import Any
 
 from app.config import Settings
@@ -105,17 +106,37 @@ _RESERVED = frozenset(logging.LogRecord("", 0, "", 0, "", None, None).__dict__) 
     "message",
     "asctime",
     "taskName",
+    # Uvicorn attaches an ANSI-coloured copy of every startup line. It is the same message
+    # again, with escape codes a log aggregator would store verbatim.
+    "color_message",
 }
 
 
+def timestamp(record: logging.LogRecord) -> str:
+    """ISO 8601 in UTC, to the millisecond: `2026-11-22T14:03:07.512Z`.
+
+    Not `Formatter.formatTime`, which writes local time with no zone and a comma before the
+    milliseconds. Apchi's lines are read next to Trino's and the API server's, from pods
+    whose clocks agree only in UTC, so a line has to say which instant it means.
+    """
+    moment = datetime.fromtimestamp(record.created, UTC)
+    return moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 class JsonFormatter(logging.Formatter):
+    def __init__(self, debug: bool = False) -> None:
+        super().__init__()
+        self._debug = debug
+
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
-            "time": self.formatTime(record),
+            "time": timestamp(record),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
         }
+        if self._debug:
+            payload["line"] = record.lineno
         apply_id = getattr(record, "apply_id", None)
         if apply_id:
             payload["apply_id"] = apply_id
@@ -128,15 +149,31 @@ class JsonFormatter(logging.Formatter):
 
 
 class ConsoleFormatter(logging.Formatter):
+    def __init__(self, debug: bool = False) -> None:
+        super().__init__()
+        self._debug = debug
+
     def format(self, record: logging.LogRecord) -> str:
         apply_id = getattr(record, "apply_id", None)
         prefix = f"[{apply_id}] " if apply_id else ""
-        return f"{self.formatTime(record)} {record.levelname:<7} {prefix}{record.getMessage()}"
+        origin = f"{record.name}:{record.lineno} " if self._debug else ""
+        line = f"{timestamp(record)} {record.levelname:<7} {origin}{prefix}{record.getMessage()}"
+        # `format` is overridden whole, so the base class never appends the traceback; every
+        # `logger.exception` printed its message and lost its stack trace.
+        if record.exc_info:
+            line += "\n" + self.formatException(record.exc_info)
+        return line
+
+
+#: Uvicorn's loggers. It gives them handlers of its own that do not propagate, so its startup
+#: lines and its one line per request printed with no timestamp and past the redaction filter.
+_UVICORN = ("uvicorn", "uvicorn.error", "uvicorn.access")
 
 
 def configure_logging(settings: Settings) -> None:
+    formatter = JsonFormatter if settings.effective_log_json else ConsoleFormatter
     handler = logging.StreamHandler()
-    handler.setFormatter(JsonFormatter() if settings.effective_log_json else ConsoleFormatter())
+    handler.setFormatter(formatter(debug=settings.debug))
     handler.addFilter(ApplyIdFilter())
     handler.addFilter(RedactionFilter())
 
@@ -149,5 +186,27 @@ def configure_logging(settings: Settings) -> None:
     # *level* is set on Apchi's own namespace, not the root: an application that
     # puts the root at DEBUG turns on every dependency's debug output, which
     # drowns the signal the level was raised to find.
+    #
+    # Debugging mode does not change that. The obvious debugging mode -- every library at
+    # DEBUG -- is the one that leaks: `pymongo.command` prints each document Apchi sends, and
+    # the Kubernetes client prints every response body, Secrets included. Neither can be
+    # redacted, because a BSON document and a base64 Secret have no field names for the
+    # filter to recognise. So Apchi logs its own outbound calls instead, by name and timing,
+    # in the adapters.
     root.setLevel(logging.WARNING)
     logging.getLogger("app").setLevel(settings.effective_log_level)
+
+    # Uvicorn configures logging before it imports this application, so its handlers already
+    # exist here and are replaced rather than prevented.
+    for name in _UVICORN:
+        server = logging.getLogger(name)
+        server.handlers.clear()
+        server.propagate = True
+    logging.getLogger("uvicorn").setLevel(logging.INFO)
+
+    if settings.debug:
+        # A warning so that it stands out in a production log, where it is most likely to
+        # have been switched on during an incident and then forgotten.
+        logging.getLogger(__name__).warning(
+            "debugging mode is on", extra={"log_level": settings.effective_log_level}
+        )

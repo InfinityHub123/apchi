@@ -137,6 +137,10 @@ logging:
   # can be raised during an incident without a rebuild.
   level: null
   json: null
+  # Debugging mode: DEBUG unless level says otherwise, every line naming the code it came
+  # from, and each call Apchi makes to Kubernetes, Trino and MongoDB logged by name and
+  # timing. Never a payload, so it is safe in production; Apchi logs a warning while it is on.
+  debug: false
 
 trino:
   # The coordinator, scheme included. Apchi issues catalog DDL and the Verification smoke
