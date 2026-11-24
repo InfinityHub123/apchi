@@ -20,6 +20,10 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.2.0 — 2026-11-24
+
 ### Breaking
 
 - **Apchi refuses to start on an `APCHI_` variable it does not read**, naming it and the
