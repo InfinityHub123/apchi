@@ -38,6 +38,10 @@ Two breaks the committed contract cannot show you, and which belong here when th
   and `APCHI_MONGO_KEY_FILE` (chart: `mongodb.tls.certificateKey`, `.keyKey`), joined by Apchi
   into one private file whatever newline either ends with. One combined file still works.
 - The chart sets `enableServiceLinks: false`.
+- **`/docs` and `/redoc` work without internet access.** Swagger UI 5.34.1 and Redoc 2.5.4 are
+  served from the image instead of a public CDN, and Redoc no longer loads Google Fonts.
+- **The chart's CA bundle can come from a ConfigMap** (`pod.caBundle.configMap`), such as
+  OpenShift's injected trusted-CA bundle.
 - **Apchi runs on OpenShift's `restricted-v2`.** The image runs as any uid: its tree belongs
   to group 0 and its `USER` is the number `10001`. Every pod the chart renders now sets
   `runAsNonRoot`, the `RuntimeDefault` seccomp profile, no privilege escalation and every

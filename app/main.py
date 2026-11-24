@@ -21,6 +21,7 @@ from app.api.catalogs import router as catalogs_router
 from app.api.certificate_mapping import router as certificate_mapping_router
 from app.api.client_certificates import router as certificates_router
 from app.api.deps import AdminOnly, Authenticated
+from app.api.docs import install_docs
 from app.api.event_listeners import router as event_listeners_router
 from app.api.health import router as health_router
 from app.api.permissions import router as permissions_router
@@ -203,7 +204,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version=VERSION,
         summary="Control plane for configuring one Trino cluster",
         lifespan=lifespan,
+        # Served by install_docs from the image instead: FastAPI's own pages load their
+        # assets from a public CDN and are blank on a network without one.
+        docs_url=None,
+        redoc_url=None,
     )
+    install_docs(app)
     app.state.settings = settings
     errors.install(app)
     # Documented on the contract rather than left to be discovered: these become reachable

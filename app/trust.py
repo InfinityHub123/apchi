@@ -135,7 +135,7 @@ def bundled_ca(ca_file: str | None) -> str | None:
         # key -- so the bare FileNotFoundError names a file nobody chose by that name.
         raise RuntimeError(
             f"Apchi cannot start: {ca_file} does not exist. It comes from ca_file -- under "
-            "Helm, pod.caBundle naming a key that Secret does not hold."
+            "Helm, pod.caBundle naming a key its Secret or ConfigMap does not hold."
         )
     handle, path = mkstemp(prefix="apchi-ca-", suffix=".pem")
     with open(handle, "wb") as bundle:

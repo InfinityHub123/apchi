@@ -120,7 +120,10 @@ spec:
             - name: APCHI_CANDIDATE_MAX_BYTES
               value: {{ .Values.candidateMaxBytes | int | quote }}
             {{- $ca := .Values.pod.caBundle }}
-            {{- if $ca.existingSecret }}
+            {{- if and $ca.existingSecret $ca.configMap }}
+            {{- fail "pod.caBundle: set existingSecret or configMap, not both" }}
+            {{- end }}
+            {{- if or $ca.existingSecret $ca.configMap }}
             # One CA for every destination below -- MongoDB, the coordinator, the OIDC
             # provider and the alert webhook -- so it is set before any of them.
             - name: APCHI_CA_FILE
@@ -261,9 +264,9 @@ spec:
           {{- with .Values.resources }}
           resources: {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret .Values.pod.caBundle.existingSecret }}
+          {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret .Values.pod.caBundle.existingSecret .Values.pod.caBundle.configMap }}
           volumeMounts:
-            {{- if .Values.pod.caBundle.existingSecret }}
+            {{- if or .Values.pod.caBundle.existingSecret .Values.pod.caBundle.configMap }}
             - name: ca-bundle
               mountPath: {{ .Values.pod.caBundle.mountPath | quote }}
               readOnly: true
@@ -279,7 +282,7 @@ spec:
               readOnly: true
             {{- end }}
           {{- end }}
-      {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret .Values.pod.caBundle.existingSecret }}
+      {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret .Values.pod.caBundle.existingSecret .Values.pod.caBundle.configMap }}
       volumes:
         {{- if .Values.pod.caBundle.existingSecret }}
         - name: ca-bundle
@@ -287,6 +290,10 @@ spec:
           # kubelet's own 0644 is correct and there is no key here to protect.
           secret:
             secretName: {{ .Values.pod.caBundle.existingSecret | quote }}
+        {{- else if .Values.pod.caBundle.configMap }}
+        - name: ca-bundle
+          configMap:
+            name: {{ .Values.pod.caBundle.configMap | quote }}
         {{- end }}
         {{- if .Values.trino.tls.existingSecret }}
         - name: trino-tls

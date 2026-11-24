@@ -79,6 +79,7 @@ nav:
       - The official Trino chart: official-trino-chart.md
       - A development cluster: deploying/trino-dev.md
       - Adopting a running cluster: deploying/trino-adopted.md
+      - OpenShift and restricted clusters: deploying/openshift.md
   - Reference:
       - HTTP API: reference/api.md
       - Apchi chart: reference/apchi-chart.md
