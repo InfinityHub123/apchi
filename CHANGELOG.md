@@ -20,6 +20,10 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.3.0 — 2026-11-24
+
 ### Breaking
 
 - **`pod.caBundle` is now `caBundle`, and mounted into every pod** -- Apchi, MongoDB, the Trino
