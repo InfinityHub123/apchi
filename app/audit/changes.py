@@ -39,7 +39,6 @@ _SECTIONS: Final[tuple[SectionName, ...]] = (
 #: mint a credential that acts as its owner.
 _BY_TAG: Final[dict[str, Category]] = {
     "admin": "admin",
-    "adoption": "admin",
     "tokens": "admin",
     "candidate": "pipeline",
     "applies": "pipeline",

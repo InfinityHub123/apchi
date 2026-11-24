@@ -204,9 +204,9 @@ async def test_a_catalog_apchi_never_managed_survives_a_rollback(
 ) -> None:
     """The rollback is a diff, so anything live and not in the Snapshot looks like
     something to remove. What separates the two is Apchi's own durable record: a catalog
-    Apchi never wrote to the Secret is not Apchi's to drop -- one that predates Apchi and
-    has not been through Adoption, or Trino's own `system`, which cannot be dropped at
-    all and would fail the rollback outright.
+    Apchi never wrote to the Secret is not Apchi's to drop -- one that predates Apchi, or
+    Trino's own `system`, which cannot be dropped at all and would fail the rollback
+    outright.
     """
     cluster = _cluster(trino_cluster)
     await cluster.create_catalog("outsider", "memory", {})

@@ -7,7 +7,6 @@ is why the Catalog DDL that references a certificate is retried rather than issu
 """
 
 import logging
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,18 +19,15 @@ from app.sections.base import (
     Cluster,
     CoordinatorDirectory,
     Delivery,
-    DiscoveredPaths,
-    Parsed,
     Resources,
     SectionPlan,
     SmokeQuery,
-    Unaccounted,
     ValidationFailure,
     unreadable_each,
 )
 from app.sections.client_certificates import SECTION
 from app.sections.client_certificates.bundle import Bundle
-from app.sections.client_certificates.generator import MOUNT_DIR, parse, render, rendered_size
+from app.sections.client_certificates.generator import MOUNT_DIR, render, rendered_size
 from app.sections.client_certificates.model import ClientCertificate, StoredBundle, describe
 
 logger = logging.getLogger(__name__)
@@ -150,41 +146,6 @@ class ClientCertificatesSection:
         self, desired: Resources, settings: Settings, admin: AdminValues
     ) -> dict[str, str]:
         return render(desired)
-
-    def discover_paths(self, settings: Settings, properties: Mapping[str, str]) -> DiscoveredPaths:
-        """A directory, and the one Section nothing in Trino's configuration points at.
-
-        Certificates are referenced from a connector's own properties as a path, so the only
-        statement of where they live is in the catalogs -- and those are #88's problem. Apchi
-        looks where Apchi would put them and says that is what it did, because on a Cluster
-        Apchi did not configure they could be anywhere, and reporting an empty directory as
-        "no certificates" would be a guess dressed as a fact.
-        """
-        return DiscoveredPaths(
-            directories={MOUNT_DIR: MOUNT_DIR},
-            why=(
-                "nothing in Trino's configuration names a certificate directory, so this is "
-                "where Apchi would mount one rather than where the Cluster says it is"
-            ),
-        )
-
-    def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
-        """An empty directory means no certificates, which mounts as an empty directory
-        anyway -- so there is nothing to distinguish and nothing to refuse.
-
-        Metadata is not recovered here because it is not stored: `describe` derives the CN,
-        subject, issuer and expiry from the certificate on every read, so a parsed
-        certificate reports the same things an uploaded one does, from the same bytes. A
-        parse that carried metadata of its own would be a second truth about an expiry.
-        """
-        resources, unaccounted = parse(files)
-        return Parsed(
-            resources=resources,
-            unaccounted=tuple(
-                Unaccounted(path=path, what=what, content=content)
-                for path, what, content in unaccounted
-            ),
-        )
 
     def read_back(self, resources: Resources) -> list[ValidationFailure]:
         """Read as a stored bundle rather than as a `ClientCertificate`: describing one

@@ -390,15 +390,6 @@ mongodb:
 # The Secrets Apchi generates configuration into. These must be the names the Trino
 # deployment mounts -- Apchi writes them, Trino reads them, and nothing reconciles a
 # disagreement.
-# Where Apchi records the highest Snapshot number it has ever committed. Adoption reads it,
-# and nothing else does: an empty `snapshots` collection is both a Cluster that was never
-# managed and one whose database is empty right now, and adopting the second renumbers it
-# from Snapshot 1. A ConfigMap rather than a Secret: it holds a number.
-#
-# Apchi creates and updates it directly, so it is not part of this release and `helm
-# uninstall` leaves it behind. That is correct: the next install into this namespace should
-# find it. Default: <release>-high-water.
-highWaterConfigMap: ""
 
 secrets:
   catalogSeed: trino-catalog-seed
@@ -469,8 +460,8 @@ alertWebhookUrl: ""
 # They are pre-install hooks, so they exist before the coordinator this chart also runs:
 # Trino mounts these and will not start without two of them.
 #
-# Set create: false when the Secrets already exist -- adopting a Cluster, or a second Apchi
-# release against one that is already configured.
+# Set create: false when the Secrets already exist -- a second Apchi release against a Cluster
+# that is already configured.
 bootstrap:
   create: true
   # The catalogs the Cluster comes up with before Apchi has ever applied. Normally empty:

@@ -5,7 +5,6 @@ never rereads the file, so a change is adopted only by a new pod.
 """
 
 import logging
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from app.adapters.trino import Trino
@@ -17,13 +16,9 @@ from app.sections.base import (
     Cluster,
     CoordinatorFile,
     Delivery,
-    DiscoveredPaths,
-    Parsed,
-    ParseProblem,
     Resources,
     SectionPlan,
     SmokeQuery,
-    Unaccounted,
     ValidationFailure,
     unreadable,
     unreadable_each,
@@ -32,11 +27,9 @@ from app.sections.resource_groups import SECTION, SELECTORS, SEPARATOR, SETTINGS
 from app.sections.resource_groups.generator import (
     MANAGER_PATH,
     RULES_PATH,
-    Unreadable,
     children_of,
     groups_of,
     parent_of,
-    parse_rules,
     render,
     selectors_of,
     settings_of,
@@ -180,68 +173,6 @@ class ResourceGroupsSection:
         self, desired: Resources, settings: Settings, admin: AdminValues
     ) -> dict[str, str]:
         return render(desired)
-
-    def discover_paths(self, settings: Settings, properties: Mapping[str, str]) -> DiscoveredPaths:
-        """`resource-groups.config-file` names the rules, and the properties file that names
-        it is at a fixed path of its own.
-
-        Both are read, because a mismatch between them is worth reporting: Trino reads
-        whatever `config-file` points at, so a properties file naming something other than
-        the rules Apchi found means the rules Apchi found are not the rules in force.
-        """
-        ours = RULES_PATH
-        named = properties.get("resource-groups.config-file")
-        if named:
-            return DiscoveredPaths(files={ours: named, MANAGER_PATH: MANAGER_PATH})
-        return DiscoveredPaths(
-            files={ours: ours, MANAGER_PATH: MANAGER_PATH},
-            why=(
-                "no resource-groups.config-file property was found, so this is where Apchi "
-                "would put the rules rather than where the Cluster says they are"
-            ),
-        )
-
-    def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
-        """Both files absent means no Resource Groups, which is how this Section says so.
-
-        The rules file is the configuration; the properties file only points at it. So the
-        rules being absent is "nothing configured" whatever the properties file says, and a
-        properties file pointing somewhere else is reported rather than followed -- Apchi
-        reading a file it does not own would be reading the Admin's configuration as if it
-        were an Operator's.
-        """
-        ours = RULES_PATH
-        rules = files.get(ours)
-        manager = files.get(MANAGER_PATH)
-        if rules is None:
-            if manager is None:
-                return Parsed()
-            return Parsed(
-                unaccounted=(
-                    Unaccounted(
-                        path=MANAGER_PATH,
-                        what="Trino is told to read a resource groups file that is not there",
-                        content=manager,
-                    ),
-                )
-            )
-        try:
-            resources, unaccounted = parse_rules(ours, rules)
-        except Unreadable as exc:
-            raise ParseProblem(exc.path, exc.reason) from exc
-
-        # Nothing is reported about a properties file that is not the one Apchi writes,
-        # though an earlier version did. It fired on every Cluster being adopted and said
-        # nothing true: the Admin's properties file names the Admin's rules, and those are
-        # the rules discovery just read -- so they *are* the rules in force. The divergence
-        # that matters is that Trino reads them from somewhere Apchi does not write, and the
-        # cutover check reports that, where there is something actionable to say about it.
-        return Parsed(
-            resources=resources,
-            unaccounted=tuple(
-                Unaccounted(path=ours, what=what, content=content) for what, content in unaccounted
-            ),
-        )
 
     def read_back(self, resources: Resources) -> list[ValidationFailure]:
         """Three shapes, not one: the groups by path, and the two reserved keys.

@@ -13,7 +13,7 @@ raised: the pipeline decides what a failure means to the Apply it is running.
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
-from typing import Any, Protocol, TypeGuard
+from typing import Any, Protocol
 
 from pydantic import BaseModel, ValidationError
 
@@ -27,70 +27,6 @@ from app.sections.admin import AdminValues
 #: by resource name. Deliberately untyped here: the shape belongs to the Section's own
 #: model, and the pipeline never looks inside it.
 Resources = dict[str, Any]
-
-
-class ParseProblem(Exception):
-    """A file Apchi cannot read at all.
-
-    Distinct from something in a file Apchi has no vocabulary for, which is `Unaccounted`
-    and is a report rather than a failure. This is the file being unreadable: not JSON, not
-    the shape the Section generates, a value where a list belongs. Carries the path, because
-    "could not parse" without one sends an Admin reading the wrong file.
-    """
-
-    def __init__(self, path: str, reason: str) -> None:
-        self.path = path
-        self.reason = reason
-        super().__init__(f"{path}: {reason}")
-
-
-@dataclass(frozen=True)
-class Unaccounted:
-    """Something a Section read and cannot express.
-
-    Apchi's models are deliberately smaller than Trino's file formats, so a file an Admin
-    wrote by hand will contain things no Section resource can hold -- a rule type Apchi does
-    not model, a property it does not curate, a second pattern where it has room for one.
-
-    Reported rather than dropped, because dropping is the one outcome that must not happen:
-    Adoption would import a configuration missing a piece, and the first Apply would then
-    delete that piece from the Cluster. What becomes of these -- preserved as an Admin value
-    or refused -- is §15's decision and not a Section's.
-
-    `content` is the thing itself, so whatever preserves it later does not have to parse the
-    file a second time to find it.
-    """
-
-    path: str
-    what: str
-    content: Any = None
-
-
-@dataclass(frozen=True)
-class Parsed:
-    """What a Section read out of the Cluster's files."""
-
-    resources: Resources = field(default_factory=dict)
-    unaccounted: tuple[Unaccounted, ...] = ()
-    #: What this Section read that belongs to the **Admin** rather than the Candidate.
-    #:
-    #: A third outcome, and not a problem: invariant 9 says Admin values are applied and
-    #: never recorded in a Snapshot, so configuration a Cluster had that Apchi's models
-    #: cannot express is neither a resource nor a fault -- it is preserved beneath the
-    #: Operator's own and removed by an Admin when the migration is done (§13.3, §15).
-    #:
-    #: Reporting it as `unaccounted` would make a successfully adopted Cluster look
-    #: incomplete forever, and dropping it would take access away from people on the day
-    #: their Cluster was onboarded.
-    admin: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def complete(self) -> bool:
-        """Whether everything in the files is something Apchi can hold.
-
-        Admin values do not count against it: they are held, just not by the Candidate.
-        """
-        return not self.unaccounted
 
 
 class ValidationFailure(BaseModel):
@@ -290,89 +226,6 @@ class SectionPlan(Protocol):
     def summary(self) -> str: ...
 
 
-@dataclass(frozen=True)
-class DiscoveredPaths:
-    """Where a Section's configuration is, mapped to where Apchi would keep it.
-
-    Both halves are needed and they are usually different, which is the whole difficulty of
-    Adoption. The **key** is the path Apchi writes and `parse_files` expects; the **value**
-    is where that file actually is on this Cluster. A parser handed content under the Admin's
-    path would look up Apchi's path, find nothing, and report a Section with no configuration
-    -- which is the one failure Adoption must never produce.
-
-    `files` are read individually. `directories` are listed, because for some Sections the
-    question is "what is in here" rather than "what is at this path": client certificates are
-    a directory whose contents *are* the configuration.
-
-    `why` explains a path Apchi guessed rather than read from the Cluster, so a discovery can
-    say "I looked here because this is where Apchi would put it, not because your Cluster
-    told me" -- and an empty result is not mistaken for a fact.
-    """
-
-    files: Mapping[str, str] = field(default_factory=dict)
-    directories: Mapping[str, str] = field(default_factory=dict)
-    why: str | None = None
-
-    @property
-    def everywhere_looked(self) -> list[str]:
-        """The actual paths, which is what an Operator wants to see."""
-        return sorted({*self.files.values(), *self.directories.values()})
-
-
-class ParsesFiles(Protocol):
-    """A Section that can read its own files back: the inverse of `render_files`.
-
-    Deliberately separate from `Section` rather than part of it, because it is not yet true
-    of every Section. Catalogs and Permissions each have a problem of their own -- a
-    catalog's properties cannot be read out of Trino at all, and a hand-written rules file
-    says more than Apchi's grants can express -- and until those are solved the type system
-    should say which Sections can be parsed rather than let a stub claim they all can.
-
-    Nothing in Apchi read Trino configuration before Adoption (§15), and the reason it has
-    to now is that Trino cannot be asked: a catalog's properties, a rules file, a selector
-    list -- none of them can be read back out of a running coordinator, so the only place a
-    Cluster's configuration can be recovered from is the files themselves.
-    """
-
-    name: SectionName
-
-    def render_files(
-        self, desired: Resources, settings: Settings, admin: AdminValues
-    ) -> dict[str, str]:
-        """The other direction. Part of this protocol rather than only of `Section` because
-        the round trip is what makes a parser trustworthy: Adoption regenerates what it
-        parsed and compares, since a parse that silently drops a field would have that field
-        deleted from the Cluster by the first Apply."""
-        ...
-
-    def discover_paths(self, settings: Settings, properties: Mapping[str, str]) -> DiscoveredPaths:
-        """Where this Section's configuration is on a Cluster Apchi has not configured.
-
-        `render_files` declares where Apchi *puts* its files. This answers the different
-        question Adoption asks: where are they **now**, on a Cluster whose files an Admin
-        placed and named. Usually somewhere else, and the only authority on where is Trino's
-        own configuration -- `security.config-file` says where the rules are,
-        `resource-groups.config-file` says where the resource groups are.
-
-        `properties` is the coordinator's configuration as Apchi managed to read it, merged
-        across the property files it found. A Section finds its own path in there and falls
-        back to where Apchi would put it, because a Cluster part-way through onboarding has
-        some of each.
-        """
-        ...
-
-    def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
-        """`files` is keyed by the paths this Section declares, and a path the Cluster does
-        not have is simply absent -- a legitimate state, not an error, since half the
-        Sections express "nothing configured" as the absence of their file.
-
-        Raises `ParseProblem` for a file it cannot read. Returns `Unaccounted` for anything
-        it read and cannot hold: the difference matters, because the first is an Admin's
-        file being wrong and the second is Apchi's model being smaller than Trino's.
-        """
-        ...
-
-
 class Section(Protocol):
     """One managed area of a Configuration Candidate."""
 
@@ -467,13 +320,3 @@ class Section(Protocol):
         whose adoption is visible in what became of a real query.
         """
         ...
-
-
-def parses_files(section: Section) -> TypeGuard[ParsesFiles]:
-    """Whether this Section can read its files back yet.
-
-    A runtime question for as long as two Sections cannot, and the honest alternative to a
-    stub that returns nothing and looks like a Cluster with no catalogs. A TypeGuard, so a
-    caller that checks gets the narrower type and one that forgets does not type-check.
-    """
-    return hasattr(section, "parse_files")
