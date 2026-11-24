@@ -13,6 +13,12 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
+    {{- if .Values.trino.https.enabled }}
+    - port: {{ .Values.trino.https.port }}
+      targetPort: https
+      protocol: TCP
+      name: https
+    {{- end }}
   selector:
     {{- include "trino.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: coordinator

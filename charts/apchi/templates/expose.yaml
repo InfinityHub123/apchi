@@ -1,0 +1,16 @@
+{{- include "apchi.exposure" (dict
+      "root" .
+      "component" "apchi"
+      "exposure" .Values.expose.apchi
+      "name" (include "apchi.fullname" .)
+      "service" (include "apchi.fullname" .)
+      "labels" (include "apchi.labels" .)
+      "https" false) }}
+{{- include "apchi.exposure" (dict
+      "root" .
+      "component" "trino"
+      "exposure" .Values.expose.trino
+      "name" (include "trino.fullname" .)
+      "service" (include "trino.fullname" .)
+      "labels" (include "trino.labels" .)
+      "https" .Values.trino.https.enabled) }}
