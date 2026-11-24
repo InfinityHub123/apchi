@@ -99,13 +99,19 @@ can.
 | `image.tag` | chart `appVersion` (`483`) | Apchi is developed and tested against 483 |
 | `trino.environment` | `production` | `node.environment`; lowercase alphanumeric and underscores only |
 | `trino.jvm.maxHeapSize` | `2G` | Per node |
+| `trino.fsGroup` | `1000` | The group that owns the credential volumes, which are `0640`. On OpenShift's `restricted-v2` it must be a group the namespace allows -- the first of its `openshift.io/sa.scc.supplemental-groups` annotation -- or the pods are refused. `null` renders none, which Apchi accepts only with its `restrictedPodSecurity` set. See [OpenShift and other restricted clusters](../../docs/deploying/openshift.md) |
 | `trino.securityRefreshPeriod` | `30s` | How soon a permission change takes effect. Lower is a faster Apply and more file reads |
 | `authentication.type` | `insecure` | `certificate` for production. Both feed the same file to the same parser; Trino rejects the certificate variant unless certificate authentication is configured (§13.3) |
 | `fullnameOverride` | `""` | Pins the Deployment names Apchi is configured with, independently of the release name |
 | `trino.additionalCoordinatorProperties` | `[]` | Verbatim into `config.properties`. Properties Apchi owns are not yours to set here, and the preconditions will say so |
 
 `coordinator.*` and `worker.*` also take `resources`, `nodeSelector`, `tolerations`,
-`affinity` and `podAnnotations`.
+`affinity` and `podAnnotations`, and `coordinator.seedResources` sets the catalog-seeding
+initContainer's. Each renders nothing when empty.
+
+Both roles run with a writable `emptyDir` at `/data/trino`, which `node.properties` names as
+`node.data-dir`: the launcher writes its pid file and an `etc` symlink there, and the image's
+own copy belongs to uid 1000, so without it Trino cannot start as any other uid.
 
 ## What this chart does not do
 

@@ -277,9 +277,10 @@ class Settings(BaseSettings):
     #: OpenShift's restricted-v2 SCC does. Credential files are then readable only if they
     #: are world-readable, because nothing Apchi may set gives a group to the process that
     #: reads them. So under this setting Apchi accepts 0644 credential mounts on the Trino
-    #: pods instead of refusing them, and builds its Validation pod with no `fsGroup` and
-    #: the securityContext such a cluster demands. Off, Apchi keeps the stricter 0640 with
-    #: a group, which every other cluster can provide. §13.2.
+    #: pods instead of refusing them, and builds its Validation pod with no `fsGroup` and a
+    #: writable data directory. The rest of the securityContext such a cluster demands it
+    #: adds itself. Off, Apchi keeps the stricter 0640 with a group, which every other
+    #: cluster can provide. §13.2.
     restricted_pod_security: bool = False
 
     #: Where a failed Auto Rollback is reported -- a Mattermost or Slack incoming

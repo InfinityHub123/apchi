@@ -98,6 +98,9 @@ spec:
             # this directory itself and those mounts are always read-only, so every
             # CREATE CATALOG would fail. Apchi asserts that too.
             - {name: catalog-store, mountPath: /data/trino/catalogs}
+            # node.data-dir. The catalog store above is mounted inside it, separately,
+            # because it is the seed initContainer's to fill.
+            - {name: data, mountPath: /data/trino}
       volumes:
         - {name: config, configMap: {name: trino-config}}
         - {name: access-control, secret: {secretName: trino-access-control}}
@@ -111,6 +114,10 @@ spec:
         - {name: client-certificates, secret: {secretName: trino-client-certificates, defaultMode: 0640}}
         # Ephemeral by design. Durability lives in the catalog seed Secret, not here.
         - {name: catalog-store, emptyDir: {}}
+        # Writable by whatever uid the pod is given. The launcher writes its pid file under
+        # it and creates `etc`, a symlink to /etc/trino, at its root -- so the whole data
+        # directory has to be writable, not only var/. The image's own belongs to uid 1000.
+        - {name: data, emptyDir: {}}
         # No volume for the resource-groups or event-listener Secrets. For both of them the
         # absence of the mount is how "none configured" is expressed -- Trino refuses to
         # start if a file it was told to read is missing -- so Apchi adds and removes those
