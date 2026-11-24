@@ -148,7 +148,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: APCHI_TRINO_URL
-              value: {{ .Values.trino.url | quote }}
+              value: {{ include "trino.url" . | quote }}
             {{- $tls := .Values.trino.tls }}
             {{- if $tls.existingSecret }}
             # Each path is the mount point plus the Secret's own key, so a file is named
@@ -162,12 +162,14 @@ spec:
             {{- end }}
             - name: APCHI_TRINO_USER
               value: {{ .Values.trino.user | quote }}
+            # The Trino this chart runs, by the same helpers that name it, so the two cannot
+            # disagree.
             - name: APCHI_COORDINATOR_DEPLOYMENT_NAME
-              value: {{ .Values.trino.coordinatorDeployment | quote }}
+              value: {{ include "trino.coordinatorName" . | quote }}
             - name: APCHI_WORKER_DEPLOYMENT_NAME
-              value: {{ .Values.trino.workerDeployment | quote }}
+              value: {{ include "trino.workerName" . | quote }}
             - name: APCHI_TRINO_CONTAINER_NAME
-              value: {{ .Values.trino.containerName | quote }}
+              value: "trino"
             - name: APCHI_CATALOG_STORE_DIR
               value: {{ .Values.trino.catalogStoreDir | quote }}
             - name: APCHI_VERIFICATION_CATALOG

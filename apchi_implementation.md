@@ -1702,7 +1702,7 @@ manifest should see the whole list.
 
 ## Deployment shapes
 
-Apchi supports one: **file-by-file**, which `charts/trino` and `deploy/trino-dev` use. Each file
+Apchi supports one: **file-by-file**, which the chart's Trino and `deploy/trino-dev` use. Each file
 in `/etc/trino` is its own mount, so Apchi can add and remove single-file mounts inside it.
 
 The other shape in the wild -- one ConfigMap mounted over the whole of `/etc/trino`, which the

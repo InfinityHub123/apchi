@@ -7,9 +7,9 @@ metadata:
   name: {{ include "trino.fullname" . }}
   labels: {{- include "trino.labels" . | nindent 4 }}
 spec:
-  type: {{ .Values.service.type }}
+  type: {{ .Values.trino.service.type }}
   ports:
-    - port: {{ .Values.service.port }}
+    - port: {{ .Values.trino.service.port }}
       targetPort: http
       protocol: TCP
       name: http

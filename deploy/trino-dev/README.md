@@ -1,16 +1,17 @@
 # Trino deployment for the end-to-end tests
 
-The same Trino `charts/trino` installs, as raw manifests. It exists because the tier 2
+The same Trino `charts/apchi` installs, as raw manifests. It exists because the tier 2
 suite needs a fixture it can apply and reset in seconds without a Helm release in the way,
 and because `tests/tier2/conftest.py` restores the Cluster to these exact manifests between
 tests (#53).
 
-**For installing Trino, use `charts/trino`.** It is the same deployment with values, a
-bootstrap that survives `helm upgrade`, and a CI gate that runs Apchi's own preconditions
-against what it renders.
+**For installing, use `charts/apchi`.** It is the same deployment with values, Apchi beside
+it, a bootstrap that survives `helm upgrade`, and a CI gate that runs Apchi's own
+preconditions against what it renders.
 
 They cannot disagree, because these manifests are **generated from the chart**.
-`scripts/export_trino_dev.py` renders `charts/trino` with `deploy/trino-dev.values.yaml` and
+`scripts/export_trino_dev.py` renders the Trino part of `charts/apchi` with
+`deploy/trino-dev.values.yaml` and
 writes `00-config.yaml`, `10-coordinator.yaml` and `20-worker.yaml`; CI fails on a diff. Edit
 the chart or the values and regenerate — never these three files.
 
@@ -28,10 +29,9 @@ generated output. If you have a cluster from before that, `kubectl apply` will r
 Deployments with `spec.selector: field is immutable` — delete them once and re-apply. The
 tier 2 fixture does this for you.
 
-`01-secrets.yaml` is the one file here written by hand, and there is no chart to generate it
-from: `charts/trino` creates no Secrets, because they hold configuration Apchi writes and
-Apchi's chart creates them. Tier 2 does not install Apchi's chart, so the fixture ships its
-own copies.
+`01-secrets.yaml` is the one file here written by hand. The chart creates these Secrets as
+install hooks, beside Apchi; tier 2 runs Apchi on the test host and installs no chart, so the
+fixture ships its own copies.
 
 `05-access-control.yaml` and `06-user-mapping.yaml` are **generated** —
 `scripts/export_access_control.py` and `scripts/export_user_mapping.py` write them from Apchi's
@@ -84,7 +84,7 @@ fails with `mkdir: Permission denied` before Trino starts. `/data/trino` is trin
 **`access-control.name` belongs only in `access-control.properties`.** In
 `config.properties` it is rejected with _"Did you mean to use 'access-control.config-files'?"_
 
-A fifth, found while writing `charts/trino`: **each configuration file is mounted
+A fifth, found while writing the Trino chart: **each configuration file is mounted
 separately, deliberately.** One mount of the whole `/etc/trino` directory would be more
 idiomatic, and these manifests would then need different settings — Kubernetes will not place
 a single file inside a read-only directory volume, and the container fails with
@@ -113,5 +113,5 @@ Verified on Kubernetes v1.35.1 with Trino 483:
 ## Not production
 
 One replica each, no TLS, no authentication, `tpch` as the seeded catalog, and Apchi's
-identity is the literal string `apchi`. `charts/trino` is the one to install; this is the
+identity is the literal string `apchi`. `charts/apchi` is the one to install; this is the
 test fixture.

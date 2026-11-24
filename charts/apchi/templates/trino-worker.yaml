@@ -6,7 +6,7 @@ metadata:
     {{- include "trino.labels" . | nindent 4 }}
     app.kubernetes.io/component: worker
 spec:
-  replicas: {{ .Values.worker.replicas }}
+  replicas: {{ .Values.trino.worker.replicas }}
   selector:
     matchLabels:
       {{- include "trino.selectorLabels" . | nindent 6 }}
@@ -16,7 +16,7 @@ spec:
       labels:
         {{- include "trino.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: worker
-      {{- with .Values.worker.podAnnotations }}
+      {{- with .Values.trino.worker.podAnnotations }}
       annotations: {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
@@ -32,7 +32,7 @@ spec:
       containers:
         - name: trino
           image: {{ include "trino.image" . | quote }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.trino.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.trino.httpPort }}
               name: http
@@ -40,9 +40,9 @@ spec:
             # The worker count Apchi's Verification expects comes from this Deployment's
             # ready replicas, so the probe is what decides whether a worker counts.
             exec: {command: ["/usr/lib/trino/bin/health-check"]}
-            initialDelaySeconds: {{ .Values.worker.readinessProbe.initialDelaySeconds }}
-            periodSeconds: {{ .Values.worker.readinessProbe.periodSeconds }}
-            failureThreshold: {{ .Values.worker.readinessProbe.failureThreshold }}
+            initialDelaySeconds: {{ .Values.trino.worker.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.trino.worker.readinessProbe.periodSeconds }}
+            failureThreshold: {{ .Values.trino.worker.readinessProbe.failureThreshold }}
           volumeMounts:
             - {name: config, mountPath: /etc/trino/config.properties, subPath: worker-config.properties}
             - {name: config, mountPath: /etc/trino/node.properties, subPath: node.properties}
@@ -55,7 +55,7 @@ spec:
             - {name: client-certificates, mountPath: /etc/trino/certs, readOnly: true}
             # node.data-dir, writable by whatever uid the pod is given. See the coordinator.
             - {name: data, mountPath: /data/trino}
-          {{- with .Values.worker.resources }}
+          {{- with .Values.trino.worker.resources }}
           resources: {{- toYaml . | nindent 12 }}
           {{- end }}
       volumes:
@@ -63,12 +63,12 @@ spec:
         # Private keys, so not world-readable. 0640 with the fsGroup above. §13.2.
         - {name: client-certificates, secret: {secretName: {{ .Values.secrets.clientCertificates }}, defaultMode: 0640}}
         - {name: data, emptyDir: {}}
-      {{- with .Values.worker.nodeSelector }}
+      {{- with .Values.trino.worker.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.worker.tolerations }}
+      {{- with .Values.trino.worker.tolerations }}
       tolerations: {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.worker.affinity }}
+      {{- with .Values.trino.worker.affinity }}
       affinity: {{- toYaml . | nindent 8 }}
       {{- end }}
