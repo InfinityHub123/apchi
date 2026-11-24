@@ -20,11 +20,13 @@ spec:
       annotations: {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      {{- with .Values.trino.fsGroup }}
       # The group that owns Apchi's Secret volumes. Without it the 0640 below is
       # root:root, which the `trino` user cannot read -- including the seed initContainer,
       # which runs as the image's user too. See values.yaml for the measurements.
       securityContext:
-        fsGroup: {{ .Values.trino.fsGroup }}
+        fsGroup: {{ . }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -47,6 +49,9 @@ spec:
           volumeMounts:
             - {name: catalog-seed, mountPath: /data/trino/catalog-seed, readOnly: true}
             - {name: catalog-store, mountPath: {{ .Values.trino.catalogStoreDir }}}
+          {{- with .Values.coordinator.seedResources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
       containers:
         - name: trino
           image: {{ include "trino.image" . | quote }}
@@ -94,6 +99,9 @@ spec:
             # this directory itself and those mounts are always read-only, so every
             # CREATE CATALOG would fail. Apchi asserts that too.
             - {name: catalog-store, mountPath: {{ .Values.trino.catalogStoreDir }}}
+            # node.data-dir. The catalog store above is mounted inside it, separately,
+            # because it is the seed initContainer's to fill.
+            - {name: data, mountPath: /data/trino}
           {{- with .Values.coordinator.resources }}
           resources: {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -110,6 +118,10 @@ spec:
         - {name: client-certificates, secret: {secretName: {{ .Values.secrets.clientCertificates }}, defaultMode: 0640}}
         # Ephemeral by design. Durability lives in the catalog seed Secret, not here.
         - {name: catalog-store, emptyDir: {}}
+        # Writable by whatever uid the pod is given. The launcher writes its pid file under
+        # it and creates `etc`, a symlink to /etc/trino, at its root -- so the whole data
+        # directory has to be writable, not only var/. The image's own belongs to uid 1000.
+        - {name: data, emptyDir: {}}
         # No volume for the resource-groups or event-listener Secrets. For both of them the
         # absence of the mount is how "none configured" is expressed -- Trino refuses to
         # start if a file it was told to read is missing -- so Apchi adds and removes those

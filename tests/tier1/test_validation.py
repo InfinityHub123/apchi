@@ -303,8 +303,8 @@ async def test_orphaned_validation_pods_are_swept_at_startup(
 async def test_the_probe_is_built_the_way_the_settings_say(
     settings: Settings, fake_kubernetes: FakeKubernetes, trino_cluster: DockerContainer
 ) -> None:
-    """End to end from Settings, as the chart sets them: restricted-v2's shape and the
-    configured resources reach the pod Apchi actually creates."""
+    """End to end from Settings, as the chart sets them: no fsGroup under restricted pod
+    security, and the configured resources, on the pod Apchi actually creates."""
     fake_kubernetes.pod_never_serves = True
     restricted = settings.model_copy(
         update={
@@ -319,6 +319,5 @@ async def test_the_probe_is_built_the_way_the_settings_say(
         await _validation(client)
 
     spec = next(iter(fake_kubernetes.pod_manifests.values()))["spec"]
-    assert "fsGroup" not in spec["securityContext"]
-    assert spec["securityContext"]["runAsNonRoot"] is True
+    assert "securityContext" not in spec
     assert spec["containers"][0]["resources"] == {"limits": {"cpu": 2, "memory": "2Gi"}}

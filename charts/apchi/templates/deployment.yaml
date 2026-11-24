@@ -26,19 +26,15 @@ spec:
       # own Service is called apchi -- so every pod gets APCHI_PORT, APCHI_SERVICE_HOST and
       # sixteen more that are not settings. Apchi tolerates them; it is simply noise.
       enableServiceLinks: false
-      # restricted-v2's shape, on every cluster: it costs nothing where it is not enforced, and
-      # the image's USER is numeric so the kubelet can verify runAsNonRoot without a uid.
+      {{- if and (or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret) (not .Values.restrictedPodSecurity) }}
+      # A Secret volume's files are root-owned whatever their mode, so a key restricted to
+      # 0640 is unreadable to uid 10001 without this. Only rendered when something is
+      # mounted: an fsGroup on a pod with no volumes changes nothing and would still cost
+      # every install a restart. Never under restrictedPodSecurity, where the platform
+      # assigns the group.
       securityContext:
-        runAsNonRoot: true
-        seccompProfile:
-          type: RuntimeDefault
-        {{- if and (or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret) (not .Values.restrictedPodSecurity) }}
-        # A Secret volume's files are root-owned whatever their mode, so a key restricted to
-        # 0640 is unreadable to uid 10001 without this. Only rendered when something is
-        # mounted: an fsGroup on a pod with no volumes changes nothing and would still cost
-        # every install a restart.
         fsGroup: {{ .Values.pod.fsGroup }}
-        {{- end }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -46,10 +42,6 @@ spec:
         - name: apchi
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: [ALL]
           ports:
             - containerPort: 8000
               name: http

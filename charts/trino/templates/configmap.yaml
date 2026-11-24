@@ -25,8 +25,13 @@ data:
     {{- range .Values.trino.additionalWorkerProperties }}
     {{ . }}
     {{- end }}
+  # The image's own node.properties sets node.data-dir too, and this file replaces it whole.
+  # Without the line the launcher falls back to /usr/lib/trino for its pid file and its
+  # `etc` symlink, which only uid 1000 can write -- so under an arbitrary uid, OpenShift's,
+  # Trino never starts. Both Deployments mount a writable volume there.
   node.properties: |
     node.environment={{ .Values.trino.environment }}
+    node.data-dir=/data/trino
   jvm.config: |
     -server
     -Xmx{{ .Values.trino.jvm.maxHeapSize }}

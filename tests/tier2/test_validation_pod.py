@@ -37,9 +37,8 @@ TRINO_IMAGE = "trinodb/trino:483"
 def _manifest(
     name: str, image: str, deadline: int, files: dict[str, str] | None = None
 ) -> dict[str, object]:
-    """The probe as this cluster's Apchi would build it. CI runs tier 2 under an emulation
-    of restricted-v2, which refuses the fsGroup shape outright, so the shape follows the
-    same settings Apchi itself reads."""
+    """The probe as this cluster's Apchi would build it, from the same settings Apchi itself
+    reads -- so tier 2 can be pointed at a restricted cluster with APCHI_RESTRICTED_POD_SECURITY."""
     settings = Settings()
     return validation_manifest(
         name,

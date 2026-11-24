@@ -20,6 +20,20 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+- **The bundled Trino chart starts under an arbitrary uid.** Its `node.properties` replaced
+  the image's whole and dropped `node.data-dir`, so the launcher fell back to
+  `/usr/lib/trino`, which only uid 1000 can write. It now sets `node.data-dir=/data/trino`
+  and mounts a writable `emptyDir` there on both roles. `trino.fsGroup: null` renders no
+  `fsGroup`, and `coordinator.seedResources` gives the seed initContainer requests and
+  limits.
+- **Neither chart nor the Validation pod sets a security context any more**, beyond the
+  `fsGroup` they always had. 0.2.0 added `runAsNonRoot`, the seccomp profile and dropped
+  capabilities. OpenShift adds those itself, so the charts no longer duplicate them. Under
+  `restrictedPodSecurity` the Validation pod still carries no `fsGroup` and a writable
+  `/data/trino`, which the platform cannot supply.
+
+## 0.2.0 — 2026-11-24
+
 ### Breaking
 
 - **Apchi refuses to start on an `APCHI_` variable it does not read**, naming it and the
