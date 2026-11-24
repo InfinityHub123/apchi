@@ -128,13 +128,14 @@ serviceAccount:
 rbac:
   create: true
 
-# np | test | prep | prod. Decides the log level and format unless logging overrides
-# them: DEBUG and console in np and test, INFO and JSON in prep and prod.
-environment: np
+# Deprecated, and removed in the next release: set logging.level and logging.json instead.
+# While set, np and test still mean DEBUG and prep and prod mean INFO and JSON, and Apchi logs
+# a warning. Any value is accepted -- it no longer has to be one of those four.
+environment: null
 
 logging:
-  # Null means "derive from environment". An explicit value always wins, so the level
-  # can be raised during an incident without a rebuild.
+  # INFO and console lines when null. An explicit value can be raised during an incident
+  # without a rebuild.
   level: null
   json: null
   # Debugging mode: DEBUG unless level says otherwise, every line naming the code it came
@@ -188,6 +189,23 @@ trino:
   # The catalog the Verification smoke query runs against.
   verificationCatalog: system
 
+# Set on a cluster that forbids pinning fsGroup and assigns each pod an arbitrary uid:
+# OpenShift's restricted-v2 SCC. Three things change, all because a mounted file can then
+# reach the process only by being world-readable:
+#
+# - Apchi's own pod renders no fsGroup and mounts its credentials 0644, ignoring
+#   pod.fsGroup and pod.credentialFileMode.
+# - The Validation pod Apchi creates carries no fsGroup either, plus the securityContext
+#   restricted-v2 demands. Give it limits under validation.resources if your cluster
+#   requires them.
+# - Apchi accepts 0644 credential mounts on the Trino pods, where it otherwise refuses
+#   anything looser than 0640 with an fsGroup. It still refuses a writable one.
+#
+# Every pod this chart renders is restricted-v2's shape either way -- runAsNonRoot, the
+# RuntimeDefault seccomp profile, no privilege escalation, every capability dropped -- and
+# the image runs as any uid. This setting only decides what happens to file modes.
+restrictedPodSecurity: false
+
 # What Apchi's own pod runs as, and how it mounts its own credentials. Shared by both the
 # `trino.tls` and `mongodb.tls` blocks, because a Secret volume's files are root-owned
 # whatever their mode -- so the group has to be one Apchi's process belongs to, and two
@@ -211,8 +229,16 @@ pod:
   #
   # Deliberately not restricted and given no fsGroup: this is a list of public certificates,
   # so the kubelet's own 0644 is right and there is no key here to protect.
+  #
+  # From a Secret or from a ConfigMap, whichever holds it. On OpenShift that is a ConfigMap:
+  # one labelled `config.openshift.io/inject-trusted-cabundle: "true"` is filled by the
+  # platform with the cluster's trusted CAs under the key `ca-bundle.crt`. Named here
+  # rather than looked up: Helm's `lookup` finds nothing under `helm template`, `--dry-run`
+  # or Argo CD, so the same values would render a different pod depending on how the chart
+  # was installed. Neither set means no CA beyond the public store.
   caBundle:
     existingSecret: ""
+    configMap: ""
     key: ca.crt
     mountPath: /etc/apchi/ca
 
@@ -235,6 +261,12 @@ mongodb:
     #
     # Either this or caKey on its own turns TLS on.
     certificateKeyKey: ""
+    # Or the certificate and its key as two keys of the same Secret, which is how most
+    # issuers write them (`tls.crt` and `tls.key` from cert-manager). Apchi joins the two
+    # itself as it starts, so nothing has to concatenate them first. Both or neither, and
+    # not alongside certificateKeyKey.
+    certificateKey: ""
+    keyKey: ""
     mountPath: /etc/apchi/mongo-tls
   # true deploys a single-replica MongoDB on an emptyDir alongside Apchi, for trying
   # Apchi out. It loses every Snapshot when its pod restarts. Point `uri` at a real
@@ -317,6 +349,10 @@ deployment:
 # unreachable Catalog should stop a release.
 validation:
   catalogConnectivityBlocksApply: false
+  # Requests and limits for the Validation pod's container, which Apchi creates itself at
+  # Validation time -- so this is the only place a cluster that requires them on every
+  # container can set them. Trino needs about 2Gi to start. Empty sets none.
+  resources: {}
 
 timeouts:
   # How long a Rollout may take before the Apply fails. A coordinator that never comes

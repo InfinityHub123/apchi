@@ -282,8 +282,9 @@ Not built:
   a warning naming the file when a mounted certificate changes under it, and logs each
   certificate's expiry as it loads. Fine for the lifetimes these certificates usually have;
   an issuer renewing hourly would want a reload Apchi does not do (§18, §27).
-- **The interactive reference is open.** `/docs`, `/redoc` and `/openapi.json` answer without
-  credentials, by decision: what they expose is the shape of the API, which this repository
+- **The interactive reference is open, and served from the image.** `/docs`, `/redoc` and
+  `/openapi.json` answer without credentials and load nothing from the internet, so they work
+  on an air-gapped network. Open by decision: what they expose is the shape of the API, which this repository
   publishes anyway, and "Try it out" sends real requests that meet the gate like any other.
 
 ## Licence

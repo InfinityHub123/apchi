@@ -1081,6 +1081,17 @@ root-owned key file, whose rule is `S_IWGRP | S_IXGRP | S_IRWXO` — group-write
 group-execute and any world bit, and nothing else. Group-read is allowed, and group-read is
 all Trino needs.
 
+**Where the platform forbids an `fsGroup`, the only readable mode is `0644`.** OpenShift's
+`restricted-v2` SCC refuses a pod that pins one and runs it as an arbitrary uid in no group a
+file could be given, so the table's last row cannot be built there and `0640` is unreadable.
+`restricted_pod_security` is that cluster's setting: Apchi accepts `0644` credential mounts
+on the Trino pods rather than refusing every deployment the cluster can run, builds its
+Validation pod without an `fsGroup`, and still refuses a credential that can be written or
+executed. The cost is the table's first column: every process in the pod can read the key,
+and a libpq-based client would refuse it. Trino's own JDBC connectors do not check, which is
+what makes the setting usable at all. Apchi's own pod has one container and reads each key
+once, at startup (§18), so `0644` there exposes nothing to anyone else.
+
 **Where Apchi mounts a file itself it restricts it only if the pod declares an `fsGroup`.**
 Apchi does not own the Admin's pod template, and `event-listener.properties` — which can
 carry a password in a JDBC URL — made unreadable is a coordinator that will not start.
@@ -2591,9 +2602,19 @@ threads.
 
 The goal is that a runtime failure is diagnosable from the logs without reproducing it.
 
-**Level.** A `LOG_LEVEL` setting, defaulting to `DEBUG` in np and test and `INFO` in prep and
-prod, overridable at runtime without a rebuild. The level is wanted most during a production
-incident, so it must not be a pure function of environment type.
+**Level.** A `LOG_LEVEL` setting, defaulting to `INFO`, and `LOG_JSON` for the format, both
+overridable at runtime without a rebuild. They used to follow an `environment` tier name --
+`DEBUG` in np and test, JSON in prep and prod -- which tied three unrelated behaviours to one
+label and crashlooped any installer whose tiers were named otherwise. `environment` is
+deprecated: for one release it still decides those two defaults, with a warning.
+
+**Unknown settings refuse to start.** An `APCHI_` variable Apchi does not read stops it at
+startup, naming the variable and the setting it is closest to. pydantic-settings passes over
+a name that matches no field, so without this a misspelt setting runs Apchi on the default it
+was meant to replace -- a real deployment connected to MongoDB with no client certificate
+that way and saw only a 30-second timeout. Kubernetes' own service-link variables
+(`APCHI_SERVICE_HOST`, `APCHI_PORT_8000_TCP`, ...) are exempt by shape: the chart's Service is
+called `apchi`, so every pod in its namespace gets them.
 
 **Debugging mode.** One `debug` setting: DEBUG unless the level is set explicitly, and every
 line names the logger and line it came from. It does **not** turn on dependencies' own debug

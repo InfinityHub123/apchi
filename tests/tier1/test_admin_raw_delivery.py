@@ -45,7 +45,7 @@ async def as_admin(
     app.state.kubernetes = fake_kubernetes
     app.state.trino = Trino(url="http://127.0.0.1:1")
     async with (
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as http,
+        AsyncClient(transport=ASGITransport(app=app), base_url="https://apchi") as http,
         app.router.lifespan_context(app),
     ):
         yield http

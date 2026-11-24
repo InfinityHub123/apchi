@@ -32,7 +32,7 @@ async def _serving(app: FastAPI, fake_kubernetes: FakeKubernetes) -> AsyncIterat
     app.state.kubernetes = fake_kubernetes
     app.state.trino = Trino(url="http://127.0.0.1:1")
     async with (
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as http,
+        AsyncClient(transport=ASGITransport(app=app), base_url="https://apchi") as http,
         app.router.lifespan_context(app),
     ):
         yield http
@@ -325,3 +325,14 @@ async def test_login_is_refused_in_none_mode(client: AsyncClient) -> None:
 
     assert response.status_code == 401, response.text
     assert "none" in response.json()["message"]
+
+
+async def test_the_session_cookie_is_always_secure(password_mode: AsyncClient) -> None:
+    """On every tier: a session cookie for a control plane must never travel in clear text."""
+    await _add(password_mode, "jo", "operator")
+
+    response = await password_mode.post(LOGIN, json={"username": "jo", "password": PASSWORD})
+
+    cookie = response.headers["set-cookie"]
+    assert "Secure" in cookie
+    assert "HttpOnly" in cookie

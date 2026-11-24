@@ -20,6 +20,39 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+### Breaking
+
+- **Apchi refuses to start on an `APCHI_` variable it does not read**, naming it and the
+  setting it is closest to. A misspelt or invented setting used to be ignored, leaving Apchi
+  on the default it was meant to replace. Kubernetes' service-link variables are exempt.
+- **Session cookies are always `Secure`.** They used to be only in `prep` and `prod`. Serve
+  Apchi over TLS, or reach it on `http://localhost`, which browsers treat as secure.
+- **`environment` is deprecated** and removed in the next release. Any value is accepted now,
+  not only `np`/`test`/`prep`/`prod`; while set it still decides the log level and format,
+  with a warning. Unset, logging defaults to INFO and console lines: set `APCHI_LOG_LEVEL` and
+  `APCHI_LOG_JSON` (chart: `logging.level`, `logging.json`). The chart no longer sets it.
+
+### Changed
+
+- **MongoDB's client certificate and key can be two files**: `APCHI_MONGO_CERTIFICATE_FILE`
+  and `APCHI_MONGO_KEY_FILE` (chart: `mongodb.tls.certificateKey`, `.keyKey`), joined by Apchi
+  into one private file whatever newline either ends with. One combined file still works.
+- The chart sets `enableServiceLinks: false`.
+- **`/docs` and `/redoc` work without internet access.** Swagger UI 5.34.1 and Redoc 2.5.4 are
+  served from the image instead of a public CDN, and Redoc no longer loads Google Fonts.
+- **The chart's CA bundle can come from a ConfigMap** (`pod.caBundle.configMap`), such as
+  OpenShift's injected trusted-CA bundle.
+- **Apchi runs on OpenShift's `restricted-v2`.** The image runs as any uid: its tree belongs
+  to group 0 and its `USER` is the number `10001`. Every pod the chart renders now sets
+  `runAsNonRoot`, the `RuntimeDefault` seccomp profile, no privilege escalation and every
+  capability dropped. A cluster that forbids pinning `fsGroup` sets `restrictedPodSecurity`
+  (`APCHI_RESTRICTED_POD_SECURITY`). The Validation pod then carries no `fsGroup` and the
+  same security context, and Apchi accepts `0644` credential mounts on the Trino pods
+  instead of refusing them. `validation.resources` (`APCHI_VALIDATION_RESOURCES`) gives the
+  Validation pod requests and limits.
+
+### API additions
+
 `AuditEvent` gains `token_name`: the acting token's name as it was when the event was written.
 Only `token_id` was recorded, and `GET /tokens` lists only the caller's own, so an Admin reading
 the trail could not say which automation of somebody else's acted. `GET /auth/me` reports it too

@@ -27,7 +27,7 @@ from app.auth.logins import COOKIE as LOGIN_COOKIE
 from app.auth.logins import pending
 from app.auth.oidc import OidcError
 from app.auth.sessions import COOKIE
-from app.config import AuthMode, Environment, Settings
+from app.config import AuthMode, Settings
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +56,10 @@ def _set_cookie(
 ) -> None:
     """Both of Apchi's cookies, set the same way, so neither can drift from the other.
 
-    `secure` only in the environments that are served over TLS: set unconditionally it would
-    make local HTTP development impossible, and never set it would ship a credential that
-    travels in clear text.
+    Always `secure`. Apchi is a control plane that authenticates Admins, and a session
+    cookie sent in clear text is wrong on every tier. Browsers treat `http://localhost` as
+    secure, so a port-forward for local development still signs in; anything else has to be
+    served over TLS.
     """
     response.set_cookie(
         name,
@@ -66,7 +67,7 @@ def _set_cookie(
         max_age=max_age,
         httponly=True,
         samesite="lax",
-        secure=settings.environment in (Environment.PREP, Environment.PROD),
+        secure=True,
     )
 
 
@@ -183,7 +184,7 @@ async def sso_callback(
     """
     _sso_only(settings)
     attempt = await logins.take(request.cookies.get(LOGIN_COOKIE) or "")
-    response.delete_cookie(LOGIN_COOKIE, httponly=True, samesite="lax")
+    response.delete_cookie(LOGIN_COOKIE, httponly=True, samesite="lax", secure=True)
 
     if error:
         # The provider itself refused -- consent declined, or a client it does not know.
@@ -243,7 +244,7 @@ async def logout(
     del identity  # resolving it is what proves there is a session to end.
     if value := request.cookies.get(COOKIE):
         await sessions.delete(value)
-    response.delete_cookie(COOKIE, httponly=True, samesite="lax")
+    response.delete_cookie(COOKIE, httponly=True, samesite="lax", secure=True)
 
 
 @router.get("/me", response_model=Identity, summary="Who Apchi thinks you are")

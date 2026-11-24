@@ -22,14 +22,23 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "apchi.serviceAccountName" . }}
-      {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret }}
-      # A Secret volume's files are root-owned whatever their mode, so a key restricted to
-      # 0640 is unreadable to uid 10001 without this. One securityContext however many
-      # volumes hang off it, and only rendered when something is mounted: an fsGroup on a
-      # pod with no volumes changes nothing and would still cost every install a restart.
+      # Kubernetes otherwise injects a variable per Service in the namespace, and this chart's
+      # own Service is called apchi -- so every pod gets APCHI_PORT, APCHI_SERVICE_HOST and
+      # sixteen more that are not settings. Apchi tolerates them; it is simply noise.
+      enableServiceLinks: false
+      # restricted-v2's shape, on every cluster: it costs nothing where it is not enforced, and
+      # the image's USER is numeric so the kubelet can verify runAsNonRoot without a uid.
       securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+        {{- if and (or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret) (not .Values.restrictedPodSecurity) }}
+        # A Secret volume's files are root-owned whatever their mode, so a key restricted to
+        # 0640 is unreadable to uid 10001 without this. Only rendered when something is
+        # mounted: an fsGroup on a pod with no volumes changes nothing and would still cost
+        # every install a restart.
         fsGroup: {{ .Values.pod.fsGroup }}
-      {{- end }}
+        {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -37,12 +46,21 @@ spec:
         - name: apchi
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           ports:
             - containerPort: 8000
               name: http
           env:
+            {{- with .Values.environment }}
+            # Deprecated: it now decides only the log defaults below, and Apchi warns while
+            # it is set. Rendered so an existing values file keeps its log level for one
+            # more release.
             - name: APCHI_ENVIRONMENT
-              value: {{ .Values.environment | quote }}
+              value: {{ . | quote }}
+            {{- end }}
             - name: APCHI_AUTH_MODE
               value: {{ .Values.auth.mode | quote }}
             - name: APCHI_AUTH_INITIAL_ADMIN_USERNAME
@@ -102,7 +120,10 @@ spec:
             - name: APCHI_CANDIDATE_MAX_BYTES
               value: {{ .Values.candidateMaxBytes | int | quote }}
             {{- $ca := .Values.pod.caBundle }}
-            {{- if $ca.existingSecret }}
+            {{- if and $ca.existingSecret $ca.configMap }}
+            {{- fail "pod.caBundle: set existingSecret or configMap, not both" }}
+            {{- end }}
+            {{- if or $ca.existingSecret $ca.configMap }}
             # One CA for every destination below -- MongoDB, the coordinator, the OIDC
             # provider and the alert webhook -- so it is set before any of them.
             - name: APCHI_CA_FILE
@@ -114,9 +135,18 @@ spec:
               value: {{ .Values.mongodb.database | quote }}
             {{- $mongoTls := .Values.mongodb.tls }}
             {{- if $mongoTls.existingSecret }}
+            {{- if and $mongoTls.certificateKeyKey (or $mongoTls.certificateKey $mongoTls.keyKey) }}
+            {{- fail "mongodb.tls: set certificateKeyKey, one file holding both, or certificateKey and keyKey -- not both shapes" }}
+            {{- end }}
             {{- if $mongoTls.certificateKeyKey }}
             - name: APCHI_MONGO_CERTIFICATE_KEY_FILE
               value: {{ printf "%s/%s" $mongoTls.mountPath $mongoTls.certificateKeyKey | quote }}
+            {{- end }}
+            {{- if $mongoTls.certificateKey }}
+            - name: APCHI_MONGO_CERTIFICATE_FILE
+              value: {{ printf "%s/%s" $mongoTls.mountPath $mongoTls.certificateKey | quote }}
+            - name: APCHI_MONGO_KEY_FILE
+              value: {{ printf "%s/%s" $mongoTls.mountPath (required "mongodb.tls.keyKey is required when mongodb.tls.certificateKey is set" $mongoTls.keyKey) | quote }}
             {{- end }}
             {{- end }}
             # Apchi reads and writes only this namespace: the Cluster's own. Taken from
@@ -182,6 +212,14 @@ spec:
               value: {{ .Values.timeouts.rolloutSeconds | int64 | quote }}
             - name: APCHI_VALIDATION_TIMEOUT_SECONDS
               value: {{ .Values.timeouts.validationSeconds | int64 | quote }}
+            {{- with .Values.validation.resources }}
+            - name: APCHI_VALIDATION_RESOURCES
+              value: {{ toJson . | quote }}
+            {{- end }}
+            {{- if .Values.restrictedPodSecurity }}
+            - name: APCHI_RESTRICTED_POD_SECURITY
+              value: "true"
+            {{- end }}
             - name: APCHI_CERTIFICATE_EXPIRING_WITHIN_DAYS
               value: {{ .Values.certificates.expiringWithinDays | int64 | quote }}
             - name: APCHI_CLIENT_CERTIFICATE_MAX_BYTES
@@ -226,9 +264,9 @@ spec:
           {{- with .Values.resources }}
           resources: {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret .Values.pod.caBundle.existingSecret }}
+          {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret .Values.pod.caBundle.existingSecret .Values.pod.caBundle.configMap }}
           volumeMounts:
-            {{- if .Values.pod.caBundle.existingSecret }}
+            {{- if or .Values.pod.caBundle.existingSecret .Values.pod.caBundle.configMap }}
             - name: ca-bundle
               mountPath: {{ .Values.pod.caBundle.mountPath | quote }}
               readOnly: true
@@ -244,7 +282,7 @@ spec:
               readOnly: true
             {{- end }}
           {{- end }}
-      {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret .Values.pod.caBundle.existingSecret }}
+      {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret .Values.pod.caBundle.existingSecret .Values.pod.caBundle.configMap }}
       volumes:
         {{- if .Values.pod.caBundle.existingSecret }}
         - name: ca-bundle
@@ -252,20 +290,26 @@ spec:
           # kubelet's own 0644 is correct and there is no key here to protect.
           secret:
             secretName: {{ .Values.pod.caBundle.existingSecret | quote }}
+        {{- else if .Values.pod.caBundle.configMap }}
+        - name: ca-bundle
+          configMap:
+            name: {{ .Values.pod.caBundle.configMap | quote }}
         {{- end }}
         {{- if .Values.trino.tls.existingSecret }}
         - name: trino-tls
           secret:
             secretName: {{ .Values.trino.tls.existingSecret | quote }}
             # A credential, and 0640 is the floor: the kubelet ORs 0440 into the mode of
-            # every file in a readOnly volume, so 0600 is unreachable.
-            defaultMode: {{ .Values.pod.credentialFileMode }}
+            # every file in a readOnly volume, so 0600 is unreachable. Under restricted pod
+            # security it is 0644, the only mode an arbitrary uid can read, in a pod with one
+            # container that reads each key once at startup.
+            defaultMode: {{ include "apchi.credentialFileMode" . }}
         {{- end }}
         {{- if .Values.mongodb.tls.existingSecret }}
         - name: mongo-tls
           secret:
             secretName: {{ .Values.mongodb.tls.existingSecret | quote }}
-            defaultMode: {{ .Values.pod.credentialFileMode }}
+            defaultMode: {{ include "apchi.credentialFileMode" . }}
         {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}

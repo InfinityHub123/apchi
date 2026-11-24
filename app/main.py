@@ -22,6 +22,7 @@ from app.api.certificate_mapping import router as certificate_mapping_router
 from app.api.client_certificates import router as certificates_router
 from app.api.cluster import router as cluster_router
 from app.api.deps import AdminOnly, Authenticated
+from app.api.docs import install_docs
 from app.api.event_listeners import router as event_listeners_router
 from app.api.health import router as health_router
 from app.api.permissions import router as permissions_router
@@ -123,7 +124,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.validation_runner = ValidationRunner(app.state.validation_store, build_engine)
     app.state.high_water = HighWaterMark(app.state.kubernetes, settings)
-    logger.info("apchi starting", extra={"environment": settings.environment})
+    logger.info("apchi starting")
 
     # An Apply left in flight by a restart would freeze the Candidate forever, and may
     # also have left the Cluster diverged -- so recovery unfreezes it and then rolls the
@@ -205,7 +206,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version=VERSION,
         summary="Control plane for configuring one Trino cluster",
         lifespan=lifespan,
+        # Served by install_docs from the image instead: FastAPI's own pages load their
+        # assets from a public CDN and are blank on a network without one.
+        docs_url=None,
+        redoc_url=None,
     )
+    install_docs(app)
     app.state.settings = settings
     errors.install(app)
     # Documented on the contract rather than left to be discovered: these become reachable

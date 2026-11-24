@@ -29,7 +29,7 @@ from app import trust
 from app.adapters.mongo import _tls_options
 from app.adapters.trino import Trino
 from app.auth.oidc import OidcError, OidcProvider
-from app.config import Environment, Settings
+from app.config import Settings
 from app.pipeline.applies import TERMINAL
 from app.pipeline.auto_rollback import _alert
 from app.trust import bundled_ca, presented, verification
@@ -121,7 +121,7 @@ def test_the_bundle_is_built_once_per_path(private_ca: str) -> None:
 def test_every_destination_reads_the_same_setting(private_ca: str) -> None:
     """One `ca_file` and not one per destination. Mongo takes the bundle as a path and the
     httpx callers take a context, but both come from the same configured file."""
-    settings = Settings(environment=Environment.TEST, ca_file=private_ca)
+    settings = Settings(ca_file=private_ca)
 
     assert _tls_options(settings) == {"tlsCAFile": bundled_ca(private_ca)}
     assert isinstance(verification(settings.ca_file), ssl.SSLContext)
@@ -205,7 +205,7 @@ async def test_the_alert_webhook_verifies_with_the_configured_ca(
     """One of the two destinations #187 was actually about -- the others were already
     covered by #188 and #186. An internal webhook over HTTPS is unreachable without this."""
     url, ca = webhook
-    settings = Settings(environment=Environment.TEST, alert_webhook_url=url, ca_file=ca)
+    settings = Settings(alert_webhook_url=url, ca_file=ca)
 
     await _alert("apply-1", "a reason", settings)
 
@@ -220,7 +220,7 @@ async def test_without_the_ca_the_alert_is_dropped_rather_than_raised(
     incident it was reporting. So the symptom of an untrusted webhook is silence, which is
     exactly why the CA has to be configurable rather than inferred."""
     url, _ = webhook
-    settings = Settings(environment=Environment.TEST, alert_webhook_url=url)
+    settings = Settings(alert_webhook_url=url)
 
     await _alert("apply-1", "a reason", settings)
 
@@ -237,7 +237,6 @@ async def test_an_oidc_provider_on_a_private_ca_can_be_discovered(
     issuer, ca = https_provider
     provider = OidcProvider(
         Settings(
-            environment=Environment.TEST,
             ca_file=ca,
             oidc_issuer=issuer,
             oidc_client_id="apchi",
@@ -260,7 +259,6 @@ async def test_without_the_ca_discovery_fails_rather_than_degrading(
     issuer, _ = https_provider
     provider = OidcProvider(
         Settings(
-            environment=Environment.TEST,
             oidc_issuer=issuer,
             oidc_client_id="apchi",
             oidc_redirect_url=f"{issuer}/callback",
@@ -538,7 +536,6 @@ def test_mongodbs_pem_is_remembered_without_being_copied(
     combined = Path(mount.certificate).with_name("mongo.pem")
     combined.write_bytes(Path(mount.certificate).read_bytes() + Path(mount.key).read_bytes())
     settings = Settings(
-        environment=Environment.TEST,
         ca_file=mount.ca,
         mongo_certificate_key_file=str(combined),
     )

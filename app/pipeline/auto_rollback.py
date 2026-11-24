@@ -107,9 +107,9 @@ async def _alert(apply_id: str, reason: str, settings: Settings) -> None:
                 settings.alert_webhook_url,
                 json={
                     "text": (
-                        f"Apchi: Auto Rollback failed after Apply {apply_id} on "
-                        f"{settings.environment.value}. Maintenance Mode is engaged and the "
-                        f"cluster state is unknown. Reason: {reason}"
+                        f"Apchi: Auto Rollback failed after Apply {apply_id} against "
+                        f"{settings.trino_url}. Maintenance Mode is engaged and the cluster "
+                        f"state is unknown. Reason: {reason}"
                     )
                 },
             )

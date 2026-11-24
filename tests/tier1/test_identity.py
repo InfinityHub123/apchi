@@ -124,7 +124,7 @@ async def _serving(app: FastAPI, fake_kubernetes: FakeKubernetes) -> AsyncIterat
     app.state.kubernetes = fake_kubernetes
     app.state.trino = Trino(url="http://127.0.0.1:1")
     async with (
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as http,
+        AsyncClient(transport=ASGITransport(app=app), base_url="https://apchi") as http,
         app.router.lifespan_context(app),
     ):
         yield http
@@ -275,7 +275,7 @@ async def test_the_ui_catch_all_never_answers_for_an_api_path(
     app.state.trino = Trino(url="http://127.0.0.1:1")
 
     async with (
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as http,
+        AsyncClient(transport=ASGITransport(app=app), base_url="https://apchi") as http,
         app.router.lifespan_context(app),
     ):
         assert (await http.get("/api/v1/nope")).status_code == 404
