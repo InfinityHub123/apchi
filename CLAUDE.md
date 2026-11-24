@@ -62,8 +62,10 @@ Reach for these rather than the ones most tutorials suggest:
   `ConfigurationError` at startup rather than an option PyMongo silently does not recognise.
   The CA comes from `app.trust`, not from a setting read here.
   `tlsCertificateKeyFile` takes **one** PEM holding the certificate and its key together,
-  where the Trino client wants the two apart. Either file option turns TLS on by itself --
-  PyMongo builds its SSL context from them and does not also need `tls=true`. PyMongo opens
+  where the Trino client wants the two apart. A client certificate turns TLS on by itself --
+  PyMongo builds its SSL context from it and does not also need `tls=true`. The CA bundle does
+  not: it is what every pod trusts, so it reaches MongoDB only when the URI or a client
+  certificate already asks for TLS, or a plaintext MongoDB stops answering. PyMongo opens
   them while validating its options and `Mongo` is built in the lifespan, so a missing file
   crashes Apchi rather than producing the 503 an unreachable MongoDB gives.
 - **SSE** — `from fastapi.sse import EventSourceResponse, ServerSentEvent`, built into

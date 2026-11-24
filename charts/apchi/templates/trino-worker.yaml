@@ -33,6 +33,9 @@ spec:
         - name: trino
           image: {{ include "trino.image" . | quote }}
           imagePullPolicy: {{ .Values.trino.image.pullPolicy }}
+          {{- if and (include "apchi.hasTruststore" .) .Values.javaTruststore.password.existingSecret }}
+          env: {{- include "apchi.truststorePasswordEnv" . | trim | nindent 12 }}
+          {{- end }}
           ports:
             - containerPort: {{ .Values.trino.httpPort }}
               name: http
@@ -55,6 +58,10 @@ spec:
             - {name: client-certificates, mountPath: /etc/trino/certs, readOnly: true}
             # node.data-dir, writable by whatever uid the pod is given. See the coordinator.
             - {name: data, mountPath: /data/trino}
+            {{- if or (include "apchi.hasCaBundle" .) (include "apchi.hasTruststore" .) }}
+            # What this pod trusts, if the chart names it. See caBundle and javaTruststore.
+            {{- include "apchi.trustMounts" (dict "root" $ "java" true) | trim | nindent 12 }}
+            {{- end }}
           {{- with .Values.trino.worker.resources }}
           resources: {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -63,6 +70,9 @@ spec:
         # Private keys, so not world-readable. 0640 with the fsGroup above. §13.2.
         - {name: client-certificates, secret: {secretName: {{ .Values.secrets.clientCertificates }}, defaultMode: 0640}}
         - {name: data, emptyDir: {}}
+        {{- if or (include "apchi.hasCaBundle" .) (include "apchi.hasTruststore" .) }}
+        {{- include "apchi.trustVolumes" (dict "root" $ "java" true) | trim | nindent 8 }}
+        {{- end }}
       {{- with .Values.trino.worker.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}

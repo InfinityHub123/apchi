@@ -22,6 +22,15 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ### Breaking
 
+- **`pod.caBundle` is now `caBundle`, and mounted into every pod** -- Apchi, MongoDB, the Trino
+  coordinator and workers, and the Validation pod -- at `/etc/pki/tls/certs/ca-bundle.crt`.
+  `pod.caBundle.mountPath` is gone, and `key` defaults to `ca-bundle.crt`, the key OpenShift's
+  injected bundle uses, instead of `ca.crt`.
+- **The CA bundle no longer turns on TLS to MongoDB by itself.** It is what every pod trusts
+  now, and handed to PyMongo it made a plaintext MongoDB -- the bundled one included --
+  unreachable. It reaches MongoDB when `mongodb.uri` says `tls=true` or a client certificate is
+  configured. A TLS MongoDB used without a client certificate needs `tls=true` in its URI.
+
 - **One chart: `charts/apchi` now installs Trino too**, and `charts/trino` is gone. It was
   never published, so anyone running it ran it from the repository. The Trino values move
   under `trino:` -- `worker.replicas` becomes `trino.worker.replicas`, `image.*` becomes
@@ -49,6 +58,14 @@ Two breaks the committed contract cannot show you, and which belong here when th
   `deployment.providesResourceGroupsProperties` and `deployment.setsEventListenerConfigFiles`;
   an install still setting them stops at startup, naming them. `DELETE /event-listeners/{name}`
   no longer refuses to empty the Section, since that refusal existed only for that shape.
+
+### Changed
+
+- **`javaTruststore`: a Java truststore for every pod that runs Trino**, the Validation pod
+  included, mounted at `/etc/pki/java/truststore/cacerts` with the JVM pointed at it -- in
+  `jvm.config` on the Cluster, through `JDK_JAVA_OPTIONS` on the Validation pod. An optional
+  password comes from a Secret. Apchi learns both through `APCHI_VALIDATION_CA_BUNDLE` and
+  `APCHI_VALIDATION_JAVA_TRUSTSTORE`, which the chart sets.
 
 ## 0.2.1 — 2026-11-24
 

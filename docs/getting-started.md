@@ -446,7 +446,7 @@ provider and to the alert webhook. One bundle covers all four:
 kubectl create secret generic apchi-ca -n apchi --from-file=ca.crt=internal-ca.pem
 
 helm upgrade apchi charts/apchi -n apchi --reuse-values \
-  --set pod.caBundle.existingSecret=apchi-ca
+  --set caBundle.existingSecret=apchi-ca --set caBundle.key=ca.crt
 ```
 
 **It is added to the public trust store, not substituted for it.** That matters more than it
@@ -519,7 +519,7 @@ Three things are worth knowing before you do:
 plaintext requests against a TLS listener and reported nothing. `trino.url` carries the
 scheme so that cannot happen.
 
-**A private CA goes in `pod.caBundle`, not here.** One bundle covers every outbound
+**A private CA goes in `caBundle`, not here.** One bundle covers every outbound
 connection Apchi makes — see *Trusting a private CA* above. `trino.tls` is only the
 certificate Apchi presents.
 
@@ -553,7 +553,7 @@ it, so there is no reason to block an Apply that would succeed.
 its certificate into an SSL context when the client is built and keeps it, so picking up a
 rotation there means rebuilding the client. If the others reloaded anyway, a rotated CA would
 be trusted by your coordinator, your identity provider and your webhook but not by MongoDB —
-which is exactly the split `pod.caBundle` exists to prevent. Since rotating an internal root
+which is exactly the split `caBundle` exists to prevent. Since rotating an internal root
 touches all four, a restart was needed either way.
 
 Each restart logs what it loaded and when it expires, which is worth reading:

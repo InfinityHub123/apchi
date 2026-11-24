@@ -39,6 +39,9 @@ data:
     -XX:+ExitOnOutOfMemoryError
     -XX:-OmitStackTraceInFastThrow
     -Djdk.attach.allowAttachSelf=true
+    {{- if include "apchi.hasTruststore" . }}
+    -Djavax.net.ssl.trustStore=/etc/pki/java/truststore/cacerts
+    {{- end }}
     {{- range .Values.trino.jvm.extraArgs }}
     {{ . }}
     {{- end }}

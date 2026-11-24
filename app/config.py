@@ -8,7 +8,7 @@ from enum import StrEnum
 from functools import lru_cache
 from typing import Self
 
-from pydantic import model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: What Kubernetes injects into every pod for every Service in its namespace, unasked: a
@@ -35,6 +35,48 @@ class AuthMode(StrEnum):
     NONE = "none"
     PASSWORD = "password"
     SSO = "sso"
+
+
+#: Where the CA bundle and the Java truststore are mounted, in every pod that gets them. The
+#: bundle at the path RHEL-based images, Trino's among them, read their system trust from; the
+#: truststore in a directory of its own, so that a mount over a file the image already has --
+#: `/etc/pki/java/cacerts` is a symlink in trinodb/trino -- cannot land somewhere unexpected.
+CA_BUNDLE_PATH = "/etc/pki/tls/certs/ca-bundle.crt"
+TRUSTSTORE_DIR = "/etc/pki/java/truststore"
+TRUSTSTORE_PATH = f"{TRUSTSTORE_DIR}/cacerts"
+
+
+class MountedFile(BaseModel):
+    """One key of a ConfigMap or a Secret, which Apchi mounts into the pods it creates."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    config_map: str | None = None
+    secret: str | None = None
+    key: str
+
+    @model_validator(mode="after")
+    def _one_source(self) -> Self:
+        if (self.config_map is None) == (self.secret is None):
+            raise ValueError("name exactly one of config_map and secret")
+        return self
+
+
+class Truststore(MountedFile):
+    """A Java truststore, and the Secret holding its password if it needs one to load.
+
+    Usually it does not: Java reads the certificates in a truststore without its password,
+    which only protects the store's integrity.
+    """
+
+    password_secret: str | None = None
+    password_key: str | None = None
+
+    @model_validator(mode="after")
+    def _password_whole(self) -> Self:
+        if (self.password_secret is None) != (self.password_key is None):
+            raise ValueError("password_secret and password_key go together")
+        return self
 
 
 class Settings(BaseSettings):
@@ -141,8 +183,8 @@ class Settings(BaseSettings):
     mongo_database: str = "apchi"
     #: One PEM holding the certificate Apchi authenticates with **and its key**, which is the
     #: shape PyMongo's `tlsCertificateKeyFile` takes -- unlike the Trino client, which wants
-    #: the two apart (#188). Either file on its own turns TLS on: PyMongo builds an SSL
-    #: context from these and does not also need `tls=true`, verified against a mongod
+    #: the two apart (#188). It turns TLS on by itself: PyMongo builds an SSL context from it
+    #: and does not also need `tls=true`, verified against a mongod
     #: running `--tlsMode requireTLS`.
     #:
     #: How to authenticate stays in `mongo_uri` -- `?authMechanism=MONGODB-X509` -- because
@@ -251,6 +293,13 @@ class Settings(BaseSettings):
     #: every container refuses -- and the Validation pod is Apchi's to build, so no chart
     #: can add them afterwards. A quantity may be a bare number, as Helm renders `cpu: 2`.
     validation_resources: dict[str, dict[str, str | int | float]] | None = None
+    #: What the Validation pod trusts, mounted the way the chart mounts it on the Cluster's
+    #: own Trino pods -- so a Catalog behind an internal CA validates as it will run. The
+    #: bundle at `CA_BUNDLE_PATH`, for anything in the image that is not Java; the
+    #: truststore at `TRUSTSTORE_PATH`, which the JVM is pointed at, because Java reads only
+    #: its own store and the image's is the public one.
+    validation_ca_bundle: MountedFile | None = None
+    validation_java_truststore: Truststore | None = None
 
     #: The cluster forbids pinning `fsGroup` and assigns every pod an arbitrary uid, as
     #: OpenShift's restricted-v2 SCC does. Credential files are then readable only if they

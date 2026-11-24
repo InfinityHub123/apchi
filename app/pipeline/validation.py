@@ -23,7 +23,14 @@ from typing import Any
 
 from app.adapters.kubernetes import CREDENTIAL_FILE_MODE, TRINO_GROUP, KubernetesAdapter
 from app.adapters.trino import Trino
-from app.config import Settings
+from app.config import (
+    CA_BUNDLE_PATH,
+    TRUSTSTORE_DIR,
+    TRUSTSTORE_PATH,
+    MountedFile,
+    Settings,
+    Truststore,
+)
 from app.pipeline.connectivity import unreachable
 from app.pipeline.files import probe_files
 from app.pipeline.references import missing_certificates
@@ -121,6 +128,8 @@ def validation_manifest(
     *,
     restricted: bool = False,
     resources: dict[str, dict[str, str | int | float]] | None = None,
+    ca_bundle: MountedFile | None = None,
+    truststore: Truststore | None = None,
 ) -> dict[str, Any]:
     """A coordinator-only Trino and nothing else.
 
@@ -178,6 +187,22 @@ def validation_manifest(
         volumes.append(
             {"name": _FILES_VOLUME, "secret": {"secretName": name, "defaultMode": file_mode}}
         )
+    if ca_bundle is not None:
+        volumes.append(_trust_volume("ca-bundle", ca_bundle, Path(CA_BUNDLE_PATH).name))
+        container["volumeMounts"].append(
+            {
+                "name": "ca-bundle",
+                "mountPath": CA_BUNDLE_PATH,
+                "subPath": Path(CA_BUNDLE_PATH).name,
+                "readOnly": True,
+            }
+        )
+    if truststore is not None:
+        volumes.append(_trust_volume("java-truststore", truststore, Path(TRUSTSTORE_PATH).name))
+        container["volumeMounts"].append(
+            {"name": "java-truststore", "mountPath": TRUSTSTORE_DIR, "readOnly": True}
+        )
+        container["env"].extend(_truststore_env(truststore))
     return {
         "apiVersion": "v1",
         "kind": "Pod",
@@ -191,6 +216,41 @@ def validation_manifest(
             "volumes": volumes,
         },
     }
+
+
+def _trust_volume(name: str, source: MountedFile, filename: str) -> dict[str, Any]:
+    """A volume holding one key of a ConfigMap or Secret, under a fixed filename."""
+    items = [{"key": source.key, "path": filename}]
+    if source.secret is not None:
+        return {"name": name, "secret": {"secretName": source.secret, "items": items}}
+    return {"name": name, "configMap": {"name": source.config_map, "items": items}}
+
+
+def _truststore_env(truststore: Truststore) -> list[dict[str, Any]]:
+    """Point the probe's JVM at the mounted truststore.
+
+    Through `JDK_JAVA_OPTIONS`, because the probe runs the image's own `jvm.config` and Apchi
+    does not replace it; the `java` launcher reads the variable itself, before Trino's
+    launcher has a say. The password, when there is one, comes from its Secret by Kubernetes'
+    own `$(VAR)` expansion, so it is never written into the pod spec.
+    """
+    options = f"-Djavax.net.ssl.trustStore={TRUSTSTORE_PATH}"
+    env: list[dict[str, Any]] = []
+    if truststore.password_secret is not None:
+        env.append(
+            {
+                "name": "TRUSTSTORE_PASSWORD",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": truststore.password_secret,
+                        "key": truststore.password_key,
+                    }
+                },
+            }
+        )
+        options += " -Djavax.net.ssl.trustStorePassword=$(TRUSTSTORE_PASSWORD)"
+    env.append({"name": "JDK_JAVA_OPTIONS", "value": options})
+    return env
 
 
 def _file_mounts(files: dict[str, str]) -> list[dict[str, Any]]:
@@ -249,6 +309,8 @@ async def ephemeral_trino(
             files,
             restricted=settings.restricted_pod_security,
             resources=settings.validation_resources,
+            ca_bundle=settings.validation_ca_bundle,
+            truststore=settings.validation_java_truststore,
         )
     )
     logger.info(

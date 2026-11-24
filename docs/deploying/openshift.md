@@ -35,12 +35,19 @@ validation:
     requests: {cpu: 500m, memory: 2Gi}
     limits: {cpu: "2", memory: 2Gi}
 
-pod:
-  caBundle:
-    # A ConfigMap labelled config.openshift.io/inject-trusted-cabundle: "true", which the
-    # platform fills with the cluster's trusted CAs.
-    configMap: trusted-ca
-    key: ca-bundle.crt
+# Every pod: at /etc/pki/tls/certs/ca-bundle.crt, and Apchi adds it to what it trusts. A
+# ConfigMap labelled config.openshift.io/inject-trusted-cabundle: "true", which the platform
+# fills with the cluster's trusted CAs.
+caBundle:
+  configMap: trusted-ca
+  key: ca-bundle.crt
+
+# Every pod that runs Trino: at /etc/pki/java/truststore/cacerts, and the JVM is pointed at
+# it. It replaces the JDK's own store, so it must hold the public roots too if a catalog
+# reaches anything they sign.
+javaTruststore:
+  existingSecret: trino-truststore
+  key: cacerts
 
 mongodb:
   uri: mongodb://mongo.example:27017/?authMechanism=MONGODB-X509

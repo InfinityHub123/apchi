@@ -3,6 +3,7 @@ May 2026 and is in critical-fixes-only support."""
 
 import logging
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 from pymongo import AsyncMongoClient, monitoring
 from pymongo.asynchronous.database import AsyncDatabase
@@ -58,16 +59,27 @@ def _tls_options(settings: Settings) -> dict[str, Any]:
 
     Keyword arguments rather than query parameters appended to `mongo_uri`, so that a typo
     is a `ConfigurationError` at startup instead of an option PyMongo quietly does not
-    recognise. Either one also turns TLS on by itself -- PyMongo builds its SSL context from
-    these and does not need `tls=true` as well (#186).
+    recognise. A client certificate turns TLS on by itself -- PyMongo builds its SSL context
+    from it and does not need `tls=true` as well (#186).
+
+    The CA bundle does **not**, and that changed once it became what every pod trusts. Handed
+    to PyMongo it turns TLS on just the same, so a plaintext MongoDB -- the chart's own bundled
+    one included -- failed every connection with "SSL handshake failed" the moment an Admin
+    configured a bundle for some other destination. So it reaches MongoDB only when TLS is
+    already asked for: by the URI, or by a client certificate. A TLS MongoDB that wants no
+    client certificate says so with `tls=true`.
     """
     # Any, not str: PyMongo declares its first few options by name and the rest as **kwargs,
     # so a dict[str, str] expanded into it is checked against `tz_aware: bool | None`.
     options: dict[str, Any] = {}
+    presents = bool(
+        settings.mongo_certificate_key_file
+        or (settings.mongo_certificate_file and settings.mongo_key_file)
+    )
     # The concatenated bundle, for the reason app.trust gives: PyMongo replaces its trust
     # store with whatever path it is handed.
     bundle = bundled_ca(settings.ca_file)
-    if bundle:
+    if bundle and (presents or _uri_asks_for_tls(settings.mongo_uri)):
         options["tlsCAFile"] = bundle
     if settings.mongo_certificate_key_file:
         # The mounted path, not a copy: PyMongo loads it into a context while validating its
@@ -77,6 +89,16 @@ def _tls_options(settings: Settings) -> dict[str, Any]:
     elif joined := combined(settings.mongo_certificate_file, settings.mongo_key_file):
         options["tlsCertificateKeyFile"] = joined
     return options
+
+
+def _uri_asks_for_tls(uri: str) -> bool:
+    """Whether the URI turns TLS on: `tls=true` or `ssl=true`, or an SRV URI, where PyMongo
+    defaults it on."""
+    parsed = urlsplit(uri)
+    if parsed.scheme == "mongodb+srv":
+        return True
+    query = {key.lower(): value.lower() for key, value in parse_qsl(parsed.query)}
+    return any(query.get(name) in ("true", "1") for name in ("tls", "ssl"))
 
 
 class Mongo:
