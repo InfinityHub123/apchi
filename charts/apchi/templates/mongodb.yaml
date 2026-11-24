@@ -26,12 +26,18 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data/db
+            {{- if include "apchi.hasCaBundle" . }}
+            {{- include "apchi.trustMounts" (dict "root" $ "java" false) | trim | nindent 12 }}
+            {{- end }}
           {{- with .Values.mongodb.resources }}
           resources: {{- toYaml . | nindent 12 }}
           {{- end }}
       volumes:
         - name: data
           emptyDir: {}
+        {{- if include "apchi.hasCaBundle" . }}
+        {{- include "apchi.trustVolumes" (dict "root" $ "java" false) | trim | nindent 8 }}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

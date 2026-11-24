@@ -62,7 +62,9 @@ TLS_VALUES = VALUES + (
     "--set",
     "mongodb.tls.certificateKeyKey=client.pem",
     "--set",
-    "pod.caBundle.existingSecret=apchi-ca",
+    "caBundle.existingSecret=apchi-ca",
+    "--set",
+    "javaTruststore.configMap=apchi-truststore",
 )
 
 #: Set from the pod rather than from a value, so there is nothing to compare.
@@ -92,7 +94,11 @@ def rendered_environment(values: tuple[str, ...] = VALUES) -> dict[str, str]:
             name = stripped.removeprefix("- name: ")
             env[name] = ""
         elif name and stripped.startswith("value: "):
-            env[name] = stripped.removeprefix("value: ").strip('"')
+            raw = stripped.removeprefix("value: ")
+            # A double-quoted YAML scalar escapes like a JSON string, which matters for the
+            # settings the chart passes as JSON: stripping the quotes would leave every
+            # inner quote backslashed.
+            env[name] = json.loads(raw) if raw.startswith('"') else raw
             name = None
         elif name and stripped.startswith("valueFrom:"):
             env.pop(name)
@@ -196,7 +202,15 @@ def main() -> int:
             return 1
 
         try:
-            Settings(_env_file=None, **{name[6:].lower(): value for name, value in env.items()})
+            Settings(
+                _env_file=None,
+                # A structured setting arrives as JSON in an env var, which pydantic-settings
+                # decodes from the environment but not from keyword arguments.
+                **{
+                    name[6:].lower(): (json.loads(value) if value.startswith(("{", "[")) else value)
+                    for name, value in env.items()
+                },
+            )
         except Exception as exc:
             print(
                 f"Rendered {shape}, Apchi refuses the environment the chart produces:\n{exc}",

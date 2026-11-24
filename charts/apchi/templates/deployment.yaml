@@ -111,15 +111,14 @@ spec:
             # `quote` alone renders it as 1.572864e+07, which the settings parser rejects.
             - name: APCHI_CANDIDATE_MAX_BYTES
               value: {{ .Values.candidateMaxBytes | int | quote }}
-            {{- $ca := .Values.pod.caBundle }}
-            {{- if and $ca.existingSecret $ca.configMap }}
-            {{- fail "pod.caBundle: set existingSecret or configMap, not both" }}
-            {{- end }}
-            {{- if or $ca.existingSecret $ca.configMap }}
+            {{- if include "apchi.hasCaBundle" . }}
             # One CA for every destination below -- MongoDB, the coordinator, the OIDC
-            # provider and the alert webhook -- so it is set before any of them.
+            # provider and the alert webhook -- so it is set before any of them. Apchi adds
+            # it to the public store; it also reaches the Validation pod, mounted the same way.
             - name: APCHI_CA_FILE
-              value: {{ printf "%s/%s" $ca.mountPath $ca.key | quote }}
+              value: "/etc/pki/tls/certs/ca-bundle.crt"
+            - name: APCHI_VALIDATION_CA_BUNDLE
+              value: {{ include "apchi.validationCaBundle" . | quote }}
             {{- end }}
             - name: APCHI_MONGO_URI
               value: {{ include "apchi.mongoUri" . | quote }}
@@ -202,6 +201,11 @@ spec:
               value: {{ .Values.timeouts.rolloutSeconds | int64 | quote }}
             - name: APCHI_VALIDATION_TIMEOUT_SECONDS
               value: {{ .Values.timeouts.validationSeconds | int64 | quote }}
+            {{- if include "apchi.hasTruststore" . }}
+            # Apchi is not Java and never reads it; the Validation pod it creates runs Trino.
+            - name: APCHI_VALIDATION_JAVA_TRUSTSTORE
+              value: {{ include "apchi.validationTruststore" . | quote }}
+            {{- end }}
             {{- with .Values.validation.resources }}
             - name: APCHI_VALIDATION_RESOURCES
               value: {{ toJson . | quote }}
@@ -254,13 +258,9 @@ spec:
           {{- with .Values.resources }}
           resources: {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret .Values.pod.caBundle.existingSecret .Values.pod.caBundle.configMap }}
+          {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret (include "apchi.hasCaBundle" .) }}
           volumeMounts:
-            {{- if or .Values.pod.caBundle.existingSecret .Values.pod.caBundle.configMap }}
-            - name: ca-bundle
-              mountPath: {{ .Values.pod.caBundle.mountPath | quote }}
-              readOnly: true
-            {{- end }}
+            {{- include "apchi.trustMounts" (dict "root" $ "java" false) | trim | nindent 12 }}
             {{- if .Values.trino.tls.existingSecret }}
             - name: trino-tls
               mountPath: {{ .Values.trino.tls.mountPath | quote }}
@@ -272,19 +272,9 @@ spec:
               readOnly: true
             {{- end }}
           {{- end }}
-      {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret .Values.pod.caBundle.existingSecret .Values.pod.caBundle.configMap }}
+      {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret (include "apchi.hasCaBundle" .) }}
       volumes:
-        {{- if .Values.pod.caBundle.existingSecret }}
-        - name: ca-bundle
-          # No defaultMode and no fsGroup needed: a list of public certificates, so the
-          # kubelet's own 0644 is correct and there is no key here to protect.
-          secret:
-            secretName: {{ .Values.pod.caBundle.existingSecret | quote }}
-        {{- else if .Values.pod.caBundle.configMap }}
-        - name: ca-bundle
-          configMap:
-            name: {{ .Values.pod.caBundle.configMap | quote }}
-        {{- end }}
+        {{- include "apchi.trustVolumes" (dict "root" $ "java" false) | trim | nindent 8 }}
         {{- if .Values.trino.tls.existingSecret }}
         - name: trino-tls
           secret:

@@ -301,6 +301,42 @@ trino:
 # as any uid. This setting only decides fsGroup and file modes.
 restrictedPodSecurity: false
 
+# The certificate authorities every pod trusts, mounted into each one the same way. Both are
+# optional and render nothing when unset, and both are named rather than looked up: Helm's
+# `lookup` finds nothing under `helm template`, `--dry-run` or Argo CD, so the same values
+# would render a different pod depending on how the chart was installed.
+#
+# A PEM bundle, in every pod -- Apchi, MongoDB, the Trino coordinator and workers, and the
+# Validation pod Apchi creates -- at /etc/pki/tls/certs/ca-bundle.crt, the path RHEL-based
+# images read their system trust from. That **replaces** an image's own bundle there, so it
+# has to hold the public roots too if anything should still trust them; OpenShift's injected
+# bundle does. Apchi itself adds it to the public store rather than replacing it, for every
+# connection it makes: Trino, MongoDB, the OIDC provider and the alert webhook.
+#
+# On OpenShift it is a ConfigMap labelled `config.openshift.io/inject-trusted-cabundle: "true"`,
+# which the platform fills under the key `ca-bundle.crt`. A list of public certificates, so it
+# is mounted unrestricted and needs no fsGroup.
+caBundle:
+  existingSecret: ""
+  configMap: ""
+  key: ca-bundle.crt
+
+# A Java truststore, in every pod that runs Trino: the coordinator, the workers and the
+# Validation pod. Mounted at /etc/pki/java/truststore/cacerts, and Trino's JVM is pointed at it
+# with -Djavax.net.ssl.trustStore -- nothing else to set. It then trusts what is in this store
+# **instead of** the JDK's own, so include the public roots if a catalog reaches anything they
+# sign. This is what connectors use for their outbound TLS; Trino's own HTTPS server, which
+# the chart does not configure, has a truststore of its own.
+javaTruststore:
+  existingSecret: ""
+  configMap: ""
+  key: cacerts
+  # Only for a store that needs one to load. Java reads the certificates in a truststore
+  # without its password, so most do not.
+  password:
+    existingSecret: ""
+    key: ""
+
 # What Apchi's own pod runs as, and how it mounts its own credentials. Shared by both the
 # `trino.tls` and `mongodb.tls` blocks, because a Secret volume's files are root-owned
 # whatever their mode -- so the group has to be one Apchi's process belongs to, and two
@@ -313,29 +349,6 @@ pod:
   # 0640 and not 0600: the kubelet ORs 0440 into every file's mode in a readOnly volume, so
   # 0600 cannot be produced. 0644 would leave a private key world-readable.
   credentialFileMode: 0640
-  # A CA to trust **in addition to** the public store, for every outbound TLS connection
-  # Apchi makes: the Trino coordinator, MongoDB, the OIDC provider and the alert webhook.
-  #
-  # One bundle and not one per destination, because an organisation with an internal PKI has
-  # one root for all four. Added to the public store rather than replacing it, which Apchi
-  # does by concatenating the two itself -- a CA path handed to PyMongo or to the Trino
-  # client's `requests` session makes them trust that CA *alone*, so an internal OIDC
-  # provider would otherwise stop a public alert webhook from verifying.
-  #
-  # Deliberately not restricted and given no fsGroup: this is a list of public certificates,
-  # so the kubelet's own 0644 is right and there is no key here to protect.
-  #
-  # From a Secret or from a ConfigMap, whichever holds it. On OpenShift that is a ConfigMap:
-  # one labelled `config.openshift.io/inject-trusted-cabundle: "true"` is filled by the
-  # platform with the cluster's trusted CAs under the key `ca-bundle.crt`. Named here
-  # rather than looked up: Helm's `lookup` finds nothing under `helm template`, `--dry-run`
-  # or Argo CD, so the same values would render a different pod depending on how the chart
-  # was installed. Neither set means no CA beyond the public store.
-  caBundle:
-    existingSecret: ""
-    configMap: ""
-    key: ca.crt
-    mountPath: /etc/apchi/ca
 
 mongodb:
   # Apchi's own storage: every Snapshot and all in-flight state.
@@ -354,7 +367,8 @@ mongodb:
     # file itself is PyMongo's `tlsCertificateKeyFile`. That is its shape, unlike the
     # `trino.tls` settings, which want the certificate and the key apart.
     #
-    # Either this or caKey on its own turns TLS on.
+    # A client certificate turns TLS on by itself. Without one, put tls=true in the URI: the
+    # CA bundle alone does not, because it is what every pod trusts.
     certificateKeyKey: ""
     # Or the certificate and its key as two keys of the same Secret, which is how most
     # issuers write them (`tls.crt` and `tls.key` from cert-manager). Apchi joins the two

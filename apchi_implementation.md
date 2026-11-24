@@ -1882,10 +1882,13 @@ connection (#186). Three things about that are not guesses and are worth recordi
   a single file, where the Trino client wants them apart (§16, "Two HTTP libraries reach one
   coordinator"). The two settings are shaped differently because the two clients are. What
   Apchi *trusts* is one setting for all four destinations, below.
-- **Either file turns TLS on.** PyMongo builds its SSL context from them and does not also
-  need `tls=true`, verified against a mongod running `--tlsMode requireTLS`. There is no
+- **A client certificate turns TLS on.** PyMongo builds its SSL context from it and does not
+  also need `tls=true`, verified against a mongod running `--tlsMode requireTLS`. There is no
   silently-plaintext configuration to fall into here, unlike the port-based scheme inference
-  that made the Trino client reach a TLS listener in the clear.
+  that made the Trino client reach a TLS listener in the clear. The CA bundle alone does not:
+  it is what every pod trusts, set for reasons that have nothing to do with MongoDB, and
+  handed to PyMongo it turned TLS on against a plaintext MongoDB too. It reaches MongoDB when
+  the URI says `tls=true` or a client certificate is configured.
 - **How to authenticate stays in the URI**, as `?authMechanism=MONGODB-X509`, because that is
   where PyMongo already reads it. x509 is worth preferring where the platform offers it: the
   URI is a plain Helm value, so a SCRAM password in it is visible in `helm get values` and in

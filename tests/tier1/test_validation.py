@@ -14,7 +14,7 @@ from httpx import ASGITransport, AsyncClient
 from testcontainers.core.container import DockerContainer
 
 from app.adapters.trino import Trino
-from app.config import Settings
+from app.config import MountedFile, Settings, Truststore
 from app.main import create_app
 from app.pipeline.applies import TERMINAL
 from app.pipeline.validation import ROLE_LABEL, VALIDATION_ROLE
@@ -316,3 +316,25 @@ async def test_the_probe_is_built_the_way_the_settings_say(
     spec = next(iter(fake_kubernetes.pod_manifests.values()))["spec"]
     assert "securityContext" not in spec
     assert spec["containers"][0]["resources"] == {"limits": {"cpu": 2, "memory": "2Gi"}}
+
+
+async def test_the_probe_trusts_what_the_settings_name(
+    settings: Settings, fake_kubernetes: FakeKubernetes, trino_cluster: DockerContainer
+) -> None:
+    """End to end from Settings, which the chart sets as JSON: the probe Apchi creates carries
+    the CA bundle and the Java truststore the Cluster's own Trino pods do."""
+    fake_kubernetes.pod_never_serves = True
+    trusting = settings.model_copy(
+        update={
+            "validation_timeout_seconds": 1.0,
+            "validation_ca_bundle": MountedFile(config_map="trusted-ca", key="ca-bundle.crt"),
+            "validation_java_truststore": Truststore(secret="truststore", key="cacerts"),
+        }
+    )
+
+    async with _running(trusting, fake_kubernetes, trino_cluster) as client:
+        await client.post("/api/v1/catalogs", json=MEMORY)
+        await _validation(client)
+
+    spec = next(iter(fake_kubernetes.pod_manifests.values()))["spec"]
+    assert {"ca-bundle", "java-truststore"} <= {v["name"] for v in spec["volumes"]}

@@ -120,8 +120,9 @@ def test_the_bundle_is_built_once_per_path(private_ca: str) -> None:
 
 def test_every_destination_reads_the_same_setting(private_ca: str) -> None:
     """One `ca_file` and not one per destination. Mongo takes the bundle as a path and the
-    httpx callers take a context, but both come from the same configured file."""
-    settings = Settings(ca_file=private_ca)
+    httpx callers take a context, but both come from the same configured file. Mongo only
+    where TLS is asked for: the bundle alone does not turn it on (test_mongo_tls.py)."""
+    settings = Settings(ca_file=private_ca, mongo_uri="mongodb://db:27017/?tls=true")
 
     assert _tls_options(settings) == {"tlsCAFile": bundled_ca(private_ca)}
     assert isinstance(verification(settings.ca_file), ssl.SSLContext)
@@ -331,7 +332,7 @@ def test_a_missing_ca_names_the_setting_rather_than_only_the_path() -> None:
         bundled_ca("/nonexistent/ca.pem")
 
     assert "/nonexistent/ca.pem" in str(raised.value)
-    assert "pod.caBundle" in str(raised.value)
+    assert "caBundle" in str(raised.value)
 
 
 # --------------------------------------------------------------------------------------
