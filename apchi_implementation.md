@@ -1099,11 +1099,6 @@ Hardening a file into an outage is worse than the exposure, so the mode is left 
 kubelet's default there and the deployment is the thing to fix. The validation probe is
 Apchi's own pod, so it simply sets both.
 
-This is also the one place the two deployment shapes differ in what an Admin *can* do. The
-official chart's `secretMounts` renders only `name` and `secretName`, with nowhere to put a
-mode, so a credential-bearing Secret has to go through `additionalVolumes` instead — which
-is per-node, and therefore declared twice. See `docs/official-trino-chart.md`.
-
 ### Ordering
 
 The certificate must exist on disk before any catalog that references it connects. Apply
@@ -1396,34 +1391,10 @@ there, which it refuses to start on. This is the one Section where "no configura
 is the absence of the mounts, and it is only safe *because* Apchi owns the switch as well as
 the content.
 
-**Unless the deployment owns the pointer** (§16). A deployment that mounts the whole of
-`/etc/trino` cannot accept either single-file mount, so there the Admin provides
-`resource-groups.properties` and Apchi writes only the rules, into
-`/etc/trino/resource-groups/` — the path the official `trino/trino` chart already uses.
-
-Apchi no longer owns the switch then, so "none configured" cannot be the absence of the
-mounts. It writes out what the absence *means* instead, and that is not a value Apchi chose.
-Read from the 483 source: `InternalResourceGroupManager.loadConfigurationManager()` returns
-early when the file does not exist, leaving `LegacyResourceGroupConfigurationManager` in
-force — whose `match()` returns `ResourceGroupId("global")` for **every** query, and whose
-`configure()` sets `hardConcurrencyLimit` from `query.max-concurrent-queries` (default 1000)
-and `maxQueued` from `query.max-queued-queries` (default 5000), both `@Deprecated`.
-
-So an empty Section renders exactly that: one catch-all root group named `global` at
-1000/5000, with a catch-all selector. The selector is not optional — the legacy manager
-matches queries itself rather than consulting selectors, and a document with groups and none
-rejects every query with *"No matching resource group found with the configured selection
-rules"*, verified against a running coordinator. Both deployment shapes therefore behave
-identically when an Operator empties this Section.
-
-The Admin's own `query.max-concurrent-queries` and `query.max-queued-queries` are not read
-when rendering that fallback. Both are deprecated and rarely set, and being wrong costs a
-concurrency ceiling rather than an outage.
-
 **"No resource groups" has never meant "no limits" in Trino**, which is worth stating because
 it is easy to assume otherwise. A Cluster with no rules file still runs under the legacy
-manager's 1000 concurrent and 5000 queued. Emptying this Section — on either deployment shape
-— therefore returns the Cluster to those numbers rather than removing all governance.
+manager's 1000 concurrent and 5000 queued. Emptying this Section therefore returns the Cluster
+to those numbers rather than removing all governance.
 
 **What Validation catches that a request cannot.** Two rules span the whole Candidate rather
 than one resource, so they are checked at Validate: a selector naming a group that does not
@@ -1637,33 +1608,6 @@ thing it is probing starts cleanly having validated nothing. So that one file re
 Cluster unvalidated, and if it is broken the Cluster fails and Auto Rollback puts it back —
 the same contract, one stage later. Apchi logs a warning saying so when an Admin writes it.
 
-**On a whole-directory deployment, raw files do not work at all.** This is the one §14
-capability that does not reach both deployment shapes (§16), and it is structural rather than
-unfinished.
-
-A raw file's path is the Admin's to choose — that is the feature — which makes it a
-single-file mount by nature. There is no directory to move it into without taking away the
-thing being asked for, which is what separates this from Resource Groups and Event Listeners,
-whose paths Apchi knows in advance. So on a deployment that mounts `/etc/trino` as one volume,
-**every** raw path is refused:
-
-| | |
-|---|---|
-| file-by-file (`deploy/trino-dev`) | every path under `/etc/trino` works |
-| whole directory (official chart) | every path refused, at write time |
-
-Refused when the Admin writes the file rather than during the Apply, because somebody reaching
-for this is usually mid-incident and a refusal that arrives minutes later costs them the thing
-they were fixing. The message names the mount that covers the path and the chart values to use
-instead.
-
-`config.properties` is the sharpest case and cannot work there even in principle: on such a
-deployment that file *is* the chart's own ConfigMap, so there is nothing for Apchi to replace.
-An Admin there sets what they need through the chart — `additionalConfigProperties` on the
-official one — which is the same capability by a different route, and the route that
-deployment already provides. `docs/official-trino-chart.md` says so where an Admin will be
-looking.
-
 ## Maintenance Mode
 
 Admins can disable and re-enable Operator mutation. The primary use is platform upgrades and
@@ -1745,8 +1689,7 @@ access control rules once at startup and never again, so Apchi would write a per
 change, report success, and the Cluster would never see it (§13.4). This is the first
 precondition that reads the Admin's Trino configuration rather than their pod template: Apchi
 follows whatever is mounted at `access-control.properties` back to its ConfigMap or Secret and
-reads the property out of it. The seventh does the same for a pointer the deployment claims to
-provide, and the ninth for `config.properties` on every Apply.
+reads the property out of it. The eighth does the same for `config.properties` on every Apply.
 
 **The sixth precondition: no read-only directory volume covers a path Apchi mounts a single
 file at.** A `subPath` mount of one key at a path inside a ConfigMap or Secret directory mount
@@ -1759,94 +1702,18 @@ manifest should see the whole list.
 
 ## Deployment shapes
 
-Two shapes exist in the wild and Apchi has to be honest about which it supports. The decision
-below, and the options rejected on the way to it, are
-[ADR-0007](./docs/adr/0007-the-deployment-owns-the-pinned-pointers.md).
+Apchi supports one: **file-by-file**, which `charts/trino` and `deploy/trino-dev` use. Each file
+in `/etc/trino` is its own mount, so Apchi can add and remove single-file mounts inside it.
 
-**File-by-file**, which `deploy/trino-dev` uses: each file in `/etc/trino` is its own mount,
-so Apchi can add and remove single-file mounts inside it. Everything works here.
+The other shape in the wild -- one ConfigMap mounted over the whole of `/etc/trino`, which the
+official `trino/trino` chart uses -- was supported until 0.3 and is no longer (ADR-0008). No
+single file can be placed inside such a mount, so it needed a second way of delivering Resource
+Groups and Event Listeners, two settings to select it, a precondition of its own, and a rule
+that Event Listeners could never be emptied. Apchi now ships its Trino in the same chart as
+itself, so nothing needs that shape. The sixth precondition still refuses it, which is what
+turns an attempt into a named error rather than a coordinator that never starts.
 
-**Whole directory**, which the official `trino/trino` chart uses: one ConfigMap mounted at
-`/etc/trino`. No single file can be placed inside it, so anything Apchi delivers there has to
-be a nested directory — which the kubelet layers happily.
-
-All six Sections work on both shapes. Permissions, Client Certificates and Certificate
-Mapping always deliver a directory the Admin mounts. Resource Groups and Event Listeners
-deliver single files Apchi mounts **by default**, and a directory when the deployment provides
-the pointer:
-
-| What the deployment provides | Where Apchi then writes |
-|---|---|
-| `resource-groups.properties`, naming the rules | `/etc/trino/resource-groups/resource-groups.json` |
-| `event-listener.config-files`, naming the file | `/etc/trino/event-listener/event-listener.properties` |
-
-Both are off by default, and the shape that needs them is the one Apchi cannot detect without
-guessing — a deployment it cannot read tells it nothing, and defaulting to the mode that
-refuses to empty a Section would be the wrong way to be wrong. The same division is already in
-force for `access-control.properties` (§13.4).
-
-That is a deployment concern and **not** a change of Section ownership: Operators still own all
-six Sections (§3). A pointer names where a file lives and never varies with the Candidate; what
-is in the file stays the Operator's.
-
-**The seventh precondition: a pointer the deployment claims to provide is really there, and
-really names the directory Apchi fills.** An Admin who turns the mode on and forgets the
-property gets a Section that writes files nobody reads — the Apply succeeds, the Secret is
-correct, and the Cluster behaves as if the Section were empty.
-
-**What it costs: Event Listeners can no longer be emptied in that mode.** The pointer is
-always present, so the file it names has to be, and Trino refuses to start when a file it was
-told to read is missing. Emptying is therefore refused — at request time, because the Candidate
-is shared and an empty Section caught only by Validation blocks everyone's Apply
-([ADR-0002](./docs/adr/0002-configuration-candidate.md)), and again during Validation for the
-paths that do not go through a delete: a Section Revert, and a whole-document import.
-
-Resource Groups is **not** refused, because Trino supplies the answer. An absent rules file
-leaves the legacy manager in force — a catch-all group at `query.max-concurrent-queries` and
-`query.max-queued-queries` — so an empty Section renders that document and both deployment
-shapes behave the same (§13.5). Event Listeners has no equivalent: Trino ships no listener
-that does nothing, so there is nothing to render in place of none.
-
-Note what the fallback is **not**: an empty document. A rules file with no selectors rejects
-every query — verified against a running coordinator: *"No matching resource group found with
-the configured selection rules"*. Reproducing the legacy manager needs a catch-all group *and*
-a catch-all selector, because that manager matches every query itself rather than consulting
-selectors at all.
-
-**And it is the Section's state, not just the change.** An Apply is refused while Event
-Listeners is empty, whether or not this Apply is what emptied it — so on such a deployment a
-listener must be configured before *any* Apply succeeds, including one that touches only
-catalogs.
-
-That is sharper than it first looks, and the reason is delivery rather than policy:
-`files.by_secret` writes each Secret **whole**, so an Apply with one of these Sections empty
-writes an empty Secret, the mounted directory loses the file the pointer names, and the next
-restart leaves a coordinator that cannot come back — with Apchi having deleted the Admin's own
-file on the way past. Refusing only the *transition* to empty was tried and is unsafe for
-exactly that reason.
-
-No legitimate state is blocked by it. Trino will not start unless those files already exist,
-so a **running** Cluster in this mode always has rules and a listener; a Candidate that has
-neither is a Cluster waiting to be adopted (§15), not a Cluster with nothing configured.
-
-**The same constraint applies at install, not only later.** Trino validates every path property
-at startup, so on such a deployment the Secrets those pointers name must already hold a file
-before the coordinator first starts — and Apchi writes them on its first Apply, which is after.
-Verified: an empty event listener Secret stops the coordinator booting with *"file does not
-exist: /etc/trino/event-listener/event-listener.properties"*. The Admin seeds them, the way
-`deploy/trino-dev` already ships a generated default of the access-control and user-mapping
-files for the same reason. `docs/official-trino-chart.md` lists which.
-
-One further consequence of that chart's shape: `additionalConfigProperties` reaches the worker
-ConfigMap as well as the coordinator's, and Trino validates path properties on every node — so
-the Secrets have to be mounted on both roles, not only on the coordinator.
-
-The one capability this does not reach is **Admin raw files** (§14). Their path is the Admin's
-to choose, which makes them single-file mounts by nature, so on a whole-directory deployment
-they are refused — including `config.properties`, which belongs to the chart's own ConfigMap.
-An Admin on such a chart uses its `additionalConfigProperties` instead.
-
-**The eighth precondition: a volume holding a credential is restricted, and still readable.**
+**The seventh precondition: a volume holding a credential is restricted, and still readable.**
 A Secret volume's files are written `0644` and owned by root unless the pod asks otherwise, so
 the default for a private key is world-readable — and libpq refuses a key file like that
 outright, which is how this was found rather than how it was predicted (§13.2). Two halves,
@@ -1873,8 +1740,7 @@ key is a fact about the deployment, and warning about it on every Apply would pu
 Operator cannot act on in front of the one person who cannot fix it. Refusing puts it in front
 of the Admin, once, with the volume named. The cost is real and worth stating: an existing
 install whose pod template has no `fsGroup` has **every** Apply refused after this version,
-because the catalog seed is always mounted. Apchi's own chart and the documented values for the
-official chart both set it.
+because the catalog seed is always mounted. Apchi's own chart sets it.
 
 On Adoption this lands as a cutover change rather than a refusal, like every other precondition
 (§15) — and unlike the seed initContainer it carries no ordering, which is why the message names
@@ -1904,7 +1770,7 @@ Nothing on a worker is exempt as Apchi's own, either. The coordinator's exemptio
 Apchi sets those modes during Apply and Apply patches one Deployment — so on a worker every
 credential volume is the Admin's, and the empty exemption set is what says so.
 
-**The ninth precondition: Trino will accept the connection Apchi is configured to make.**
+**The eighth precondition: Trino will accept the connection Apchi is configured to make.**
 Every authentication type Trino supports requires TLS, and with an authenticator enabled
 alongside HTTPS Trino refuses plain HTTP from *every* client unless
 `http-server.authentication.allow-insecure-over-http` is true — which Trino's own documentation
@@ -2763,11 +2629,6 @@ Additional constraints:
   one file the probe cannot validate is `config.properties`, because the probe assembles its
   own, so a broken one is caught by the Cluster and taken back rather than refused earlier.
 
-  One limit, and it is structural rather than unfinished: a raw file's path is the Admin's to
-  choose, which makes it a single-file mount by nature. On a deployment that mounts the whole
-  of `/etc/trino` as one volume every raw path is therefore refused, `config.properties`
-  included — that file belongs to the chart's own ConfigMap. §14's promise holds on a
-  file-by-file deployment and not on a whole-directory one (§16).
 - **Maintenance Mode mechanics** — behaviour when an Apply is already in flight. The endpoint
   and the persistence model are settled (§14).
 - **Certificate mapping migration** — the mechanism is built: a Cluster arriving with patterns

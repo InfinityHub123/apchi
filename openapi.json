@@ -3893,7 +3893,7 @@
   "info": {
     "summary": "Control plane for configuring one Trino cluster",
     "title": "Apchi",
-    "version": "0.2.0"
+    "version": "0.2.1"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -7283,7 +7283,6 @@
     },
     "/api/v1/event-listeners/{name}": {
       "delete": {
-        "description": "Refused when it would empty the Section and this Cluster's deployment sets\n`event-listener.config-files` -- that property names a file Trino will not start\nwithout, and there is no listener that does nothing to render in its place (#125).",
         "operationId": "delete_event_listener_api_v1_event_listeners__name__delete",
         "parameters": [
           {

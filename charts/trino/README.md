@@ -21,22 +21,13 @@ and node selectors belong to Admins. What it does is make the handful of things 
 *does* require impossible to get wrong, since each of them fails in a way that does not
 look like its cause.
 
-The official `trinodb/charts` chart is the general-purpose one and has far more in it. It
-**does** work with Apchi, with two settings and a handful of values —
-[`docs/official-trino-chart.md`](../../docs/official-trino-chart.md) is the whole recipe, and
-CI proves Apchi's preconditions pass against what that chart renders.
-
-The difference between the two is worth knowing even if you use this one. The official chart
-mounts its whole configuration directory from one ConfigMap, and Kubernetes will not place a
-single file inside a read-only directory volume: runc has no file to bind onto, the container
-fails with `not a directory`, and the pod crashloops with no Trino log at all. A nested
-*directory* mount in the same position is fine.
-
-This chart mounts each configuration file separately instead, which is the shape that lets
-Apchi own the two mounts Trino pins to `/etc/trino` — `resource-groups.properties` and
-`event-listener.properties`. On the official chart the deployment provides those two pointers
-and Apchi fills the directories they name, which costs the ability to empty Event Listeners
-and rules out Admin raw files. Neither limit applies here.
+The official `trinodb/charts` chart is the general-purpose one and has far more in it, but
+Apchi does not support it. It mounts its whole configuration directory from one ConfigMap, and
+Kubernetes will not place a single file inside a read-only directory volume: runc has no file
+to bind onto, the container fails with `not a directory`, and the pod crashloops with no Trino
+log at all. This chart mounts each configuration file separately instead, which is the shape
+that lets Apchi own the two mounts Trino pins to `/etc/trino` — `resource-groups.properties` and
+`event-listener.properties` (ADR-0008).
 
 ## What it guarantees
 
@@ -61,13 +52,7 @@ runs it. These are the things it proves:
    once at startup and never again.
 6. **No read-only directory volume covers a path Apchi mounts a single file at.** The
    `not a directory` failure above, refused before an Apply rather than discovered during
-   one. This is the check the official chart fails without its own configuration.
-
-The checker runs a seventh — **a pointer the deployment claims to provide is really there**,
-and really names the directory Apchi fills — but it has nothing to say here. That check only
-engages on a deployment where the Admin owns those pointers, and this chart is not one: it
-runs against default settings, where Apchi mounts both files itself. The check matters for the
-official chart, not for this one.
+   one. This is the check the official chart fails.
 
 ## This chart creates no Secrets
 
@@ -126,8 +111,8 @@ and refuses rather than letting the queries time out — `charts/apchi/README.md
 values, `docs/getting-started.md` for a worked example.
 
 **Autoscaling, ingress, exchange managers, JMX export, Kafka schemas, group providers.**
-The official chart has all of these. If you need them, that is the chart to use — and #93
-is what has to land first.
+The official chart has all of these, but Apchi does not support it (ADR-0008); a value this
+chart lacks is a gap to add here.
 
 **Resource groups and event listeners.** Not an omission: Apchi owns those files and adds
 the volumes for them to this pod template itself, because for both of them the *absence* of

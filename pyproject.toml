@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "apchi"
-version = "0.2.0"
+version = "0.2.1"
 description = "Control plane for configuring one Trino cluster"
 requires-python = ">=3.12"
 dependencies = [

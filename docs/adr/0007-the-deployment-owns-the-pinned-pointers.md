@@ -1,5 +1,8 @@
 # On a whole-directory deployment, the deployment owns the two pinned pointers
 
+**Superseded by [ADR-0008](0008-one-deployment-shape.md).** Apchi no longer supports the
+whole-directory shape; this record is kept for why it once did and what it cost.
+
 Apchi supports two Deployment Shapes. Where the coordinator mounts `/etc/trino` file by file,
 Apchi mounts the two files Trino pins to that directory itself. Where it mounts the whole of
 `/etc/trino` as one volume, the **deployment** provides those two pointers and Apchi fills only
