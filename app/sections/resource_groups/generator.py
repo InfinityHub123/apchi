@@ -12,7 +12,7 @@ is rejected outright in `config.properties`.
 
 import json
 import re
-from typing import Any, Final
+from typing import Any
 
 from pydantic import BaseModel, ValidationError
 from pydantic.alias_generators import to_camel
@@ -29,31 +29,16 @@ from app.sections.resource_groups.model import (
 RULES_KEY = "resource-groups.json"
 MANAGER_KEY = "resource-groups.properties"
 
-#: Where both files go when **Apchi** mounts them, which is the default. Two single-file
-#: mounts on one volume, so an empty Section takes them away together.
+#: Where both files go. Two single-file mounts on one volume, so an empty Section takes them
+#: away together.
 RULES_PATH = f"/etc/trino/{RULES_KEY}"
 MANAGER_PATH = f"/etc/trino/{MANAGER_KEY}"
-
-#: Where the rules go when the **deployment** owns the properties file (#125). A directory
-#: the Admin mounts, because `/etc/trino/resource-groups.properties` is pinned by Trino and a
-#: deployment that mounts the whole config directory cannot take a single file inside it.
-#: This is the path the official `trino/trino` chart already uses for its own rules file, so
-#: an Admin on that chart changes nothing but which Secret the volume names.
-RULES_DIR = "/etc/trino/resource-groups"
-RULES_IN_DIR = f"{RULES_DIR}/{RULES_KEY}"
 
 #: Read as `etc/resource-groups.properties`, so it cannot be merged into config.properties:
 #: `resource-groups.configuration-manager` there fails startup with "Configuration property
 #: 'resource-groups.configuration-manager' was not used".
 MANAGER_FILE = (
     f"resource-groups.configuration-manager=file\nresource-groups.config-file={RULES_PATH}\n"
-)
-
-#: The same pointer, naming the directory instead. On the Cluster this file is the Admin's
-#: when they own it (#125); the probe is Apchi's, so Apchi supplies it there itself -- a probe
-#: holding rules Trino was not told to read would start cleanly having validated nothing.
-MANAGER_FILE_IN_DIR = (
-    f"resource-groups.configuration-manager=file\nresource-groups.config-file={RULES_IN_DIR}\n"
 )
 
 
@@ -160,70 +145,6 @@ def render(desired: Resources) -> dict[str, str]:
     if is_empty(desired):
         return {}
     return {RULES_PATH: render_rules(desired), MANAGER_PATH: MANAGER_FILE}
-
-
-#: What Trino itself does when `etc/resource-groups.properties` does not exist, which is the
-#: behaviour an empty Section has to reproduce where the file cannot be taken away.
-#:
-#: Not a policy Apchi invented. Read out of the 483 source: `InternalResourceGroupManager`
-#: returns early when the file is absent, leaving `LegacyResourceGroupConfigurationManager`
-#: in force -- whose `match()` returns `ResourceGroupId("global")` for *every* query, and
-#: whose `configure()` sets the two limits below from `QueryManagerConfig`.
-#:
-#: So "no resource groups" has never meant "no limits" in Trino. It means these.
-_LEGACY_GROUP: Final = "global"
-#: `query.max-concurrent-queries`, default 1000 and `@Deprecated` in QueryManagerConfig.
-_LEGACY_CONCURRENCY: Final = 1000
-#: `query.max-queued-queries`, default 5000 and `@Deprecated` likewise.
-_LEGACY_QUEUED: Final = 5000
-
-
-def trino_default_rules() -> str:
-    """The rules file that reproduces an absent `resource-groups.properties`.
-
-    A single catch-all root group, because the legacy manager matches every query rather than
-    consulting selectors -- a document with groups and no selectors is *not* equivalent, it
-    rejects every query with "No matching resource group found with the configured selection
-    rules" (reproduced against a running coordinator).
-
-    The Admin's own `query.max-concurrent-queries` and `query.max-queued-queries` are not read
-    here. Both are deprecated and rarely set, and the cost of being wrong is a concurrency
-    ceiling rather than an outage -- so this uses Trino's defaults and says so, rather than
-    adding a second read of the Admin's configuration for a case that is already a fallback.
-    """
-    return (
-        json.dumps(
-            {
-                "rootGroups": [
-                    {
-                        "name": _LEGACY_GROUP,
-                        "hardConcurrencyLimit": _LEGACY_CONCURRENCY,
-                        "maxQueued": _LEGACY_QUEUED,
-                    }
-                ],
-                "selectors": [{"group": _LEGACY_GROUP}],
-            },
-            indent=2,
-        )
-        + "\n"
-    )
-
-
-def render_rules_only(desired: Resources) -> dict[str, str]:
-    """Just the rules, at the path the deployment's own properties file points at (#125).
-
-    No properties file, because the deployment provides it. And never *absent*, because that
-    pointer always names a file and Trino refuses to start without the one it names -- so an
-    empty Section renders what Trino would do with no file at all rather than nothing.
-
-    That is what makes the two deployment shapes behave the same. Where Apchi owns the mounts
-    it expresses "none configured" by taking them away, and Trino falls back to its legacy
-    manager; here it cannot take them away, so it writes the fallback out instead. An Operator
-    emptying this Section gets the same Cluster either way.
-    """
-    if is_empty(desired):
-        return {RULES_IN_DIR: trino_default_rules()}
-    return {RULES_IN_DIR: render_rules(desired)}
 
 
 class Unreadable(Exception):

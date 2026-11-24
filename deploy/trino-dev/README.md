@@ -94,11 +94,7 @@ Apchi still mounts single files here — `resource-groups.properties`, the
 `resource-groups.json` beside it, and `event-listener.properties`. The two `.properties` are
 the reason: Trino pins both to its configuration directory and no property relocates either,
 so Apchi has to mount them where Trino looks. Everything else it writes goes into a directory
-the Admin mounts, which works on either shape. On a
-whole-directory deployment the Admin provides those two pointers instead and Apchi fills the
-directories they name — see [`docs/official-trino-chart.md`](../../docs/official-trino-chart.md).
-This file-by-file shape is the one that lets Apchi own them, which is why the tests run
-against it.
+the Admin mounts. This file-by-file shape is the only one Apchi supports (ADR-0008).
 
 ## What it proves
 

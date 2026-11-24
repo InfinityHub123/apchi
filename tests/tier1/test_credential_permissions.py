@@ -276,17 +276,6 @@ def test_only_the_sections_that_render_a_secret_declare_one(settings: Settings) 
     }
 
 
-def test_the_event_listener_directory_shape_carries_credentials_too(settings: Settings) -> None:
-    """A listener's properties hold its password inline whether Apchi mounts the file or
-    the Admin mounts the directory it sits in (#125), and only the second shape puts the
-    mode in the Admin's hands."""
-    from_deployment = settings.model_copy(
-        update={"event_listener_config_files_from_deployment": True}
-    )
-
-    assert settings.event_listener_secret_name in credential_secrets(REGISTERED, from_deployment)
-
-
 async def test_the_dev_worker_restricts_its_certificates(
     settings: Settings, fake_kubernetes: FakeKubernetes
 ) -> None:

@@ -15,7 +15,6 @@ from app.sections import SectionName
 from app.sections.admin import AdminValues
 from app.sections.base import (
     Cluster,
-    CoordinatorDirectory,
     CoordinatorFile,
     Delivery,
     DiscoveredPaths,
@@ -31,10 +30,7 @@ from app.sections.base import (
 )
 from app.sections.resource_groups import SECTION, SELECTORS, SEPARATOR, SETTINGS
 from app.sections.resource_groups.generator import (
-    MANAGER_FILE_IN_DIR,
     MANAGER_PATH,
-    RULES_DIR,
-    RULES_IN_DIR,
     RULES_PATH,
     Unreadable,
     children_of,
@@ -42,7 +38,6 @@ from app.sections.resource_groups.generator import (
     parent_of,
     parse_rules,
     render,
-    render_rules_only,
     selectors_of,
     settings_of,
     store_selectors,
@@ -167,27 +162,11 @@ class ResourceGroupsSection:
     requires_rollout = True
 
     def coordinator_files(self, settings: Settings) -> tuple[Delivery, ...]:
-        """Two files Apchi mounts, or one directory the Admin does (#125).
-
-        **Apchi mounts both** by default: the rules, and the properties file that makes Trino
-        read them, in one Secret and one volume so an empty Section takes them away together.
+        """Two files Apchi mounts: the rules, and the properties file that makes Trino read
+        them, in one Secret and one volume so an empty Section takes them away together.
         Nothing goes in the probe's `config.properties` -- unlike the user-mapping file, what
-        turns this on is a file of its own, which is why `probe_files` carries it.
-
-        **The deployment provides the properties file** when it mounts the whole of
-        `/etc/trino` and so cannot accept a single file inside it. Apchi then fills only the
-        directory that file points at. The pinned path leaves `owned_paths` with it, so §16's
-        single-file precondition has nothing left to refuse here -- without that check being
-        weakened for anyone else.
+        turns this on is a file of its own.
         """
-        if settings.resource_groups_properties_from_deployment:
-            return (
-                CoordinatorDirectory(
-                    secret=settings.resource_groups_secret_name,
-                    path=RULES_DIR,
-                    probe_files={MANAGER_PATH: MANAGER_FILE_IN_DIR},
-                ),
-            )
         return tuple(
             CoordinatorFile(
                 secret=settings.resource_groups_secret_name,
@@ -200,8 +179,6 @@ class ResourceGroupsSection:
     def render_files(
         self, desired: Resources, settings: Settings, admin: AdminValues
     ) -> dict[str, str]:
-        if settings.resource_groups_properties_from_deployment:
-            return render_rules_only(desired)
         return render(desired)
 
     def discover_paths(self, settings: Settings, properties: Mapping[str, str]) -> DiscoveredPaths:
@@ -212,7 +189,7 @@ class ResourceGroupsSection:
         whatever `config-file` points at, so a properties file naming something other than
         the rules Apchi found means the rules Apchi found are not the rules in force.
         """
-        ours = self._rules_path(settings)
+        ours = RULES_PATH
         named = properties.get("resource-groups.config-file")
         if named:
             return DiscoveredPaths(files={ours: named, MANAGER_PATH: MANAGER_PATH})
@@ -224,18 +201,6 @@ class ResourceGroupsSection:
             ),
         )
 
-    @staticmethod
-    def _rules_path(settings: Settings) -> str:
-        """Where Apchi writes the rules, which depends on who owns the properties file.
-
-        Two paths rather than one because the properties file is pinned to `/etc/trino` and
-        the rules are not: when Apchi mounts both they sit beside each other, and when the
-        deployment owns the pointer the rules move into a directory it can name (#125).
-        """
-        if settings.resource_groups_properties_from_deployment:
-            return RULES_IN_DIR
-        return RULES_PATH
-
     def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
         """Both files absent means no Resource Groups, which is how this Section says so.
 
@@ -245,7 +210,7 @@ class ResourceGroupsSection:
         reading a file it does not own would be reading the Admin's configuration as if it
         were an Operator's.
         """
-        ours = self._rules_path(settings)
+        ours = RULES_PATH
         rules = files.get(ours)
         manager = files.get(MANAGER_PATH)
         if rules is None:

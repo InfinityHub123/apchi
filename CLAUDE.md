@@ -114,30 +114,18 @@ rather than a scheduler (#196). See §18, #193.
 
 ## Deployment shapes
 
-Trino clusters mount `/etc/trino` in one of two ways, and it decides what Apchi can deliver.
+One: **file-by-file**, which `charts/trino` and `deploy/trino-dev` use. Each file in
+`/etc/trino` is its own mount, so Apchi can add single-file mounts inside it -- which it does
+for `resource-groups.properties` and `event-listener.properties`, the two files Trino pins to
+that directory.
 
-**File-by-file**, which `deploy/trino-dev` uses: each file is its own mount, so Apchi can add
-single-file mounts inside it.
+A coordinator that mounts the whole of `/etc/trino` as one ConfigMap, as the official
+`trinodb/charts` chart does, is **not supported** (ADR-0008). Kubernetes will not place a
+single file inside a read-only directory volume -- runc fails the container with
+`not a directory` and Trino never starts, so there is no log to read -- and the sixth
+precondition refuses such a deployment before an Apply rather than letting it break.
 
-**Whole-directory**, which the official `trinodb/charts` chart uses: one ConfigMap at
-`/etc/trino`. Kubernetes will not place a single file inside a read-only directory volume --
-runc fails the container with `not a directory` and Trino never starts, so there is no log to
-read. A nested *directory* mount in the same position is fine, which is why most of what Apchi
-writes is a directory the Admin mounts.
-
-Two files Trino pins to that directory cannot move: `resource-groups.properties` is read as
-`etc/resource-groups.properties`, and the alternative to `etc/event-listener.properties` is
-`event-listener.config-files` in `config.properties`. On a whole-directory deployment the Admin
-provides those two pointers and Apchi fills the directories they name; the settings are
-`resource_groups_properties_from_deployment` and
-`event_listener_config_files_from_deployment`, both off by default. Admin raw files do not work
-there at all, because their path is the Admin's to choose. See §16 and
-`docs/official-trino-chart.md`.
-
-Rendering a chart and checking the pod template is not the same as installing it. Both errors
-in the documented values for the official chart were found by installing it, not by rendering
-it: `additionalConfigProperties` reaches workers as well as the coordinator, and four Secrets
-must hold a file before the coordinator first starts.
+Rendering a chart and checking the pod template is not the same as installing it.
 
 ## Tests
 

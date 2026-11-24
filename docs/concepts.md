@@ -210,10 +210,8 @@ undoes one:
   that it trades away the safety net operators get — a typo in a section is rejected at
   request time by a typed model, a typo in a raw file is a validation failure minutes later.
 
-  Whether this works at all depends on how your coordinator mounts its configuration
-  directory. A raw file's path is the admin's to choose, which makes it a single-file mount,
-  and a deployment that mounts the whole of `/etc/trino` as one volume cannot accept one — see
-  [`official-trino-chart.md`](official-trino-chart.md).
+  A raw file's path is the admin's to choose, which makes it a single-file mount — so it needs
+  a coordinator that mounts `/etc/trino` file by file, as Apchi's own chart does.
 
 **End users** query Trino. They are never Apchi users — only the subject of permissions and
 resource groups.

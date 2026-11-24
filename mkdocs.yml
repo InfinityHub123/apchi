@@ -76,7 +76,6 @@ nav:
   - Glossary: glossary.md
   - Changelog: changelog.md
   - Deploying:
-      - The official Trino chart: official-trino-chart.md
       - A development cluster: deploying/trino-dev.md
       - Adopting a running cluster: deploying/trino-adopted.md
       - OpenShift and restricted clusters: deploying/openshift.md
@@ -95,3 +94,4 @@ nav:
           - adr/0005-single-certificate-secret.md
           - adr/0006-validation-pod-is-a-probe-apchi-connects-to.md
           - adr/0007-the-deployment-owns-the-pinned-pointers.md
+          - adr/0008-one-deployment-shape.md
