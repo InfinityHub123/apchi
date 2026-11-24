@@ -11,13 +11,14 @@ x509 is worth preferring where MongoDB offers it, beyond the deployments that ma
 """
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
 from app.adapters.mongo import Mongo
-from app.config import Environment, Settings
+from app.config import Settings
 from app.trust import bundled_ca
 from tests.certificates import TlsChain, tls_chain
 
@@ -114,7 +115,6 @@ def tls_mongo(chain: TlsChain, pem_files: dict[str, str]) -> Iterator[Settings]:
             pytest.skip(f"the test certificate names localhost, and Docker is at {host}")
         port = started.get_exposed_port(27017)
         yield Settings(
-            environment=Environment.TEST,
             # The mechanism lives here, where PyMongo already reads it. Note there is no
             # username and no password: that is the point.
             mongo_uri=f"mongodb://localhost:{port}/?authMechanism=MONGODB-X509",
@@ -222,3 +222,85 @@ def test_an_unrecognised_option_is_refused_rather_than_ignored() -> None:
 
     with pytest.raises(ConfigurationError, match="Unknown option"):
         AsyncMongoClient("mongodb://localhost:27017/", tlsCAFileTypo=True, connect=False)
+
+
+# --- The certificate and its key as two files --------------------------------------------------
+
+
+def _pair(
+    chain: TlsChain, directory: pytest.TempPathFactory, *, trailing_newline: bool
+) -> tuple[str, str]:
+    """The two files an issuer writes. One real issuer writes the certificate with no trailing
+    newline, which is what turned a shell `cat` of the two into an unreadable PEM."""
+    folder = directory.mktemp("mongo-pair")
+    certificate = folder / "tls.crt"
+    key = folder / "tls.key"
+    body = chain.client if trailing_newline else chain.client.rstrip(b"\n")
+    certificate.write_bytes(body)
+    key.write_bytes(chain.client_key)
+    return str(certificate), str(key)
+
+
+@pytest.mark.parametrize("trailing_newline", [True, False])
+async def test_mongodb_authenticates_apchi_from_a_separate_certificate_and_key(
+    tls_mongo: Settings,
+    chain: TlsChain,
+    tmp_path_factory: pytest.TempPathFactory,
+    trailing_newline: bool,
+) -> None:
+    """Against the real mongod, so the joined file is one OpenSSL can read and MongoDB
+    derives the same identity from. Without a newline between the two the PEM parser fails
+    with `Private key doesn't match certificate`, which is not what is wrong."""
+    certificate, key = _pair(chain, tmp_path_factory, trailing_newline=trailing_newline)
+    separate = tls_mongo.model_copy(
+        update={
+            "mongo_certificate_key_file": None,
+            "mongo_certificate_file": certificate,
+            "mongo_key_file": key,
+        }
+    )
+    mongo = Mongo(separate)
+    try:
+        status = await mongo.database.client.admin.command("connectionStatus")
+        assert status["authInfo"]["authenticatedUsers"] == [{"user": X509_USER, "db": "$external"}]
+    finally:
+        await mongo.close()
+
+
+def test_the_joined_file_is_private(
+    chain: TlsChain, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """It holds the private key, so it is 0600 whatever the mounted files were."""
+    import os
+    import stat
+
+    from app.trust import combined
+
+    certificate, key = _pair(chain, tmp_path_factory, trailing_newline=False)
+    joined = combined(certificate, key)
+
+    assert joined is not None
+    assert stat.S_IMODE(os.stat(joined).st_mode) == 0o600
+    content = Path(joined).read_bytes()
+    assert b"-----END CERTIFICATE-----\n-----BEGIN" in content
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"mongo_certificate_file": "/c"},
+        {"mongo_key_file": "/k"},
+        {
+            "mongo_certificate_file": "/c",
+            "mongo_key_file": "/k",
+            "mongo_certificate_key_file": "/b",
+        },
+    ],
+)
+def test_a_half_or_doubled_certificate_configuration_is_refused(fields: dict[str, str]) -> None:
+    """At startup, naming the settings, rather than as a TLS handshake that fails later and
+    says nothing about configuration."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="mongo_"):
+        Settings(**fields)

@@ -39,7 +39,7 @@ _FORGED = RSAKey.generate_key(2048, parameters={"kid": "first", "alg": "RS256"})
 ISSUER = "http://idp"
 CLIENT_ID = "apchi"
 CLIENT_SECRET = "the-client-secret-nobody-should-see"
-REDIRECT_URL = "http://apchi/api/v1/auth/sso/callback"
+REDIRECT_URL = "https://apchi/api/v1/auth/sso/callback"
 
 
 def _challenge(verifier: str) -> str:

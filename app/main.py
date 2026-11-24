@@ -121,7 +121,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.validation_runner = ValidationRunner(app.state.validation_store, build_engine)
     app.state.high_water = HighWaterMark(app.state.kubernetes, settings)
-    logger.info("apchi starting", extra={"environment": settings.environment})
+    logger.info("apchi starting")
 
     # An Apply left in flight by a restart would freeze the Candidate forever, and may
     # also have left the Cluster diverged -- so recovery unfreezes it and then rolls the

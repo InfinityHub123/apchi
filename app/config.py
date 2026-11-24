@@ -1,16 +1,27 @@
 """Runtime settings. Everything here is overridable without a rebuild."""
 
+import difflib
+import os
+import re
+from collections.abc import Mapping
 from enum import StrEnum
 from functools import lru_cache
+from typing import Self
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+#: What Kubernetes injects into every pod for every Service in its namespace, unasked: a
+#: Service named `apchi` -- which is what the chart names its own -- yields `APCHI_PORT`,
+#: `APCHI_SERVICE_HOST`, `APCHI_PORT_8000_TCP_ADDR` and more. Measured on a cluster with the
+#: chart installed: eighteen of them, none Apchi's. They share the prefix by accident, so they
+#: are not settings anybody mistyped. The chart turns service links off as well; this is for
+#: the deployments that do not use it.
+_SERVICE_LINK = re.compile(
+    r"\A[A-Z0-9_]+_(SERVICE_HOST|SERVICE_PORT(_[A-Z0-9_]+)?|PORT(_\d+_(TCP|UDP|SCTP)(_ADDR|_PORT|_PROTO)?)?)\Z"
+)
 
-class Environment(StrEnum):
-    NP = "np"
-    TEST = "test"
-    PREP = "prep"
-    PROD = "prod"
+_PREFIX = "APCHI_"
 
 
 class AuthMode(StrEnum):
@@ -27,9 +38,14 @@ class AuthMode(StrEnum):
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="APCHI_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix=_PREFIX, env_file=".env", extra="ignore")
 
-    environment: Environment = Environment.NP
+    #: Deprecated, and read only for the log defaults it used to decide; removed in the next
+    #: release. It tied three unrelated behaviours to one tier name, and refused at startup
+    #: any name outside four -- so an installer with tiers of their own crashlooped on a
+    #: label. Any value is accepted now, and Apchi warns while it is set. See
+    #: `effective_log_level`.
+    environment: str | None = None
 
     #: Defaults to `none`, which resolves every caller to an Admin: that is the behaviour
     #: Apchi has today, and a default of anything else would lock existing installs out of
@@ -133,6 +149,13 @@ class Settings(BaseSettings):
     #: that is where PyMongo already reads it, and because an x509 URI carries no secret at
     #: all, unlike the SCRAM password that otherwise sits in `helm get values`.
     mongo_certificate_key_file: str | None = None
+    #: The same certificate and key as two files, which is how most issuers write them: one
+    #: Secret, two keys. Apchi joins them into one private file of its own as it loads them
+    #: (`app.trust.combined`), so nothing between the Secret and the pod has to concatenate
+    #: PEMs in a shell -- which a real deployment did, and lost hours to a certificate with no
+    #: trailing newline. Both or neither, and not alongside `mongo_certificate_key_file`.
+    mongo_certificate_file: str | None = None
+    mongo_key_file: str | None = None
 
     #: The namespace Apchi reads and writes: the Cluster's own.
     kubernetes_namespace: str = "default"
@@ -281,20 +304,75 @@ class Settings(BaseSettings):
     def oidc_scope_list(self) -> list[str]:
         return self.oidc_scopes.split()
 
+    @model_validator(mode="after")
+    def _refuse_unrecognised_settings(self) -> Self:
+        refuse_unrecognised(os.environ)
+        return self
+
+    @model_validator(mode="after")
+    def _one_shape_of_mongo_certificate(self) -> Self:
+        pair = (self.mongo_certificate_file, self.mongo_key_file)
+        if (pair[0] is None) != (pair[1] is None):
+            raise ValueError(
+                "mongo_certificate_file and mongo_key_file go together: a certificate "
+                "without its key cannot be presented, and a key without its certificate names "
+                "nobody"
+            )
+        if pair[0] is not None and self.mongo_certificate_key_file is not None:
+            raise ValueError(
+                "set either mongo_certificate_key_file, one file holding both, or "
+                "mongo_certificate_file and mongo_key_file -- not both shapes at once"
+            )
+        return self
+
     @property
     def effective_log_level(self) -> str:
         if self.log_level is not None:
             return self.log_level.upper()
         if self.debug:
             return "DEBUG"
-        return "DEBUG" if self.environment in (Environment.NP, Environment.TEST) else "INFO"
+        # What `environment` used to decide, honoured until the setting is removed so that
+        # an upgrade does not quietly change a deployment's log level.
+        return "DEBUG" if self.environment in ("np", "test") else "INFO"
 
     @property
     def effective_log_json(self) -> bool:
-        # JSON in-cluster, plain console locally. Same switch as the level.
         if self.log_json is not None:
             return self.log_json
-        return self.environment in (Environment.PREP, Environment.PROD)
+        return self.environment in ("prep", "prod")
+
+
+def refuse_unrecognised(environ: Mapping[str, str]) -> None:
+    """Stop Apchi starting with an `APCHI_` variable it does not read.
+
+    pydantic-settings maps a variable to a setting by name and passes over any other, and
+    `extra="forbid"` does not change that -- it only judges the sources parsed whole, never a
+    prefixed variable that matched nothing. So a misspelt or invented name runs Apchi on the
+    default it was meant to replace, and says nothing. That is how a real deployment set
+    APCHI_MONGO_CERTIFICATE_FILE and APCHI_MONGO_KEY_FILE before either existed, connected to
+    MongoDB with no client certificate, and spent a day on a 30-second server-selection
+    timeout that never named a setting.
+    """
+    known = {_PREFIX + name.upper() for name in Settings.model_fields}
+    unrecognised = sorted(
+        name
+        for name in environ
+        if name.upper().startswith(_PREFIX)
+        and name.upper() not in known
+        and not _SERVICE_LINK.match(name.upper())
+    )
+    if not unrecognised:
+        return
+    lines = []
+    for name in unrecognised:
+        close = difflib.get_close_matches(name.upper(), known, n=1)
+        lines.append(f"{name} (did you mean {close[0]}?)" if close else name)
+    raise ValueError(
+        "Apchi does not read "
+        + ", ".join(lines)
+        + ". A setting Apchi does not read would leave it running on a default instead, "
+        "so it refuses to start. Remove the variable or correct its name."
+    )
 
 
 @lru_cache

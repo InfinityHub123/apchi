@@ -38,7 +38,7 @@ pytestmark = pytest.mark.tier2
 DEX_IMAGE = "ghcr.io/dexidp/dex:v2.44.0"
 CLIENT_ID = "apchi"
 CLIENT_SECRET = "the-client-secret"
-REDIRECT_URL = "http://apchi/api/v1/auth/sso/callback"
+REDIRECT_URL = "https://apchi/api/v1/auth/sso/callback"
 #: Dex's mockCallback connector authenticates this person, in this group, every time.
 MOCK_EMAIL = "kilgore@kilgore.trout"
 MOCK_GROUP = "authors"
@@ -148,7 +148,7 @@ async def _sign_in(http: AsyncClient) -> dict[str, object]:
             location = hop.headers.get("location")
             assert location is not None, f"dex stopped redirecting at {at}: {hop.status_code}"
             at = urllib.parse.urljoin(at, location)
-            if at.startswith("http://apchi/"):
+            if at.startswith("https://apchi/"):
                 break
         else:
             raise AssertionError("dex never redirected back to Apchi")
@@ -179,7 +179,7 @@ async def sso_apchi(
     app.state.kubernetes = forwarded_kubernetes
     app.state.trino = Trino(url=f"http://127.0.0.1:{forward.port}", user=configured.trino_user)
     async with (
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as http,
+        AsyncClient(transport=ASGITransport(app=app), base_url="https://apchi") as http,
         app.router.lifespan_context(app),
     ):
         yield http
@@ -229,7 +229,7 @@ async def test_a_replayed_callback_is_refused_by_a_real_flow(sso_apchi: AsyncCli
         for _ in range(8):
             hop = await browser.get(at)
             at = urllib.parse.urljoin(at, hop.headers["location"])
-            if at.startswith("http://apchi/"):
+            if at.startswith("https://apchi/"):
                 break
     query = urllib.parse.parse_qs(urllib.parse.urlparse(at).query)
     params = {"code": query["code"][0], "state": query["state"][0]}
@@ -251,7 +251,7 @@ async def test_a_token_minted_after_an_sso_login_works(sso_apchi: AsyncClient) -
 
     async with AsyncClient(
         transport=ASGITransport(app=sso_apchi._transport.app),  # type: ignore[attr-defined]
-        base_url="http://apchi",
+        base_url="https://apchi",
         headers={"authorization": f"Bearer {minted.json()['secret']}"},
     ) as automation:
         response = await automation.get("/api/v1/catalogs")

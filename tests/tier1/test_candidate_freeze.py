@@ -61,7 +61,7 @@ async def frozen(settings: Settings):
     engine = SlowEngine()
     app = create_app(settings)
     async with (
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as client,
+        AsyncClient(transport=ASGITransport(app=app), base_url="https://apchi") as client,
         app.router.lifespan_context(app),
     ):
         app.state.apply_runner._engine_factory = lambda _apply_id: engine
@@ -137,7 +137,7 @@ async def test_startup_recovery_releases_a_candidate_frozen_by_a_crash(
     # A fresh app is what a restart looks like.
     restarted = create_app(settings)
     async with (
-        AsyncClient(transport=ASGITransport(app=restarted), base_url="http://apchi") as client,
+        AsyncClient(transport=ASGITransport(app=restarted), base_url="https://apchi") as client,
         restarted.router.lifespan_context(restarted),
     ):
         recovered = (await client.get(f"/api/v1/applies/{stranded.id}")).json()

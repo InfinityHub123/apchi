@@ -8,7 +8,7 @@ import logging
 
 import pytest
 
-from app.config import Environment, Settings
+from app.config import Settings
 from app.logging import (
     ApplyIdFilter,
     RedactionFilter,
@@ -18,23 +18,48 @@ from app.logging import (
 )
 
 
+def test_the_log_defaults_are_info_and_console() -> None:
+    settings = Settings()
+
+    assert settings.effective_log_level == "INFO"
+    assert settings.effective_log_json is False
+
+
 @pytest.mark.parametrize(
-    ("environment", "expected"),
+    ("environment", "level", "json_lines"),
     [
-        (Environment.NP, "DEBUG"),
-        (Environment.TEST, "DEBUG"),
-        (Environment.PREP, "INFO"),
-        (Environment.PROD, "INFO"),
+        ("np", "DEBUG", False),
+        ("test", "DEBUG", False),
+        ("prep", "INFO", True),
+        ("prod", "INFO", True),
     ],
 )
-def test_log_level_defaults_per_environment(environment: Environment, expected: str) -> None:
-    assert Settings(environment=environment).effective_log_level == expected
+def test_the_deprecated_environment_still_decides_the_log_defaults(
+    environment: str, level: str, json_lines: bool
+) -> None:
+    """For one release, so an upgrade does not quietly change a deployment's logging."""
+    settings = Settings(environment=environment)
+
+    assert settings.effective_log_level == level
+    assert settings.effective_log_json is json_lines
+
+
+def test_any_environment_name_is_accepted() -> None:
+    """It used to be one of four, and an installer whose own tiers were named otherwise
+    crashlooped at startup on a label."""
+    assert Settings(environment="staging-eu").effective_log_level == "INFO"
+
+
+def test_the_deprecated_environment_warns(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging(Settings(environment="prod", log_json=False))
+
+    assert "APCHI_ENVIRONMENT is deprecated" in capsys.readouterr().err
 
 
 def test_explicit_log_level_overrides_the_environment_default() -> None:
     """The level is wanted most during a production incident, so it must not be a
     pure function of environment type."""
-    settings = Settings(environment=Environment.PROD, log_level="debug")
+    settings = Settings(environment="prod", log_level="debug")
 
     assert settings.effective_log_level == "DEBUG"
 
@@ -262,11 +287,11 @@ def test_debugging_mode_names_where_each_line_came_from() -> None:
 
 
 def test_debugging_mode_lowers_the_level_even_in_production() -> None:
-    assert Settings(environment=Environment.PROD, debug=True).effective_log_level == "DEBUG"
+    assert Settings(environment="prod", debug=True).effective_log_level == "DEBUG"
 
 
 def test_an_explicit_level_still_wins_over_debugging_mode() -> None:
-    settings = Settings(environment=Environment.PROD, debug=True, log_level="info")
+    settings = Settings(environment="prod", debug=True, log_level="info")
 
     assert settings.effective_log_level == "INFO"
 
