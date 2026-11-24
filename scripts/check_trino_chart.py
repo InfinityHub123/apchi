@@ -22,6 +22,7 @@ would report a successful Apply the Cluster never saw.
 """
 
 import asyncio
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -39,6 +40,14 @@ CHART = ROOT / "charts" / "apchi"
 #: The release is deliberately not called `trino` or `apchi`: the names Apchi is configured
 #: with must come from the chart's helpers, not from a release name that happens to match.
 VALUES = ("--set", "mongodb.deploy=true", "--set", "trino.worker.replicas=1")
+#: The same, with a CA bundle and a Java truststore mounted into every pod -- which adds mounts
+#: to the coordinator, so the preconditions are checked against that shape as well.
+TRUST_VALUES = VALUES + (
+    "--set",
+    "caBundle.configMap=trusted-ca",
+    "--set",
+    "javaTruststore.existingSecret=truststore",
+)
 RELEASE = "check"
 
 
@@ -81,6 +90,12 @@ def _rendered(chart: Path, *values: str) -> list[dict[str, Any]]:
     return [document for document in yaml.safe_load_all(completed.stdout) if document]
 
 
+#: Volumes holding what the operator names in values rather than what the chart creates: what
+#: every pod trusts. Their Secrets are the operator's, so they are not expected among the
+#: chart's own.
+OPERATORS_OWN = ("ca-bundle", "java-truststore")
+
+
 def _name_disagreements(documents: list[dict[str, Any]]) -> list[str]:
     """Where the coordinator mounts a Secret the chart does not create.
 
@@ -90,7 +105,11 @@ def _name_disagreements(documents: list[dict[str, Any]]) -> list[str]:
     written = {d["metadata"]["name"] for d in documents if d["kind"] == "Secret"}
     coordinator = _coordinator(documents)
     spec = PodSpec.model_validate(coordinator["spec"]["template"]["spec"])
-    mounted = {volume.secret_name: volume.name for volume in spec.volumes if volume.secret_name}
+    mounted = {
+        volume.secret_name: volume.name
+        for volume in spec.volumes
+        if volume.secret_name and volume.name not in OPERATORS_OWN
+    }
 
     problems = [
         f"the coordinator mounts Secret {secret!r} (as volume {volume!r}) that the chart "
@@ -183,8 +202,14 @@ def _apchi_settings(documents: list[dict[str, Any]]) -> Settings:
             if spec["containers"][0]["name"] != "apchi":
                 continue
             env = spec["containers"][0].get("env") or []
+            # A structured setting arrives as JSON in an env var, which pydantic-settings
+            # decodes from the environment but not from keyword arguments.
             values = {
-                item["name"].removeprefix("APCHI_").lower(): item["value"]
+                item["name"].removeprefix("APCHI_").lower(): (
+                    json.loads(item["value"])
+                    if item["value"].startswith(("{", "["))
+                    else item["value"]
+                )
                 for item in env
                 if "value" in item
             }
@@ -193,7 +218,14 @@ def _apchi_settings(documents: list[dict[str, Any]]) -> Settings:
 
 
 def main() -> int:
-    documents = _rendered(CHART, *VALUES)
+    for values in (VALUES, TRUST_VALUES):
+        if failed := _check(values):
+            return failed
+    return 0
+
+
+def _check(values: tuple[str, ...]) -> int:
+    documents = _rendered(CHART, *values)
     coordinator = _coordinator(documents)
     spec = PodSpec.model_validate(coordinator["spec"]["template"]["spec"])
 

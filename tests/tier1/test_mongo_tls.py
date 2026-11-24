@@ -13,7 +13,9 @@ x509 is worth preferring where MongoDB offers it, beyond the deployments that ma
 from collections.abc import Iterator
 from pathlib import Path
 
+import certifi
 import pytest
+from testcontainers.community.mongodb import MongoDbContainer
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
@@ -179,10 +181,10 @@ async def test_without_the_certificate_the_server_is_unreachable(
         await mongo.close()
 
 
-def test_either_file_alone_turns_tls_on(tls_mongo: Settings) -> None:
-    """PyMongo builds its SSL context from these and does not also need `tls=true`, so there
-    is no silent-plaintext configuration to fall into here -- unlike the Trino client, whose
-    port-based scheme inference was the whole of #188."""
+def test_a_client_certificate_turns_tls_on_by_itself(tls_mongo: Settings) -> None:
+    """PyMongo builds its SSL context from the certificate and does not also need `tls=true`,
+    so there is no silent-plaintext configuration to fall into here -- unlike the Trino
+    client, whose port-based scheme inference was the whole of #188."""
     from app.adapters.mongo import _tls_options
 
     assert _tls_options(tls_mongo) == {
@@ -304,3 +306,38 @@ def test_a_half_or_doubled_certificate_configuration_is_refused(fields: dict[str
 
     with pytest.raises(ValidationError, match="mongo_"):
         Settings(**fields)
+
+
+def test_the_ca_bundle_alone_does_not_turn_tls_on(mongo_container: MongoDbContainer) -> None:
+    """The bundle is what every pod trusts, so an Admin sets it for reasons that have nothing
+    to do with MongoDB -- and handed to PyMongo it turns TLS on. Against a plaintext MongoDB,
+    the chart's bundled one included, every connection then failed with "SSL handshake
+    failed". It reaches MongoDB only when TLS is asked for some other way."""
+    from app.adapters.mongo import _tls_options
+
+    plaintext = Settings(mongo_uri=mongo_container.get_connection_url(), ca_file=certifi.where())
+
+    assert _tls_options(plaintext) == {}
+
+
+async def test_a_plaintext_mongodb_is_reachable_with_a_ca_bundle_configured(
+    mongo_container: MongoDbContainer,
+) -> None:
+    mongo = Mongo(Settings(mongo_uri=mongo_container.get_connection_url(), ca_file=certifi.where()))
+    try:
+        assert await mongo.ping() is True
+    finally:
+        await mongo.close()
+
+
+@pytest.mark.parametrize(
+    "uri",
+    ["mongodb://db:27017/?tls=true", "mongodb://db:27017/?ssl=true", "mongodb+srv://db.example/"],
+)
+def test_the_ca_bundle_reaches_mongodb_when_the_uri_asks_for_tls(uri: str) -> None:
+    """A TLS MongoDB that wants no client certificate says so in the URI."""
+    from app.adapters.mongo import _tls_options
+
+    options = _tls_options(Settings(mongo_uri=uri, ca_file=certifi.where()))
+
+    assert options == {"tlsCAFile": bundled_ca(certifi.where())}

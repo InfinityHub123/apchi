@@ -143,3 +143,116 @@ http-server.authentication.insecure.user-mapping.file
 {{- fail (printf "trino.authentication.type must be 'insecure' or 'certificate', not %q" .Values.trino.authentication.type) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+What every pod trusts. Both optional: unset renders nothing at all. Each pod that gets them
+mounts them at the same two paths, which are also Apchi's own constants (app.config), so the
+Validation pod Apchi creates matches.
+*/}}
+{{- define "apchi.hasCaBundle" -}}
+{{- $s := .Values.caBundle -}}
+{{- if and $s.existingSecret $s.configMap -}}
+{{- fail "caBundle: set existingSecret or configMap, not both" -}}
+{{- end -}}
+{{- if or $s.existingSecret $s.configMap -}}true{{- end -}}
+{{- end -}}
+
+{{- define "apchi.hasTruststore" -}}
+{{- $s := .Values.javaTruststore -}}
+{{- if and $s.existingSecret $s.configMap -}}
+{{- fail "javaTruststore: set existingSecret or configMap, not both" -}}
+{{- end -}}
+{{- if and $s.password.existingSecret (not $s.password.key) -}}
+{{- fail "javaTruststore.password: key is required with existingSecret" -}}
+{{- end -}}
+{{- if or $s.existingSecret $s.configMap -}}true{{- end -}}
+{{- end -}}
+
+{{/* One key of a ConfigMap or a Secret, under a fixed filename. */}}
+{{- define "apchi.trustVolumeSource" -}}
+{{- if .source.existingSecret -}}
+secret:
+  secretName: {{ .source.existingSecret | quote }}
+  items:
+    - {key: {{ .source.key | quote }}, path: {{ .path }}}
+{{- else -}}
+configMap:
+  name: {{ .source.configMap | quote }}
+  items:
+    - {key: {{ .source.key | quote }}, path: {{ .path }}}
+{{- end -}}
+{{- end -}}
+
+{{/* Called with (dict "root" $ "java" <bool>): the truststore only for pods that run Java. */}}
+{{- define "apchi.trustVolumes" -}}
+{{- $root := .root -}}
+{{- if include "apchi.hasCaBundle" $root }}
+- name: ca-bundle
+  {{- include "apchi.trustVolumeSource" (dict "source" $root.Values.caBundle "path" "ca-bundle.crt") | nindent 2 }}
+{{- end }}
+{{- if and .java (include "apchi.hasTruststore" $root) }}
+- name: java-truststore
+  {{- include "apchi.trustVolumeSource" (dict "source" $root.Values.javaTruststore "path" "cacerts") | nindent 2 }}
+{{- end }}
+{{- end -}}
+
+{{/*
+The bundle as one file, at the path RHEL-based images read their system trust from -- which
+replaces the image's own bundle there rather than adding to it. In trinodb/trino that path is a
+symlink to /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem, and the kubelet mounts onto the
+target: both paths then hold this bundle, though `ls` still shows the link. Measured. The truststore as a
+directory, so a changed Secret or ConfigMap is projected into the pod without recreating it;
+Java still reads it only at startup.
+*/}}
+{{- define "apchi.trustMounts" -}}
+{{- $root := .root -}}
+{{- if include "apchi.hasCaBundle" $root }}
+- name: ca-bundle
+  mountPath: /etc/pki/tls/certs/ca-bundle.crt
+  subPath: ca-bundle.crt
+  readOnly: true
+{{- end }}
+{{- if and .java (include "apchi.hasTruststore" $root) }}
+- name: java-truststore
+  mountPath: /etc/pki/java/truststore
+  readOnly: true
+{{- end }}
+{{- end -}}
+
+{{/*
+The truststore's password, for a store that needs one to load. From its Secret and into the
+JVM by Kubernetes' own $(VAR) expansion, so it is never in a ConfigMap or the pod spec.
+*/}}
+{{- define "apchi.truststorePasswordEnv" -}}
+{{- $p := .Values.javaTruststore.password -}}
+{{- if and (include "apchi.hasTruststore" .) $p.existingSecret }}
+- name: TRUSTSTORE_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ $p.existingSecret | quote }}
+      key: {{ $p.key | quote }}
+- name: JDK_JAVA_OPTIONS
+  value: "-Djavax.net.ssl.trustStorePassword=$(TRUSTSTORE_PASSWORD)"
+{{- end }}
+{{- end -}}
+
+{{/* The same two, as the JSON settings Apchi builds its Validation pod from. */}}
+{{- define "apchi.validationCaBundle" -}}
+{{- $s := .Values.caBundle -}}
+{{- if $s.existingSecret -}}
+{{- dict "secret" $s.existingSecret "key" $s.key | toJson -}}
+{{- else -}}
+{{- dict "config_map" $s.configMap "key" $s.key | toJson -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "apchi.validationTruststore" -}}
+{{- $s := .Values.javaTruststore -}}
+{{- $d := ternary (dict "secret" $s.existingSecret) (dict "config_map" $s.configMap) (ne $s.existingSecret "") -}}
+{{- $_ := set $d "key" $s.key -}}
+{{- if $s.password.existingSecret -}}
+{{- $_ := set $d "password_secret" $s.password.existingSecret -}}
+{{- $_ := set $d "password_key" $s.password.key -}}
+{{- end -}}
+{{- $d | toJson -}}
+{{- end -}}

@@ -56,6 +56,9 @@ spec:
         - name: trino
           image: {{ include "trino.image" . | quote }}
           imagePullPolicy: {{ .Values.trino.image.pullPolicy }}
+          {{- if and (include "apchi.hasTruststore" .) .Values.javaTruststore.password.existingSecret }}
+          env: {{- include "apchi.truststorePasswordEnv" . | trim | nindent 12 }}
+          {{- end }}
           ports:
             - containerPort: {{ .Values.trino.httpPort }}
               name: http
@@ -102,6 +105,10 @@ spec:
             # node.data-dir. The catalog store above is mounted inside it, separately,
             # because it is the seed initContainer's to fill.
             - {name: data, mountPath: /data/trino}
+            {{- if or (include "apchi.hasCaBundle" .) (include "apchi.hasTruststore" .) }}
+            # What this pod trusts, if the chart names it. See caBundle and javaTruststore.
+            {{- include "apchi.trustMounts" (dict "root" $ "java" true) | trim | nindent 12 }}
+            {{- end }}
           {{- with .Values.trino.coordinator.resources }}
           resources: {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -122,6 +129,9 @@ spec:
         # it and creates `etc`, a symlink to /etc/trino, at its root -- so the whole data
         # directory has to be writable, not only var/. The image's own belongs to uid 1000.
         - {name: data, emptyDir: {}}
+        {{- if or (include "apchi.hasCaBundle" .) (include "apchi.hasTruststore" .) }}
+        {{- include "apchi.trustVolumes" (dict "root" $ "java" true) | trim | nindent 8 }}
+        {{- end }}
         # No volume for the resource-groups or event-listener Secrets. For both of them the
         # absence of the mount is how "none configured" is expressed -- Trino refuses to
         # start if a file it was told to read is missing -- so Apchi adds and removes those
