@@ -229,8 +229,16 @@ pod:
   #
   # Deliberately not restricted and given no fsGroup: this is a list of public certificates,
   # so the kubelet's own 0644 is right and there is no key here to protect.
+  #
+  # From a Secret or from a ConfigMap, whichever holds it. On OpenShift that is a ConfigMap:
+  # one labelled `config.openshift.io/inject-trusted-cabundle: "true"` is filled by the
+  # platform with the cluster's trusted CAs under the key `ca-bundle.crt`. Named here
+  # rather than looked up: Helm's `lookup` finds nothing under `helm template`, `--dry-run`
+  # or Argo CD, so the same values would render a different pod depending on how the chart
+  # was installed. Neither set means no CA beyond the public store.
   caBundle:
     existingSecret: ""
+    configMap: ""
     key: ca.crt
     mountPath: /etc/apchi/ca
 
