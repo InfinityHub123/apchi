@@ -124,6 +124,11 @@ jobs:
         uses: helm/kind-action@v1
         with:
           cluster_name: apchi
+          # Pinned, because the emulation of restricted-v2 needs MutatingAdmissionPolicy,
+          # which is GA from Kubernetes 1.36 -- and the action's own default node was 1.35,
+          # where the API does not exist and `kubectl apply` refuses the whole file.
+          version: v0.33.0
+          node_image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
       - name: Install under the emulation
         run: |
           kubectl apply -f deploy/restricted-v2/policy.yaml
@@ -182,6 +187,11 @@ jobs:
         uses: helm/kind-action@v1
         with:
           cluster_name: apchi
+          # Pinned, because the emulation of restricted-v2 needs MutatingAdmissionPolicy,
+          # which is GA from Kubernetes 1.36 -- and the action's own default node was 1.35,
+          # where the API does not exist and `kubectl apply` refuses the whole file.
+          version: v0.33.0
+          node_image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
 
       # kind enforces none of OpenShift's restricted-v2, which is how a chart that pinned
       # fsGroup and a Validation pod nobody could admit both reached a real OpenShift before
