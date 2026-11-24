@@ -77,9 +77,11 @@ spec:
             - name: APCHI_OIDC_CLIENT_ID
               value: {{ required "auth.oidc.clientId is required when auth.mode is sso" .Values.auth.oidc.clientId | quote }}
             # The URL a browser reaches Apchi on, registered with the provider verbatim. A
-            # wrong one is a login loop with no error, so it is required rather than guessed.
+            # wrong one is a login loop with no error, so it is required rather than guessed --
+            # unless the chart exposes Apchi itself, and then it knows the host.
             - name: APCHI_OIDC_REDIRECT_URL
-              value: {{ required "auth.oidc.redirectUrl is required when auth.mode is sso" .Values.auth.oidc.redirectUrl | quote }}
+              {{- $exposed := ternary (printf "https://%s/api/v1/auth/sso/callback" .Values.expose.apchi.host) "" (not (empty .Values.expose.apchi.host)) }}
+              value: {{ required "auth.oidc.redirectUrl is required when auth.mode is sso and expose.apchi.host is not set" (.Values.auth.oidc.redirectUrl | default $exposed) | quote }}
             {{- if .Values.auth.oidc.existingSecret }}
             # From a Secret rather than from values, for the same reason as the admin hash:
             # the client secret authenticates Apchi to the provider.

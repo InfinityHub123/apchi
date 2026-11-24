@@ -108,6 +108,11 @@ does not create.
 | `rbac.create` | `true` | `false` to bind your own Role. Without an equivalent one every Apply fails at the API server |
 | `serviceAccount.create`, `.name`, `.annotations` | `true`, `""`, `{}` | |
 | `service.type`, `service.port` | `ClusterIP`, `8000` | |
+| `expose.kind` | `auto` | `route`, `ingress`, or `auto` for a Route where the API serves `route.openshift.io/v1` and an Ingress elsewhere. See below |
+| `expose.ingress.className`, `.controller` | `""`, `""` | `controller` is `nginx` or `haproxy`, for the annotations `passthrough` and `reencrypt` need |
+| `expose.apchi.host`, `.termination`, `.tlsSecret`, `.annotations` | `""`, `edge`, `""`, `{}` | Apchi from outside, created only when `host` is set. `edge` only: Apchi serves plain HTTP |
+| `expose.trino.host`, `.termination`, `.tlsSecret`, `.destinationCACertificate`, `.annotations` | `""`, `edge`, `""`, `""`, `{}` | Trino from outside, created only when `host` is set. `passthrough` and `reencrypt` need `trino.https` |
+| `trino.https.enabled`, `.port`, `.existingSecret`, `.certificateKey`, `.keyKey` | `false`, `8443`, `""`, `tls.crt`, `tls.key` | Trino serving HTTPS itself, from a TLS Secret such as cert-manager writes |
 | `resources`, `nodeSelector`, `tolerations`, `affinity`, `podAnnotations`, `podLabels` | | The usual |
 
 **Rotating anything under `trino.tls`, `mongodb.tls`, `caBundle` or `javaTruststore` needs a
@@ -182,14 +187,65 @@ own copy belongs to uid 1000, so without it Trino cannot start as any other uid.
 when a file it was told to read is missing. Apchi adds and removes those two volumes itself,
 and they are the only part of the Trino pod template it writes.
 
-**TLS is not configured by the chart.** `trino.authentication.type: certificate` selects
-which authenticator reads the user-mapping file; it does not set up a keystore. That goes
-through `trino.additionalCoordinatorProperties` and mounts of your own, and then Apchi has to
-be told: `trino.url=https://...`, and `trino.tls.*` so it has a certificate to present.
-Apchi asserts this before every Apply and refuses rather than letting the queries time out.
+**`trino.https` makes the coordinator serve HTTPS**, on `trino.https.port` beside plain HTTP,
+with the certificate in `trino.https.existingSecret`. A TLS Secret holds the certificate and
+the key apart and Trino's PEM keystore wants them in one file, so an initContainer joins them
+at pod start into a memory-backed volume only the pod can read. Workers and Apchi keep using
+HTTP inside the cluster.
 
-**Autoscaling, ingress, exchange managers, JMX export, group providers** are not here. A
-value this chart lacks is a gap to add.
+`trino.authentication.type: certificate` selects which authenticator reads the user-mapping
+file; it does not configure the authenticator. Once Trino authenticates its callers it
+refuses HTTP, and Apchi has to be told: `trino.url=https://...`, and `trino.tls.*` so it has a
+certificate to present. Apchi asserts this before every Apply and refuses rather than letting
+the queries time out.
+
+**Autoscaling, exchange managers, JMX export, group providers** are not here. A value this
+chart lacks is a gap to add.
+
+## Reaching Apchi and Trino from outside
+
+`expose.apchi.host` and `expose.trino.host` each create a Route on OpenShift and an Ingress
+anywhere else. Neither has a default host, and nothing is exposed until one is set.
+
+```yaml
+expose:
+  apchi: {host: apchi.apps.example.com}
+  trino: {host: trino.apps.example.com, termination: passthrough}
+trino:
+  https: {enabled: true, existingSecret: trino-server-tls}
+```
+
+**`auto` asks the API being installed into.** `helm install`, `helm upgrade`, Flux and Argo CD
+all give the chart the target cluster's API versions, so `auto` gets it right. Rendering with
+no cluster -- `helm template | kubectl apply` -- does not, and always gets an Ingress: set
+`kind: route` there, or pass `--api-versions route.openshift.io/v1/Route`.
+
+**Termination, `edge` unless you say otherwise.**
+
+| | Route | Ingress | Reaches |
+| --- | --- | --- | --- |
+| `edge` | the router's certificate; HTTP redirected | `tls` with `tlsSecret`, or the controller's default | `http` |
+| `passthrough` | TLS straight to the pod | the controller's passthrough annotation | `https` |
+| `reencrypt` | the router re-encrypts, checking `destinationCACertificate` | the controller's backend-HTTPS annotation | `https` |
+
+`passthrough` and `reencrypt` speak TLS to the pod, so they are refused unless
+`trino.https.enabled` is set, and refused for Apchi outright. Behind `edge` or `reencrypt`
+Trino is given `http-server.process-forwarded=true`: it then sees plain HTTP from the router,
+and without trusting `X-Forwarded-Proto` it refuses password and OAuth authentication.
+
+A `reencrypt` Route takes the CA to verify Trino with from `destinationCACertificate`, or else
+from `caBundle` as it exists in the cluster. That second read happens only during `helm
+install` and `helm upgrade`; Argo CD renders without it, so set the value there. With neither,
+the router falls back to OpenShift's service CA. An Ingress has no portable way to say which
+CA to check, so `reencrypt` there verifies only what the controller's own annotations say.
+
+Ingress has no field for `passthrough` or `reencrypt`. `expose.ingress.controller: nginx` adds
+`ssl-passthrough` or `backend-protocol: HTTPS` -- and nginx honours the first only when started
+with `--enable-ssl-passthrough` -- and `haproxy` adds the HAProxy Technologies equivalents. Any
+other controller takes its own through `annotations`.
+
+With `auth.mode: sso` and no `auth.oidc.redirectUrl`, the redirect becomes
+`https://<expose.apchi.host>/api/v1/auth/sso/callback`. Register that with the provider.
 
 ## Not covered by this chart
 

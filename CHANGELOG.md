@@ -33,6 +33,16 @@ Two breaks the committed contract cannot show you, and which belong here when th
   them before. The ConfigMap an earlier release created (`<release>-high-water`) is left
   behind; delete it with `kubectl delete configmap <release>-high-water`.
 
+### Added
+
+- **Routes and Ingresses.** `expose.apchi.host` and `expose.trino.host` each create a Route
+  where the cluster serves `route.openshift.io/v1` and an Ingress elsewhere (`expose.kind:
+  auto`). Termination is `edge` unless set: `passthrough` and `reencrypt` reach Trino over TLS.
+- **Trino over HTTPS.** `trino.https` makes the coordinator serve HTTPS from a TLS Secret, which
+  `passthrough` and `reencrypt` need.
+- **The SSO redirect URL defaults from `expose.apchi.host`** when `auth.oidc.redirectUrl` is not
+  set.
+
 ## 0.3.0 — 2026-11-24
 
 ### Breaking

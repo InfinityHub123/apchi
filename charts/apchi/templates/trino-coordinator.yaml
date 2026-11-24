@@ -52,6 +52,24 @@ spec:
           {{- with .Values.trino.coordinator.seedResources }}
           resources: {{- toYaml . | nindent 12 }}
           {{- end }}
+        {{- if .Values.trino.https.enabled }}
+        # Trino's PEM keystore is one file with the key and the certificate chain together;
+        # a TLS Secret holds them apart. The newline between them is not decoration: a key
+        # without a trailing one runs into the certificate's BEGIN line and neither parses.
+        - name: join-https-keystore
+          image: {{ include "trino.image" . | quote }}
+          imagePullPolicy: {{ .Values.trino.image.pullPolicy }}
+          command: ["sh", "-c"]
+          args:
+            - umask 077 &&
+              { cat /etc/trino-https-source/key.pem; echo; cat /etc/trino-https-source/certificate.pem; } > {{ include "trino.httpsKeystore" . }}
+          volumeMounts:
+            - {name: https-source, mountPath: /etc/trino-https-source, readOnly: true}
+            - {name: https-keystore, mountPath: /data/trino-https}
+          {{- with .Values.trino.coordinator.seedResources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
       containers:
         - name: trino
           image: {{ include "trino.image" . | quote }}
@@ -62,6 +80,10 @@ spec:
           ports:
             - containerPort: {{ .Values.trino.httpPort }}
               name: http
+            {{- if .Values.trino.https.enabled }}
+            - containerPort: {{ .Values.trino.https.port }}
+              name: https
+            {{- end }}
           readinessProbe:
             # Trino's own script. A Rollout's "complete" means every replica passed this,
             # which is what makes Apchi's Verification talk to a coordinator that answers.
@@ -105,6 +127,9 @@ spec:
             # node.data-dir. The catalog store above is mounted inside it, separately,
             # because it is the seed initContainer's to fill.
             - {name: data, mountPath: /data/trino}
+            {{- if .Values.trino.https.enabled }}
+            - {name: https-keystore, mountPath: /data/trino-https, readOnly: true}
+            {{- end }}
             {{- if or (include "apchi.hasCaBundle" .) (include "apchi.hasTruststore" .) }}
             # What this pod trusts, if the chart names it. See caBundle and javaTruststore.
             {{- include "apchi.trustMounts" (dict "root" $ "java" true) | trim | nindent 12 }}
@@ -129,6 +154,18 @@ spec:
         # it and creates `etc`, a symlink to /etc/trino, at its root -- so the whole data
         # directory has to be writable, not only var/. The image's own belongs to uid 1000.
         - {name: data, emptyDir: {}}
+        {{- if .Values.trino.https.enabled }}
+        # The server's private key, so restricted as the other credential volumes are.
+        - name: https-source
+          secret:
+            secretName: {{ required "trino.https.existingSecret is required when trino.https.enabled is set" .Values.trino.https.existingSecret }}
+            defaultMode: 0640
+            items:
+              - {key: {{ .Values.trino.https.certificateKey }}, path: certificate.pem}
+              - {key: {{ .Values.trino.https.keyKey }}, path: key.pem}
+        # Memory-backed, so the joined key is never written to the node's disk.
+        - {name: https-keystore, emptyDir: {medium: Memory}}
+        {{- end }}
         {{- if or (include "apchi.hasCaBundle" .) (include "apchi.hasTruststore" .) }}
         {{- include "apchi.trustVolumes" (dict "root" $ "java" true) | trim | nindent 8 }}
         {{- end }}

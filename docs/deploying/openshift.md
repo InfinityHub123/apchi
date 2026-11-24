@@ -85,3 +85,28 @@ trino:
 volumes are unreadable at 0640 -- so Apchi accepts that only with `restrictedPodSecurity`, and
 the cost is that every process in the pod can read the keys. A libpq-based client would refuse
 such a key; Trino's JDBC connectors do not check.
+
+## Routes
+
+Set the hosts and the chart creates a Route for each, because the API serves
+`route.openshift.io/v1`. Argo CD passes the cluster's API versions to the chart, so this holds
+there too; only a manifest rendered with no cluster needs `expose.kind: route`.
+
+```yaml
+expose:
+  apchi: {host: apchi.apps.example.com}
+  trino: {host: trino.apps.example.com}
+```
+
+Both are `edge` by default, on the router's certificate. For a Trino that presents its own,
+pass the connection through to it:
+
+```yaml
+expose:
+  trino: {host: trino.apps.example.com, termination: passthrough}
+trino:
+  https: {enabled: true, existingSecret: trino-server-tls}
+```
+
+The initContainer that joins the certificate and the key takes `trino.coordinator.seedResources`,
+the same limits as the one that seeds the catalog store.
