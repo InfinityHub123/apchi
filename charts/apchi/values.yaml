@@ -188,6 +188,23 @@ trino:
   # The catalog the Verification smoke query runs against.
   verificationCatalog: system
 
+# Set on a cluster that forbids pinning fsGroup and assigns each pod an arbitrary uid:
+# OpenShift's restricted-v2 SCC. Three things change, all because a mounted file can then
+# reach the process only by being world-readable:
+#
+# - Apchi's own pod renders no fsGroup and mounts its credentials 0644, ignoring
+#   pod.fsGroup and pod.credentialFileMode.
+# - The Validation pod Apchi creates carries no fsGroup either, plus the securityContext
+#   restricted-v2 demands. Give it limits under validation.resources if your cluster
+#   requires them.
+# - Apchi accepts 0644 credential mounts on the Trino pods, where it otherwise refuses
+#   anything looser than 0640 with an fsGroup. It still refuses a writable one.
+#
+# Every pod this chart renders is restricted-v2's shape either way -- runAsNonRoot, the
+# RuntimeDefault seccomp profile, no privilege escalation, every capability dropped -- and
+# the image runs as any uid. This setting only decides what happens to file modes.
+restrictedPodSecurity: false
+
 # What Apchi's own pod runs as, and how it mounts its own credentials. Shared by both the
 # `trino.tls` and `mongodb.tls` blocks, because a Secret volume's files are root-owned
 # whatever their mode -- so the group has to be one Apchi's process belongs to, and two
@@ -317,6 +334,10 @@ deployment:
 # unreachable Catalog should stop a release.
 validation:
   catalogConnectivityBlocksApply: false
+  # Requests and limits for the Validation pod's container, which Apchi creates itself at
+  # Validation time -- so this is the only place a cluster that requires them on every
+  # container can set them. Trino needs about 2Gi to start. Empty sets none.
+  resources: {}
 
 timeouts:
   # How long a Rollout may take before the Apply fails. A coordinator that never comes

@@ -385,3 +385,124 @@ async def test_nothing_on_a_worker_is_exempt_as_apchis_own(
         await check(fake_kubernetes, pod_spec(healthy_pod_spec()), settings)
 
     assert settings.event_listener_volume_name in str(raised.value)
+
+
+# --- Restricted pod security: OpenShift's restricted-v2 -------------------------------------
+#
+# There the platform refuses a pinned fsGroup and runs every pod as an arbitrary uid, so a
+# mounted file reaches the process only by being world-readable. These are the shapes Apchi
+# builds and accepts under `restricted_pod_security`; `deploy/restricted-v2/policy.yaml` is
+# the emulation tier 2 runs them against.
+
+_RESOURCES = {"requests": {"cpu": "500m", "memory": "2Gi"}, "limits": {"cpu": 2, "memory": "2Gi"}}
+
+
+def _restricted_probe(files: dict[str, str] | None = None) -> dict[str, Any]:
+    return validation_manifest(
+        "apchi-validate-probe", TRINO_IMAGE, 600, files, restricted=True, resources=_RESOURCES
+    )
+
+
+def test_a_restricted_probe_pins_neither_a_group_nor_a_uid() -> None:
+    """restricted-v2 refuses a pod that pins fsGroup, and assigns the uid itself."""
+    spec = _restricted_probe({"/etc/trino/certs/finance.key": "key"})["spec"]
+    container = spec["containers"][0]
+
+    assert "fsGroup" not in spec["securityContext"]
+    assert "runAsUser" not in spec["securityContext"]
+    assert "runAsUser" not in container["securityContext"]
+
+
+def test_a_restricted_probe_carries_the_security_context_restricted_v2_demands() -> None:
+    spec = _restricted_probe()["spec"]
+    container = spec["containers"][0]
+
+    assert spec["securityContext"] == {
+        "runAsNonRoot": True,
+        "seccompProfile": {"type": "RuntimeDefault"},
+    }
+    assert container["securityContext"] == {
+        "allowPrivilegeEscalation": False,
+        "capabilities": {"drop": ["ALL"]},
+    }
+
+
+def test_a_restricted_probe_can_write_trinos_data_directory() -> None:
+    """The image's /data/trino belongs to uid 1000, and as any other uid Trino dies before
+    logging anything useful: `mkdir /data/trino/var: permission denied`."""
+    spec = _restricted_probe()["spec"]
+
+    assert {"name": "data", "mountPath": "/data/trino"} in spec["containers"][0]["volumeMounts"]
+    assert {"name": "data", "emptyDir": {}} in spec["volumes"]
+
+
+def test_a_restricted_probe_mounts_its_files_world_readable() -> None:
+    """The arbitrary uid belongs to no group the file could be given, so 0640 would be a
+    probe that cannot read its own configuration."""
+    spec = _restricted_probe({"/etc/trino/certs/finance.key": "key"})["spec"]
+
+    files = next(v for v in spec["volumes"] if v["name"] == "section-files")
+    assert files["secret"]["defaultMode"] == 0o644
+
+
+@pytest.mark.parametrize("restricted", [True, False])
+def test_the_probe_carries_the_configured_resources(restricted: bool) -> None:
+    """The probe is Apchi's to build, so a fleet that requires limits on every container has
+    nowhere else to set them."""
+    manifest = validation_manifest(
+        "apchi-validate-probe", TRINO_IMAGE, 600, restricted=restricted, resources=_RESOURCES
+    )
+
+    assert manifest["spec"]["containers"][0]["resources"] == _RESOURCES
+
+
+def test_a_probe_with_no_resources_configured_sets_none() -> None:
+    manifest = validation_manifest("apchi-validate-probe", TRINO_IMAGE, 600)
+
+    assert "resources" not in manifest["spec"]["containers"][0]
+
+
+async def test_a_trino_pod_with_no_group_is_accepted_under_restricted_pod_security(
+    settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """Where the platform forbids an fsGroup, refusing its absence would refuse every
+    deployment the cluster can run."""
+    spec = _with_volume(
+        healthy_pod_spec(),
+        {
+            "name": "client-certificates",
+            "secret": {"secretName": settings.client_certificate_secret_name, "defaultMode": 0o644},
+        },
+    )
+    del spec["securityContext"]
+
+    await check(
+        fake_kubernetes,
+        pod_spec(spec),
+        settings.model_copy(update={"restricted_pod_security": True}),
+    )
+
+
+@pytest.mark.parametrize("mode", [0o666, 0o646, 0o654, 0o645])
+async def test_a_writable_or_executable_credential_is_refused_even_under_restricted_pod_security(
+    mode: int, settings: Settings, fake_kubernetes: FakeKubernetes
+) -> None:
+    """Reading is the one access restricted-v2 leaves as the way to hand a file over. A
+    credential that can be written or executed is wrong on any platform."""
+    spec = _with_volume(
+        healthy_pod_spec(),
+        {
+            "name": "client-certificates",
+            "secret": {"secretName": settings.client_certificate_secret_name, "defaultMode": mode},
+        },
+    )
+    del spec["securityContext"]
+
+    with pytest.raises(PreconditionFailed) as raised:
+        await check(
+            fake_kubernetes,
+            pod_spec(spec),
+            settings.model_copy(update={"restricted_pod_security": True}),
+        )
+
+    assert f"{mode:#o}" in str(raised.value)

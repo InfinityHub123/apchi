@@ -293,3 +293,27 @@ async def test_orphaned_validation_pods_are_swept_at_startup(
         pass
 
     assert fake_kubernetes.pods == {}
+
+
+async def test_the_probe_is_built_the_way_the_settings_say(
+    settings: Settings, fake_kubernetes: FakeKubernetes, trino_cluster: DockerContainer
+) -> None:
+    """End to end from Settings, as the chart sets them: restricted-v2's shape and the
+    configured resources reach the pod Apchi actually creates."""
+    fake_kubernetes.pod_never_serves = True
+    restricted = settings.model_copy(
+        update={
+            "validation_timeout_seconds": 1.0,
+            "restricted_pod_security": True,
+            "validation_resources": {"limits": {"cpu": 2, "memory": "2Gi"}},
+        }
+    )
+
+    async with _running(restricted, fake_kubernetes, trino_cluster) as client:
+        await client.post("/api/v1/catalogs", json=MEMORY)
+        await _validation(client)
+
+    spec = next(iter(fake_kubernetes.pod_manifests.values()))["spec"]
+    assert "fsGroup" not in spec["securityContext"]
+    assert spec["securityContext"]["runAsNonRoot"] is True
+    assert spec["containers"][0]["resources"] == {"limits": {"cpu": 2, "memory": "2Gi"}}

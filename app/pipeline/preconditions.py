@@ -267,6 +267,9 @@ def _exposure_in(
     if not mounted:
         return []
 
+    if settings.restricted_pod_security:
+        return _restricted_exposure(mounted, role, apchi_mounted)
+
     if spec.fs_group is None:
         # The closing clause only on the coordinator, because Apply patches one Deployment:
         # telling an Admin that Apchi will restrict the worker's files would be a promise
@@ -304,6 +307,32 @@ def _exposure_in(
                 f"credential. Set defaultMode: 0{CREDENTIAL_FILE_MODE:o} on that volume."
             )
     return problems
+
+
+def _restricted_exposure(mounted: list[Volume], role: str, apchi_mounted: set[str]) -> list[str]:
+    """The same check where the platform forbids an `fsGroup`, as restricted-v2 does.
+
+    There a credential can only be world-readable or unreadable -- the pod runs as an
+    arbitrary uid in no group a file could be given -- so the 0640-plus-group rule above
+    would refuse every deployment such a cluster can run. What stays refused is everything
+    beyond reading: a writable or executable credential is wrong on any platform.
+    """
+    problems: list[str] = []
+    for volume in mounted:
+        if volume.name in apchi_mounted or volume.default_mode is None:
+            continue
+        if volume.default_mode & _WRITE_OR_EXECUTE:
+            problems.append(
+                f"The {role}'s {volume.name!r} volume holds credentials with defaultMode "
+                f"{volume.default_mode:#o}, which lets them be written or executed. Set "
+                f"defaultMode: 0644 on that volume."
+            )
+    return problems
+
+
+#: Group or world write or execute. Reading is what restricted-v2 leaves as the only way to
+#: hand a mounted file to an arbitrary uid, so it is the one access not refused there.
+_WRITE_OR_EXECUTE = 0o033
 
 
 def _directory_mounts_over_apchis_files(

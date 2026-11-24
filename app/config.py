@@ -243,6 +243,21 @@ class Settings(BaseSettings):
     #: The hard timeout on Validation. A coordinator that never starts serving fails
     #: Validation; it must never hang the pipeline.
     validation_timeout_seconds: float = 300.0
+    #: Requests and limits for the Validation pod's one container, in the shape a pod spec
+    #: takes them: `{"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {...}}`. Unset
+    #: means none, which a permissive cluster accepts and a policy that requires limits on
+    #: every container refuses -- and the Validation pod is Apchi's to build, so no chart
+    #: can add them afterwards. A quantity may be a bare number, as Helm renders `cpu: 2`.
+    validation_resources: dict[str, dict[str, str | int | float]] | None = None
+
+    #: The cluster forbids pinning `fsGroup` and assigns every pod an arbitrary uid, as
+    #: OpenShift's restricted-v2 SCC does. Credential files are then readable only if they
+    #: are world-readable, because nothing Apchi may set gives a group to the process that
+    #: reads them. So under this setting Apchi accepts 0644 credential mounts on the Trino
+    #: pods instead of refusing them, and builds its Validation pod with no `fsGroup` and
+    #: the securityContext such a cluster demands. Off, Apchi keeps the stricter 0640 with
+    #: a group, which every other cluster can provide. §13.2.
+    restricted_pod_security: bool = False
 
     #: Where a failed Auto Rollback is reported -- a Mattermost or Slack incoming
     #: webhook. Unset means log only: an alert that cannot be delivered must never
