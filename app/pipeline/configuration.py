@@ -159,7 +159,7 @@ class AdminImport(_Document):
     """The Admin scope: the same document, plus the Admin values.
 
     `admin` is required rather than defaulted. Defaulting it would mean an Operator
-    document PUT here silently turned permission enforcement off and dropped an adopted
+    document PUT here silently turned permission enforcement off and dropped an onboarded
     Cluster's preserved rules -- a reset nobody asked for, arriving through an omission.
     """
 

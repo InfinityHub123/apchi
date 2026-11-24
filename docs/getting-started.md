@@ -283,10 +283,10 @@ every catalog is a Secret Apchi owns and rewrites, and the coordinator reseeds i
 store from that Secret at every start. So a catalog Apchi does not hold survives the apply,
 survives the day, and **disappears at the next coordinator restart**.
 
-If that cluster's configuration is one you want to keep, **adopt it instead of applying over
-it**: adoption reads what the coordinator is running, has you confirm anything it cannot
-reconstruct, and produces Snapshot 1 from it. `POST /api/v1/admin/adoption/discoveries` starts
-that, and §15 of `apchi_implementation.md` is the whole procedure.
+If that cluster's configuration is one you want to keep, **import it before you apply**:
+write it as a configuration document, `PUT` it to `/api/v1/admin/configuration`, and the
+first apply turns it into Snapshot 1. [Moving a configuration](concepts.md#moving-a-configuration)
+has the document's shape.
 
 ## 7. The Snapshot
 

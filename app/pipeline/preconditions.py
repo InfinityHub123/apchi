@@ -43,16 +43,8 @@ logger = logging.getLogger(__name__)
 class PreconditionFailed(Exception):
     """The deployment cannot support what Apchi is about to do."""
 
-    def __init__(self, problems: list[str], own_configuration: list[str] | None = None) -> None:
+    def __init__(self, problems: list[str]) -> None:
         self.problems = problems
-        #: The subset whose fix is a setting on Apchi's own release rather than a change to
-        #: the Trino deployment. Adoption turns every other precondition failure into a
-        #: cutover change, on the grounds that §16 is the list of what the *deployment* must
-        #: provide -- and the eighth is the first that is not: it compares the deployment's
-        #: configuration against Apchi's own, so it can fail with nothing in the Trino
-        #: manifest to change. Labelling it a cutover change would send an Admin looking
-        #: for something that is not there (#188).
-        self.own_configuration = own_configuration or []
         super().__init__(" ".join(problems))
 
 
@@ -177,11 +169,10 @@ async def check(kubernetes: KubernetesAdapter, spec: PodSpec, settings: Settings
     #    alongside HTTPS it disables plain HTTP for all clients -- so a Cluster that
     #    authenticates its callers does not answer Apchi on http at all, and the symptom is
     #    every query timing out with nothing to read (#188).
-    own_configuration = await _unreachable_coordinator_problems(kubernetes, spec, settings)
-    problems.extend(own_configuration)
+    problems.extend(await _unreachable_coordinator_problems(kubernetes, spec, settings))
 
     if problems:
-        raise PreconditionFailed(problems, own_configuration)
+        raise PreconditionFailed(problems)
     logger.debug("deployment preconditions hold")
 
 
@@ -274,10 +265,8 @@ def _exposure_in(
             f"securityContext.fsGroup to the group Trino runs as ({TRINO_GROUP}).{follows}"
         ]
 
-    # The volume is named and the Secret behind it is not, deliberately. Adoption decides
-    # which cutover changes must wait for the seed by looking for the catalog Secret's name
-    # in a problem, so a message naming it here would arrive labelled "this one must come
-    # after the seed" -- which is true of the initContainer and false of a file mode.
+    # The volume is named rather than the Secret behind it, because the fix -- a file mode --
+    # is made on the volume.
     problems: list[str] = []
     for volume in mounted:
         if volume.name in apchi_mounted:
@@ -379,8 +368,8 @@ async def _refresh_period_problems(
     the rest of that file is the Admin's business.
 
     "Provides" means the file itself or the directory containing it, and getting that wrong
-    refused the official Trino chart for a file that was mounted all along. `coordinator`
-    owns that question now, because Adoption asks it of every path rather than this one.
+    refused a deployment for a file that was mounted all along. `coordinator` owns that
+    question, so the preconditions answer it one way.
     """
     for container in spec.containers:
         mount = provides(container, PROPERTIES_PATH)
@@ -413,8 +402,7 @@ async def _refresh_period_problems(
 
 
 #: The properties that decide whether Trino will talk to Apchi at all. All three live in
-#: `config.properties`, which is the Admin's file (§15), so reading it is the only way to
-#: know.
+#: `config.properties`, which is the Admin's file, so reading it is the only way to know.
 _AUTHENTICATION_TYPE = "http-server.authentication.type"
 _ALLOW_INSECURE_OVER_HTTP = "http-server.authentication.allow-insecure-over-http"
 _HTTPS_ENABLED = "http-server.https.enabled"

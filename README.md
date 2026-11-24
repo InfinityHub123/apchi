@@ -185,11 +185,9 @@ app/
   audit/      who changed what, and when
   api/        the REST surface
 charts/
-  apchi/      Apchi, and the Secrets it writes configuration into
-  trino/      a Trino that Apchi can configure, and that creates no Secrets of its own
+  apchi/      Apchi, the Trino it configures, and the Secrets it writes configuration into
 deploy/
   trino-dev/  the same Trino as raw manifests, rendered from the chart, for the tests
-  trino-adopted/  a Trino configured by hand, for exercising Adoption
 docs/
   concepts.md             the loop, the vocabulary, and who owns what
   getting-started.md      one catalog through the whole loop, from a real run
@@ -236,8 +234,6 @@ Built, and covered end to end:
   requiring TLS, and real HTTPS servers for the provider and the webhook.
 - **An audit trail.** Who changed what, and when, recorded at the one chokepoint an edit
   cannot skip — so a shared Candidate is still attributable. Refusals are recorded too.
-- **Adoption.** A cluster configured before Apchi, or by hand, can be brought under
-  management without losing what it was running. See **Adoption** in `CONTEXT.md`.
 - **Admin raw files.** An Admin writes a path and its content and Apchi delivers it, with no
   schema over it.
 

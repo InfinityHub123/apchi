@@ -238,7 +238,7 @@ Certificate Mapping Pattern it could never parse — and every pattern would pas
 declares the properties that make its file live, and the probe's `config.properties` is
 generated: what the image ships, plus each probing Section's own. Generated rather than patched,
 because the image's file is the thing being replaced. This is only true of the probe; on the
-Cluster those properties are Admin territory (§15), since they choose the authenticator.
+Cluster those properties are Admin territory (§14), since they choose the authenticator.
 
 **Where the reason comes from.** When a probe refuses to start, its **log** is the only place
 the reason exists — Trino writes nothing to the termination-log file Kubernetes would otherwise
@@ -273,8 +273,8 @@ catalog that exists on the Cluster but is not managed by Apchi — one seeded be
 arrived, say. That check is therefore made against the Cluster before the pod is created: a
 Catalog the Candidate would create must not already exist there. Without it the DDL fails
 *after* Apply has written the Secret, which is the divergence of §10 for a reason the Operator
-could have been told about before anything moved. Adoption (§15) is how such a catalog comes
-under management.
+could have been told about before anything moved. Importing a configuration that holds it
+(§15) is how such a catalog comes under management.
 
 A Candidate with no catalogs gets no pod at all. The pod is the expensive part of Validation,
 and an empty Candidate is a real case: the first Apply of a fresh Cluster, and every Apply
@@ -419,8 +419,7 @@ system access control and refuses to boot without it — "Configuration is inval
 going to `Failed`. A Cluster therefore cannot wait for Apchi to write the file before starting, so
 the bootstrap copy is **committed as generated output** with a CI drift check, the same pattern
 `openapi.json` uses: nothing is hand-maintained, nothing can drift from what Apchi produces, and
-the Cluster still comes up on its own. Adoption (§15) is where a Cluster's first real contact with
-Apchi belongs; until it exists, that committed copy is the stand-in.
+the Cluster still comes up on its own, and that committed copy stands in until the first Apply.
 
 `security.refresh-period` must be set for the whole-volume mount to be worth anything. Without it
 Trino reads the rules once at startup, and a Secret the kubelet faithfully keeps current is never
@@ -556,7 +555,7 @@ too. A Kubernetes merge patch merges the data map key by key, so removing a key 
 explicit null — without it a dropped Catalog is seeded straight back in at the next pod restart,
 which is the same silent, weeks-later failure in reverse. A consequence worth stating: a catalog
 that exists on the Cluster but not in the Candidate is removed from the seed by the next Apply.
-Bringing pre-existing catalogs under management is Adoption's job (§15), not Apply's.
+Bringing pre-existing catalogs under management is an import's job (§15), not Apply's.
 
 # 8. Verification
 
@@ -637,7 +636,7 @@ Validation ✓ → Apply ✓ → Verification ✓ → Snapshot 13
 
 **Invariant: a Snapshot represents a configuration that was validated, applied to the
 actual Cluster, and verified as healthy.** This holds with no exceptions, including
-Adoption (§15).
+a Cluster's first (§15).
 
 The main UI action is *Verify and Commit*, showing progress through the real stages:
 
@@ -692,7 +691,7 @@ state. The **catalog Secret as it stands** is Apchi's record of what it manages:
 before issuing DDL, so anything the DDL may have created is named in it. A catalog that is live,
 absent from the Snapshot, and absent from the Secret is therefore not Apchi's to drop — Trino's own
 `system`, which cannot be dropped at all and would fail the rollback outright, or a catalog that
-predates Apchi and has not been through Adoption (§15).
+predates Apchi.
 
 A *changed* catalog is invisible in `SHOW CATALOGS`, because Trino will not report a catalog's
 properties back. It is found by comparing the Snapshot's rendering against the Secret's, and undone
@@ -1162,7 +1161,7 @@ moved, and a deadline Apchi invented would be a deadline it could enforce by acc
 **Which authenticator reads the file is the Admin's choice**, not Apchi's: `certificate`,
 `password` and `insecure` each take their own `...user-mapping.file` property and all three
 parse it with the same `UserMapping`. Apchi owns the file; the property that points at it
-lives in `config.properties` and is therefore Admin territory (§15). Production sets the
+lives in `config.properties` and is therefore Admin territory (§14). Production sets the
 certificate variant; the development cluster and the validation probe set the insecure one,
 because Trino rejects the certificate property outright unless certificate authentication is
 configured, and a probe with no TLS could not use it.
@@ -1344,7 +1343,7 @@ change reaches the Cluster without touching the pod (§7.2). It is the first Sec
 changes cost no queries at all.
 
 `security.refresh-period` must be set on the Cluster, or the rules file is read once at
-startup and never again. Apchi asserts this **before every Apply** and at Adoption, and fails
+startup and never again. Apchi asserts this **before every Apply**, and fails
 loudly if absent — otherwise Apchi will believe it applied permissions Trino never read.
 
 It is the one precondition that reads the Admin's *configuration* rather than their pod
@@ -1637,20 +1636,13 @@ The boundary is role-based. Operators manage the six Sections. Admins own infras
 and the low-level escape hatches needed to operate the platform. Most infrastructure
 configuration stays outside the Operator-facing model entirely.
 
-# 15. Adoption
+# 15. Onboarding an existing Cluster
 
-Onboarding a Cluster whose configuration predates Apchi is an explicit lifecycle stage, not
-a special case of Commit.
-
-Existing configuration is imported into the Candidate, validated, and taken through a real
-Apply and Verification to produce **Snapshot 1**.
-
-This keeps §9's invariant literally true with no exceptions. The alternative — an "adopted"
-Snapshot flagged as never-verified — would put a permanent asterisk on the one property that
-makes Rollback trustworthy. An adopted Snapshot 1 is not known-good until it has been
-applied once.
-
-Adoption also asserts the Cluster's preconditions (§16) and fails loudly if any are unmet.
+Removed from Apchi: see [ADR-0009](./docs/adr/0009-adoption-leaves-apchi.md). Apchi no longer
+reads a running Cluster's configuration back. An internal automation reads those files and
+hands Apchi the result through the Admin-scope configuration import (§18), and the first
+Apply after it produces **Snapshot 1** through a real Apply and Verification — so §9's
+invariant stays literally true with no exceptions.
 
 # 16. Kubernetes integration
 
@@ -1664,7 +1656,7 @@ mount will not receive ConfigMap updates" — the file is frozen at pod creation
 Apchi would write the ConfigMap, see the write succeed, report success, and Trino would never
 see the change.
 
-Checked at Adoption **and before every Apply**, because a later chart change can reintroduce
+Checked **before every Apply**, because a later chart change can reintroduce
 it silently.
 
 **The second precondition: the catalog seed initContainer is present.** It copies the durable
@@ -1742,11 +1734,6 @@ of the Admin, once, with the volume named. The cost is real and worth stating: a
 install whose pod template has no `fsGroup` has **every** Apply refused after this version,
 because the catalog seed is always mounted. Apchi's own chart sets it.
 
-On Adoption this lands as a cutover change rather than a refusal, like every other precondition
-(§15) — and unlike the seed initContainer it carries no ordering, which is why the message names
-the volume and not the Secret behind it: Adoption tells the seeding change apart by the catalog
-Secret's name appearing in the problem.
-
 **It is the only precondition that reads the worker as well.** The other seven are about files
 only a coordinator reads — the seed initContainer, the access-control properties, the pointers —
 and asserting them on a worker would refuse every correct deployment. This one's subject is a
@@ -1799,18 +1786,6 @@ It is also the one precondition that can hold having missed something, and says 
 `config.properties` cannot be read it reports nothing rather than guessing. A deployment that
 keeps its configuration somewhere Apchi's Role cannot reach gets no opinion.
 
-**Adoption does not call this a cutover change**, and it is the first precondition that is not
-one. §15 turns every other failure here into a deployment change on the grounds that §16 is the
-list of what the *deployment* must provide; this one compares the deployment's configuration
-against Apchi's own, so it can fail with nothing in the Trino manifest to fix. It is reported
-as `apchi_configuration` instead, and unlike a cutover change it does count against a
-discovery's completeness — when it fires Apchi cannot query Trino at all, and a discovery made
-without Trino is not the whole truth by definition.
-
-The distinction is carried structurally, as a second list on `PreconditionFailed`, rather than
-by matching the message text. #182 shipped a message that contained the catalog Secret's name
-incidentally and so arrived labelled with a seeding order it did not have; a substring test is
-how that happens.
 
 **Why the setting is a URL and not a host and a port.** The official Trino client infers the
 scheme from the port at **exactly 443** and nowhere else, so `trino_port: 8443` — the port
@@ -1966,14 +1941,8 @@ to hang it on, and that limit is accepted rather than hidden: a Cluster nobody a
 hears nothing between restarts, for which the answer is a log alert on `app.trust` and not a
 scheduler Apchi would have to grow (§27, #196).
 
-Two things follow from that boundary rather than from a recovery plan:
+One thing follows from that boundary rather than from a recovery plan:
 
-- **Apchi keeps exactly one number outside MongoDB**: the highest Snapshot it has ever
-  committed, in a ConfigMap. It is not a second source of truth and nothing reads it to
-  decide what the configuration is. It exists because an empty `snapshots` collection is two
-  different situations — a Cluster that was never managed, and one that is managed by an
-  Apchi whose database is not in front of it right now — and §15's Adoption answers those
-  differently.
 - **Configuration is portable, which is not the same as backed up.** A configuration can be
   exported as a document and imported as the Configuration Candidate, at Operator scope (the
   six Sections) and at Admin scope (those plus the Admin values, which no Snapshot records).
@@ -2543,7 +2512,7 @@ verification after restart, incident state, Maintenance Mode — completely unpr
 three of six Sections depend on it. Going catalogs → permissions → resource groups would build
 most of the product before discovering whether the rollout path works.
 
-Not in the first slices: the UI, Adoption, audit history, pagination.
+Not in the first slices: the UI, audit history, pagination.
 
 **Maintenance Mode is the exception, by decision.** The build order originally excluded it, but
 Invariant 6 requires Auto Rollback to engage it when its single attempt fails, so slice 1 cannot
@@ -2555,7 +2524,7 @@ by editing MongoDB by hand. The rest of §14's Admin capabilities stay out.
 
 1. Snapshots are immutable.
 2. A Snapshot is created only after its configuration passed validation, was applied to the
-   actual Cluster, and passed verification. No exceptions, including Adoption.
+   actual Cluster, and passed verification. No exceptions, including a Cluster's first.
    **A Snapshot records Operator-managed configuration, not the whole Cluster**: what ran was
    the Snapshot merged with the Admin values current at the time (§14). Restoring it later
    merges it with today's Admin values — a combination that was never verified together.
@@ -2660,10 +2629,7 @@ Additional constraints:
 
 - ~~**Apchi's own disaster recovery**~~ — **out of scope.** §18 already puts operating that
   MongoDB with the platform, and the same answer applies to losing it: Apchi is not in charge
-  of its own backups any more than it is of Trino's. What Apchi does provide is the one thing
-  a restored-or-lost database cannot tell you itself — the high-water mark lives in a
-  ConfigMap outside MongoDB, so an empty `snapshots` collection is distinguishable from a new
-  install and Adoption answers those two differently (§15).
+  of its own backups any more than it is of Trino's.
 - ~~**Certificate and CA rotation**~~ — **settled** (§18, "Reading a certificate once"):
   everything Apchi presents or trusts is read once, at startup, so a rotation takes effect
   when the pod restarts, and Apchi says so rather than being silent about it

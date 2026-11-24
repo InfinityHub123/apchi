@@ -102,11 +102,6 @@ def bootstrap_secrets() -> dict[str, dict[str, str]]:
     start when either is missing -- which is exactly why deploy/trino-dev ships the generated
     default of each. A fake that started empty would make the first Apply look like a change
     and restart a coordinator for nothing.
-
-    The rules file joined this when Adoption started reading the Cluster (#101). Discovery
-    reported, correctly, that Trino was configured to read a file that was not there -- a
-    Cluster that could not come back from its next restart. The fake was wrong rather than
-    the report, in exactly the way this docstring already argued it would be.
     """
     return {
         MAPPING_SECRET: {MAPPING_KEY: render_rules({}, _SETTINGS.trino_user)},
@@ -298,16 +293,12 @@ class FakeKubernetes:
     async def read_secret_if_present(self, name: str) -> dict[str, str] | None:
         """Absence distinguishable from emptiness, as the real adapter has it.
 
-        The fake folding the two together is what let the seed skip creating a Secret for a
-        Section with nothing in it -- every tier 1 test passed and the cutover then could not
-        mount it.
+        A fake folding the two together would let a caller skip creating a Secret that
+        Trino then cannot mount, with every tier 1 test passing.
         """
         if name not in self.secrets:
             return None
         return dict(self.secrets[name])
-
-    async def write_config_map(self, name: str, data: dict[str, str]) -> None:
-        self.config_maps[name] = dict(data)
 
     async def read_config_map(self, name: str) -> dict[str, str]:
         return dict(self.config_maps.get(name, {}))
@@ -379,11 +370,9 @@ class FakeKubernetes:
         """Record the mount, and put it on the pod template the way the API server would.
 
         Both halves are needed. `mounts` is what a test asserts against; `pod_spec` is what
-        Apchi itself reads -- the preconditions, and every Section's `discover_paths`. The
-        first version of this kept only `mounts`, so a Section Apchi had just mounted was
-        invisible to Apchi: a discovery run after an Apply reported no Resource Groups and a
-        seed then wrote that emptiness into the Secret. Nothing was wrong with Apchi. The
-        fake was describing a Cluster that does not exist.
+        Apchi itself reads -- the preconditions. A fake that kept only `mounts` would describe
+        a Cluster that does not exist, where a file Apchi had just mounted was invisible to
+        Apchi.
         """
         # The mode, and the condition on it, mirror the real adapter: a credential file is
         # restricted to its group only where the pod declares an fsGroup, because a

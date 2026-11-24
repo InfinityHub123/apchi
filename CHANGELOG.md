@@ -20,7 +20,18 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
-Nothing yet.
+### Breaking
+
+- **Adoption is removed** (ADR-0009). Every `/api/v1/admin/adoption/*` endpoint is gone: the
+  discovery, the seed and the adopt step. To bring an existing Cluster's configuration under
+  Apchi, import it with `PUT /api/v1/admin/configuration`, which carries the six Sections and
+  the Admin values, preserved rules and mapping patterns included. The first Apply after that
+  makes Snapshot 1.
+- **The high-water mark is removed.** The chart value `highWaterConfigMap` and the setting
+  `APCHI_HIGH_WATER_CONFIG_MAP` are gone, and an Apchi started with that variable refuses to
+  start and names it. Apchi's Role now only reads ConfigMaps, where it could create and patch
+  them before. The ConfigMap an earlier release created (`<release>-high-water`) is left
+  behind; delete it with `kubectl delete configmap <release>-high-water`.
 
 ## 0.3.0 — 2026-11-24
 

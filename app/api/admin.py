@@ -262,7 +262,7 @@ async def import_configuration(
     **It replaces every Admin value**, including the ones the document does not mention,
     because that is what replacing means. A document with `enforce_permissions` absent
     turns enforcement off across the Cluster, and one with no preserved patterns drops the
-    rules an adopted Cluster was relying on. That is why `admin` is required rather than
+    rules an onboarded Cluster was relying on. That is why `admin` is required rather than
     defaulted -- an omission that large should not be expressible -- and why the response
     says what the Admin values now are instead of leaving a caller to assume only what they
     sent changed.

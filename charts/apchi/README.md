@@ -128,7 +128,7 @@ cluster-scoped rule.
 | Resource | Verbs | Why |
 | --- | --- | --- |
 | `secrets` | get, list, create, patch, delete | The generated configuration. Create/delete is a Validation's ephemeral Secret; list is how a crashed Apchi finds ones it leaked |
-| `configmaps` | get, create, patch | Two things. Read-only: whether the access-control properties carry a refresh period. Written: the high-water mark, which lives in a ConfigMap *outside* MongoDB so that an empty `snapshots` collection can be told apart from a new install (§15, §18) |
+| `configmaps` | get | Whether the access-control properties carry a refresh period |
 | `pods`, `pods/log` | get, list, create, delete / get | The ephemeral validation coordinator. Its log is the only place a refusing Trino explains itself |
 | `deployments` | get, patch | A Rollout. Apchi never creates or deletes one: it does not own the Trino deployment |
 
@@ -198,9 +198,3 @@ authentication, an emptyDir, and every Snapshot gone when the pod restarts. A re
 points `mongodb.uri` at a MongoDB the platform operates. Keeping it is the platform's job,
 Apchi does not back it up, schedule
 anything, or manage retention.
-
-Apchi keeps one number outside it: `highWaterConfigMap`, the highest Snapshot it has ever
-committed. Adoption reads it to tell a Cluster that was never managed from one whose database
-is simply empty right now, because adopting the second would renumber it from Snapshot 1.
-Apchi creates it itself, so it is not part of the release and `helm uninstall` leaves it
-behind -- deliberately, because the next install into this namespace should find it.
