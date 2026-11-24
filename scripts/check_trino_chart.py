@@ -1,4 +1,4 @@
-"""Assert the two charts agree, and that charts/trino renders a Trino Apchi will accept.
+"""Assert charts/apchi renders a Trino that the Apchi it also renders will accept.
 
 Apchi refuses to Apply against a deployment that cannot support what it is about to do,
 and every one of those preconditions exists because breaking it produces a failure that
@@ -14,10 +14,11 @@ under a volume name Apchi did not recognise, which Apchi reads as somebody else 
 over one file, and the whole class of problem that made Apchi refuse the official Trino
 chart.
 
-It also checks the two charts **agree on names**. Apchi writes these Secrets and Trino reads
-them, and nothing reconciles a mismatch: Apchi would report a successful Apply the Cluster
-never saw. While both lived in one chart that could not happen; now that the Secrets belong
-to the Apchi chart and the mounts to the Trino one, it can, so it is checked.
+Apchi is checked **as the chart configures it**: its settings are built from the environment
+the chart renders for the Apchi container, not from Apchi's defaults, so a value the chart
+passes wrongly fails here. And the Secrets the chart creates must be the ones its coordinator
+mounts -- Apchi writes them and Trino reads them, and nothing reconciles a mismatch: Apchi
+would report a successful Apply the Cluster never saw.
 """
 
 import asyncio
@@ -33,19 +34,12 @@ from app.config import Settings
 from app.pipeline.preconditions import PodSpec, PreconditionFailed, check
 
 ROOT = Path(__file__).resolve().parents[1]
-CHART = ROOT / "charts" / "trino"
-APCHI_CHART = ROOT / "charts" / "apchi"
+CHART = ROOT / "charts" / "apchi"
 
-#: Rendered with the values an Apchi install actually uses. The chart's own defaults name
-#: the Deployments after the release, so Apchi's defaults are passed in rather than
-#: assumed -- a chart whose names only line up under one release name is not much of a
-#: guarantee.
-VALUES = (
-    "--set",
-    "fullnameOverride=trino",
-    "--set",
-    "worker.replicas=1",
-)
+#: The release is deliberately not called `trino` or `apchi`: the names Apchi is configured
+#: with must come from the chart's helpers, not from a release name that happens to match.
+VALUES = ("--set", "mongodb.deploy=true", "--set", "trino.worker.replicas=1")
+RELEASE = "check"
 
 
 class _Cluster:
@@ -79,7 +73,7 @@ class _Cluster:
 
 def _rendered(chart: Path, *values: str) -> list[dict[str, Any]]:
     completed = subprocess.run(
-        ["helm", "template", chart.name, str(chart), *values],
+        ["helm", "template", RELEASE, str(chart), *values],
         capture_output=True,
         text=True,
         check=True,
@@ -87,23 +81,19 @@ def _rendered(chart: Path, *values: str) -> list[dict[str, Any]]:
     return [document for document in yaml.safe_load_all(completed.stdout) if document]
 
 
-def _name_disagreements() -> list[str]:
-    """Where the Trino chart mounts a Secret or volume the Apchi chart does not write.
+def _name_disagreements(documents: list[dict[str, Any]]) -> list[str]:
+    """Where the coordinator mounts a Secret the chart does not create.
 
-    Compared through what each chart renders rather than by reading both values files,
-    because a default that is overridden in a template is the kind of disagreement reading
-    values would miss.
+    Compared through what the chart renders rather than by reading values, because a default
+    that is overridden in a template is the kind of disagreement reading values would miss.
     """
-    trino = _rendered(CHART, *VALUES)
-    apchi = _rendered(APCHI_CHART, "--set", "mongodb.deploy=true")
-
-    written = {document["metadata"]["name"] for document in apchi if document["kind"] == "Secret"}
-    coordinator = _coordinator(trino)
+    written = {d["metadata"]["name"] for d in documents if d["kind"] == "Secret"}
+    coordinator = _coordinator(documents)
     spec = PodSpec.model_validate(coordinator["spec"]["template"]["spec"])
     mounted = {volume.secret_name: volume.name for volume in spec.volumes if volume.secret_name}
 
     problems = [
-        f"charts/trino mounts Secret {secret!r} (as volume {volume!r}) that charts/apchi "
+        f"the coordinator mounts Secret {secret!r} (as volume {volume!r}) that the chart "
         "does not create"
         for secret, volume in sorted(mounted.items())
         if secret not in written
@@ -180,6 +170,28 @@ def _coordinator(documents: list[dict[str, Any]]) -> dict[str, Any]:
     raise AssertionError("the chart rendered no coordinator Deployment")
 
 
+def _apchi_settings(documents: list[dict[str, Any]]) -> Settings:
+    """Apchi's settings exactly as the chart configures them.
+
+    Only plain values: one taken from the pod at runtime (the namespace) or from a Secret is
+    left at Apchi's default, which is what it would read here anyway.
+    """
+    for document in documents:
+        labels = document["metadata"].get("labels") or {}
+        if document["kind"] == "Deployment" and labels.get("app.kubernetes.io/name") == "apchi":
+            spec = document["spec"]["template"]["spec"]
+            if spec["containers"][0]["name"] != "apchi":
+                continue
+            env = spec["containers"][0].get("env") or []
+            values = {
+                item["name"].removeprefix("APCHI_").lower(): item["value"]
+                for item in env
+                if "value" in item
+            }
+            return Settings(_env_file=None, **values)  # type: ignore[call-arg]
+    raise AssertionError("the chart rendered no Apchi Deployment")
+
+
 def main() -> int:
     documents = _rendered(CHART, *VALUES)
     coordinator = _coordinator(documents)
@@ -193,9 +205,9 @@ def main() -> int:
                 print(f"  {mount.mount_path}{sub} <- {mount.name}")
         return 0
 
-    disagreements = _name_disagreements()
+    disagreements = _name_disagreements(documents)
     if disagreements:
-        print("The two charts do not agree:", file=sys.stderr)
+        print("The chart does not agree with itself:", file=sys.stderr)
         for problem in disagreements:
             print(f"  - {problem}", file=sys.stderr)
         return 1
@@ -225,16 +237,16 @@ def main() -> int:
         },
     )
     try:
-        asyncio.run(check(cluster, spec, Settings(_env_file=None)))  # type: ignore[arg-type]
+        asyncio.run(check(cluster, spec, _apchi_settings(documents)))  # type: ignore[arg-type]
     except PreconditionFailed as exc:
         print("Apchi would refuse the Trino this chart renders:", file=sys.stderr)
         for problem in exc.problems:
             print(f"  - {problem}", file=sys.stderr)
         return 1
     print(
-        f"charts/trino satisfies every precondition ({len(spec.volumes)} volumes), "
-        f"restricts {len(CREDENTIAL_VOLUMES)} credential volumes, and agrees with "
-        "charts/apchi on names"
+        f"charts/apchi's Trino satisfies every precondition of the Apchi it configures "
+        f"({len(spec.volumes)} volumes), restricts {len(CREDENTIAL_VOLUMES)} credential "
+        "volumes, and mounts only Secrets the chart creates"
     )
     return 0
 

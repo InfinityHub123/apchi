@@ -81,8 +81,7 @@ nav:
       - OpenShift and restricted clusters: deploying/openshift.md
   - Reference:
       - HTTP API: reference/api.md
-      - Apchi chart: reference/apchi-chart.md
-      - Trino chart: reference/trino-chart.md
+      - The chart: reference/apchi-chart.md
   - Design:
       - Specification: design/specification.md
       - Decisions:

@@ -1,13 +1,13 @@
 Apchi is installed as {{ include "apchi.fullname" . }} in namespace {{ .Release.Namespace }}.
 
-It configures the Trino at {{ .Values.trino.host }}:{{ .Values.trino.port }}, through the
-Deployments {{ .Values.trino.coordinatorDeployment }} and {{ .Values.trino.workerDeployment }}.
+It configures the Trino this release runs, Trino {{ .Values.trino.image.tag }}:
 
-{{- if .Values.bootstrap.create }}
-This release also created the six Secrets Apchi writes configuration into, which the Trino
-deployment mounts. Install Trino after Apchi: it reads two of them while loading and refuses
-to boot when either is missing.
-{{- end }}
+  coordinator  {{ include "trino.coordinatorName" . }}
+  workers      {{ include "trino.workerName" . }} ({{ .Values.trino.worker.replicas }})
+  endpoint     {{ include "trino.url" . }}
+
+One coordinator, by design rather than by omission: Trino cannot drain a coordinator, so a
+configuration change that needs a restart destroys every running query. See ADR-0003.
 
 Reach the API:
 
