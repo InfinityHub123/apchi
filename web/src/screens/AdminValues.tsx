@@ -78,7 +78,7 @@ export function AdminValuesScreen() {
         </div>
         <div className="cr" style={{ gridTemplateColumns: "220px minmax(0,1fr) auto" }}>
           <b>Preserved access-control rules</b>
-          <span className="muted">Rules the cluster ran before it was adopted, kept working beneath the Operator's grants until the grants catch up. Set by Adoption; changed through an Admin import.</span>
+          <span className="muted">Rules the cluster ran before Apchi managed it, kept working beneath the Operator's grants until the grants catch up. Set and changed through an Admin import.</span>
           <button type="button" className="btn btn--sm" disabled={rules.isPending} onClick={() => rules.mutate()}>
             Show
           </button>

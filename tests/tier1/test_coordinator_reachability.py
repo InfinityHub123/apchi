@@ -149,27 +149,3 @@ async def test_a_config_properties_apchi_cannot_read_yields_no_opinion(
     assert "coordinator-config.properties" not in fake_kubernetes.config_maps["trino-config"]
 
     await check(fake_kubernetes, pod_spec(healthy_pod_spec()), settings)
-
-
-async def test_adoption_does_not_call_this_a_deployment_change(
-    settings: Settings, fake_kubernetes: FakeKubernetes
-) -> None:
-    """Adoption turns every other precondition failure into a cutover change, because §16
-    is otherwise the list of what the *deployment* must provide. This one compares the
-    deployment against Apchi's own configuration, so there can be nothing in the Trino
-    manifest to fix -- and labelling it `cutover` would send an Admin looking for it.
-
-    The same class of bug as #182's, where a message matched the catalog Secret's name by
-    accident and arrived carrying an ordering it did not have.
-    """
-    from app.pipeline.discovery import discover
-
-    _config(fake_kubernetes, CERTIFICATE_AUTH)
-
-    discovery = await discover(fake_kubernetes, settings)
-
-    own = [p for p in discovery.every_problem if p.kind == "apchi_configuration"]
-    assert len(own) == 1
-    assert "trino_url" in own[0].detail
-    assert "must come after the seed" not in own[0].detail
-    assert not [p for p in discovery.every_problem if p.kind == "cutover"]

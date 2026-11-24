@@ -6,7 +6,6 @@ invert the dependency, since the registry the pipeline reads imports this module
 """
 
 import logging
-from collections.abc import Mapping
 from typing import Any
 
 from app.adapters.trino import Trino
@@ -17,13 +16,9 @@ from app.sections.admin import AdminValues
 from app.sections.base import (
     Cluster,
     CoordinatorFile,
-    DiscoveredPaths,
-    Parsed,
-    ParseProblem,
     Resources,
     SectionPlan,
     SmokeQuery,
-    Unaccounted,
     ValidationFailure,
     unreadable_each,
 )
@@ -36,20 +31,12 @@ from app.sections.catalogs.connectors import (
     validate_properties,
 )
 from app.sections.catalogs.generator import (
-    Unreadable,
     effective,
-    name_of,
-    parse_properties,
     render_secret,
 )
 from app.sections.catalogs.model import Catalog, CatalogUpdate, CatalogWrite
 
 logger = logging.getLogger(__name__)
-
-#: Trino's own default for `catalog.config-dir`, relative to its working directory
-#: /data/trino, whose `etc` symlinks to /etc/trino. Where an un-adopted Cluster keeping its
-#: catalogs as a mounted ConfigMap usually has them.
-_DEFAULT_STORE_DIR = "/etc/trino/catalog"
 
 
 def _as_catalog(name: str, stored: dict[str, Any]) -> Catalog:
@@ -129,14 +116,7 @@ async def refuse_unknown_connector(trino: Trino, connector: str) -> None:
 
 
 def validated(write: CatalogWrite) -> dict[str, Any]:
-    """The stored form of a Catalog, with everything about it judged.
-
-    Separate from `create_catalog` because Adoption needs the judging without the staging:
-    an Operator supplying the properties of a Catalog that already exists on the Cluster is
-    answering a question, not creating anything, so the name is not theirs to collide with
-    (#90). Sharing this is what makes "validated the way staging is" true rather than
-    approximately true.
-    """
+    """The stored form of a Catalog, with everything about it judged."""
     properties = _validated(write.connector, write.properties)
     if write.certificate:
         _certificate_usable(write.connector, properties, write.certificate)
@@ -217,59 +197,6 @@ class CatalogsSection:
         self, desired: Resources, settings: Settings, admin: AdminValues
     ) -> dict[str, str]:
         return {}
-
-    def discover_paths(self, settings: Settings, properties: Mapping[str, str]) -> DiscoveredPaths:
-        """The store directory, wherever Trino is pointed at it.
-
-        A directory rather than files, because the catalogs *are* its contents and only the
-        volume knows what they are. `catalog.config-dir` is the authority; Trino's own
-        default when `catalog.store=file` is `etc/catalog`, which is where an un-adopted
-        Cluster keeping its catalogs as a mounted ConfigMap usually has them.
-
-        Often unreadable, and that is expected rather than a failure: on a Cluster Apchi
-        already configured this is an `emptyDir`, which has no content Apchi can read
-        through the API. `system.metadata.catalogs` is what covers that case, and the
-        reconciliation in the pipeline is what puts the two together.
-        """
-        directory = properties.get("catalog.config-dir") or _DEFAULT_STORE_DIR
-        return DiscoveredPaths(
-            directories={settings.catalog_store_dir: directory},
-            why=(
-                None
-                if "catalog.config-dir" in properties
-                else (
-                    f"no catalog.config-dir property was found, so Trino's own default "
-                    f"{_DEFAULT_STORE_DIR} was read rather than a path the Cluster named"
-                )
-            ),
-        )
-
-    def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
-        """Each `<name>.properties` in the store directory, back into a staged Catalog.
-
-        A certificate reference does not survive, and cannot: `effective` wires a
-        certificate into the connector's own properties and expands `${cert:name}` into a
-        path before anything is written, so the file holds a path and no record of the name
-        it came from. A Catalog adopted this way keeps working -- the path is right -- but
-        Apchi will not know the certificate is in use until an Operator says so. Reported by
-        the round-trip check rather than guessed at from the path.
-        """
-        resources: Resources = {}
-        unaccounted: list[Unaccounted] = []
-        for path in sorted(files):
-            name = name_of(path, settings.catalog_store_dir)
-            if name is None:
-                unaccounted.append(
-                    Unaccounted(path=path, what="a file in the catalog store Apchi does not own")
-                )
-                continue
-            try:
-                connector, properties, lost = parse_properties(path, files[path])
-            except Unreadable as exc:
-                raise ParseProblem(exc.path, exc.reason) from exc
-            resources[name] = {"connector": connector, "properties": properties}
-            unaccounted.extend(Unaccounted(path=path, what=what) for what in lost)
-        return Parsed(resources=resources, unaccounted=tuple(unaccounted))
 
     def read_back(self, resources: Resources) -> list[ValidationFailure]:
         """Each stored catalog back through the model an Operator's POST produced."""

@@ -3,15 +3,15 @@
 Apchi cannot ask Trino how it is configured. `system.metadata.catalogs` gives a catalog's
 name and connector and no properties; there is no `SHOW CREATE CATALOG` in 483; the loaded
 access-control rules have no introspection surface at all. All verified against a running
-coordinator while writing §15.
+coordinator.
 
 So the pod template, plus the Secrets and ConfigMaps behind it, is the only place a Cluster's
 configuration can be read -- and reading it is two questions, not one. *Which volume provides
 this path* is answered here, from the template alone. *What is in it* needs the Secret or
 ConfigMap that volume names.
 
-Both the preconditions (§16) and Adoption's discovery (§15) ask those questions, which is why
-this is its own module rather than part of either.
+The preconditions (§16) ask both, and keep them apart so a template that mounts a path from
+something Apchi cannot read is told apart from one that does not mount it at all.
 """
 
 import logging
@@ -124,8 +124,8 @@ def provides(container: Container, path: str) -> VolumeMount | None:
 def source_of(spec: PodSpec, container_name: str | None, path: str) -> Source | None:
     """Which volume provides `path`, and the key in it. None when nothing does.
 
-    `container_name` of None means whichever container provides it, which is what Adoption
-    wants: it is reading the Cluster's configuration, not auditing one container's mounts.
+    `container_name` of None means whichever container provides it, for a question about the
+    Cluster's configuration rather than about one container's mounts.
     """
     volumes = spec.volumes_by_name()
     for container in spec.containers:
@@ -184,29 +184,3 @@ async def content_at(
     if data is None:
         return None
     return data.get(source.key)
-
-
-async def files_under(
-    kubernetes: KubernetesAdapter, spec: PodSpec, directory: str, container: str | None = None
-) -> dict[str, str] | None:
-    """Every file in a directory the coordinator mounts, keyed by full path.
-
-    For the Sections whose configuration is a directory rather than a file -- client
-    certificates, and the catalog store -- where the question is not "what is at this path"
-    but "what is in here", and only the volume knows.
-
-    None when nothing mounts the directory, which is different from an empty dict: an empty
-    Secret mounts as an empty directory, and for Client Certificates that is a legitimate
-    "none configured" rather than a Cluster Apchi cannot read.
-    """
-    source = source_of(spec, container, directory)
-    if source is None:
-        return None
-    if source.mount.mount_path.rstrip("/") != directory.rstrip("/"):
-        # The directory is inside a larger mount. Its contents are keys of that volume
-        # prefixed with a path a ConfigMap key cannot contain, so there is nothing to list.
-        return None
-    data = await _data_of(kubernetes, source.volume)
-    if data is None:
-        return None
-    return {f"{directory.rstrip('/')}/{key}": value for key, value in data.items()}

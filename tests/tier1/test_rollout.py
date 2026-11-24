@@ -115,14 +115,9 @@ async def test_a_mount_apchi_adds_is_on_the_pod_spec_apchi_reads(
 
     Two places record a mount and only one of them is Apchi's own view. `mounts` is what
     these tests assert against; `deployment_pod_spec` is what Apchi reads -- the §16
-    preconditions, and every Section's `discover_paths`. The fake used to keep only the
-    first, so a file Apchi had just mounted was invisible to Apchi: a discovery run after an
-    Apply reported the Section as empty, and a seed then wrote that emptiness into the
-    Secret. Nothing was wrong with Apchi; the fake was describing a Cluster that cannot
-    exist, because the API server has no way to accept a mount and not show it.
-
-    Found while establishing what survives losing Mongo (#110): it looked exactly like
-    Apchi losing a Section's configuration on recovery.
+    preconditions. The fake used to keep only the first, so a file Apchi had just mounted was
+    invisible to Apchi -- a Cluster that cannot exist, because the API server has no way to
+    accept a mount and not show it.
     """
     await applying_client.post("/api/v1/event-listeners", json=HTTP)
 
@@ -142,7 +137,7 @@ async def test_unmounting_takes_the_mount_off_the_pod_spec_too(
     applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
 ) -> None:
     """The other half: a stale mount left on the template would make a removed Section look
-    configured to the next discovery, which is the same failure facing the other way."""
+    configured to the preconditions, which is the same failure facing the other way."""
     await applying_client.post("/api/v1/event-listeners", json=HTTP)
     await _apply(applying_client)
 

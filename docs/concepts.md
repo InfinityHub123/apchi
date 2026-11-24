@@ -101,25 +101,8 @@ the values.
 
 If Apchi's database were empty, the cluster itself would be unaffected — Trino keeps serving,
 because what it reads are Kubernetes Secrets and those are untouched. What would be missing is
-Apchi's record of it, and that matters in one place worth knowing about: **adoption**.
-
-Adoption onboards a cluster Apchi does not manage yet, and it decides "do I manage this
-already?" by looking for Snapshots. An empty database answers no in two different situations —
-a cluster that was never managed, and one that is managed but whose database is not in front
-of Apchi right now. Adopting the second renumbers it from Snapshot 1.
-
-So Apchi keeps one number outside MongoDB, in a ConfigMap: the highest Snapshot it has ever
-committed. Adoption reads it and refuses, naming the number, until you repeat it back:
-
-```sh
-curl -XPOST '.../admin/adoption/adopt?discard_history_through=13'
-```
-
-A number rather than a flag, so it cannot be set out of habit. And worth knowing if you ever
-do take that route: adoption reads the configuration back off the coordinator, so every
-section comes back — catalogs with their connection URLs, grants, mapping patterns, resource
-groups. What does not come back is the numbered history behind it, or an edit you staged and
-never applied.
+Apchi's record of it: the numbered history, and anything staged and never applied. Importing an
+export (below) brings the configuration back as a new Snapshot 1; the history does not come back.
 
 ## Moving a configuration
 
@@ -232,11 +215,10 @@ apply instead, and says the configuration to change is its own.
 
 It manages one cluster. One Apchi, one Trino, one namespace.
 
-And it manages what it configured — but configuration that predates Apchi can now be
-imported, through **Adoption** (`CONTEXT.md`). That matters most for catalogs: the durable copy
-of every catalog is a Secret Apchi rewrites, and the coordinator reseeds from it at every
-start, so a catalog Apchi does not hold disappears at the next restart. Adopting a cluster is
-what stops that happening to configuration somebody set up by hand.
+And it manages what it configured. Configuration that predates Apchi has to be imported first
+(see [Moving a configuration](#moving-a-configuration)). That matters most for catalogs: the
+durable copy of every catalog is a Secret Apchi rewrites, and the coordinator reseeds from it at
+every start, so a catalog Apchi does not hold disappears at the next restart.
 
 **Authentication is off by default.** `auth.mode` defaults to `none`, which treats every caller
 as an admin — the same thing Apchi has always done, now with a name and a setting. On `none`,

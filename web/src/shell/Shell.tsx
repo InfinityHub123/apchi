@@ -515,7 +515,6 @@ function Sidebar({
             )}
           </Item>
           <Item to="/admin/raw-files" icon="file" label="Raw files" />
-          <Item to="/admin/adoption" icon="download" label="Adoption" />
         </>
       )}
       {admin ? (
