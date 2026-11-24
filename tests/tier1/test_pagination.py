@@ -43,7 +43,7 @@ async def http(settings: Settings, fake_kubernetes: FakeKubernetes) -> AsyncIter
     app.state.kubernetes = fake_kubernetes
     app.state.trino = Trino(url="http://127.0.0.1:1")
     async with (
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as client,
+        AsyncClient(transport=ASGITransport(app=app), base_url="https://apchi") as client,
         app.router.lifespan_context(app),
     ):
         yield client

@@ -2602,9 +2602,19 @@ threads.
 
 The goal is that a runtime failure is diagnosable from the logs without reproducing it.
 
-**Level.** A `LOG_LEVEL` setting, defaulting to `DEBUG` in np and test and `INFO` in prep and
-prod, overridable at runtime without a rebuild. The level is wanted most during a production
-incident, so it must not be a pure function of environment type.
+**Level.** A `LOG_LEVEL` setting, defaulting to `INFO`, and `LOG_JSON` for the format, both
+overridable at runtime without a rebuild. They used to follow an `environment` tier name --
+`DEBUG` in np and test, JSON in prep and prod -- which tied three unrelated behaviours to one
+label and crashlooped any installer whose tiers were named otherwise. `environment` is
+deprecated: for one release it still decides those two defaults, with a warning.
+
+**Unknown settings refuse to start.** An `APCHI_` variable Apchi does not read stops it at
+startup, naming the variable and the setting it is closest to. pydantic-settings passes over
+a name that matches no field, so without this a misspelt setting runs Apchi on the default it
+was meant to replace -- a real deployment connected to MongoDB with no client certificate
+that way and saw only a 30-second timeout. Kubernetes' own service-link variables
+(`APCHI_SERVICE_HOST`, `APCHI_PORT_8000_TCP`, ...) are exempt by shape: the chart's Service is
+called `apchi`, so every pod in its namespace gets them.
 
 **Debugging mode.** One `debug` setting: DEBUG unless the level is set explicitly, and every
 line names the logger and line it came from. It does **not** turn on dependencies' own debug

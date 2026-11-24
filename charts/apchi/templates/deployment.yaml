@@ -22,6 +22,10 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "apchi.serviceAccountName" . }}
+      # Kubernetes otherwise injects a variable per Service in the namespace, and this chart's
+      # own Service is called apchi -- so every pod gets APCHI_PORT, APCHI_SERVICE_HOST and
+      # sixteen more that are not settings. Apchi tolerates them; it is simply noise.
+      enableServiceLinks: false
       # restricted-v2's shape, on every cluster: it costs nothing where it is not enforced, and
       # the image's USER is numeric so the kubelet can verify runAsNonRoot without a uid.
       securityContext:
@@ -50,8 +54,13 @@ spec:
             - containerPort: 8000
               name: http
           env:
+            {{- with .Values.environment }}
+            # Deprecated: it now decides only the log defaults below, and Apchi warns while
+            # it is set. Rendered so an existing values file keeps its log level for one
+            # more release.
             - name: APCHI_ENVIRONMENT
-              value: {{ .Values.environment | quote }}
+              value: {{ . | quote }}
+            {{- end }}
             - name: APCHI_AUTH_MODE
               value: {{ .Values.auth.mode | quote }}
             - name: APCHI_AUTH_INITIAL_ADMIN_USERNAME
@@ -123,9 +132,18 @@ spec:
               value: {{ .Values.mongodb.database | quote }}
             {{- $mongoTls := .Values.mongodb.tls }}
             {{- if $mongoTls.existingSecret }}
+            {{- if and $mongoTls.certificateKeyKey (or $mongoTls.certificateKey $mongoTls.keyKey) }}
+            {{- fail "mongodb.tls: set certificateKeyKey, one file holding both, or certificateKey and keyKey -- not both shapes" }}
+            {{- end }}
             {{- if $mongoTls.certificateKeyKey }}
             - name: APCHI_MONGO_CERTIFICATE_KEY_FILE
               value: {{ printf "%s/%s" $mongoTls.mountPath $mongoTls.certificateKeyKey | quote }}
+            {{- end }}
+            {{- if $mongoTls.certificateKey }}
+            - name: APCHI_MONGO_CERTIFICATE_FILE
+              value: {{ printf "%s/%s" $mongoTls.mountPath $mongoTls.certificateKey | quote }}
+            - name: APCHI_MONGO_KEY_FILE
+              value: {{ printf "%s/%s" $mongoTls.mountPath (required "mongodb.tls.keyKey is required when mongodb.tls.certificateKey is set" $mongoTls.keyKey) | quote }}
             {{- end }}
             {{- end }}
             # Apchi reads and writes only this namespace: the Cluster's own. Taken from

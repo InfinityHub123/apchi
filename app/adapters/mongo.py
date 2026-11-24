@@ -8,7 +8,7 @@ from pymongo import AsyncMongoClient, monitoring
 from pymongo.asynchronous.database import AsyncDatabase
 
 from app.config import Settings
-from app.trust import bundled_ca, recorded
+from app.trust import bundled_ca, combined, recorded
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,8 @@ def _tls_options(settings: Settings) -> dict[str, Any]:
         # options, so it is already read exactly once (#193). `recorded` only remembers what
         # it held, so a later rotation can be reported.
         options["tlsCertificateKeyFile"] = recorded(settings.mongo_certificate_key_file)
+    elif joined := combined(settings.mongo_certificate_file, settings.mongo_key_file):
+        options["tlsCertificateKeyFile"] = joined
     return options
 
 
@@ -91,9 +93,10 @@ class Mongo:
             # the path was assembled by the chart from a mount point and a Secret key.
             raise RuntimeError(
                 f"Apchi cannot start: {missing.filename} does not exist. It comes from "
-                "mongo_certificate_key_file -- under Helm, mongodb.tls.certificateKeyKey "
-                "naming a key that Secret does not hold. A missing CA is reported by "
-                "app.trust instead, since that one is shared with every other destination."
+                "mongo_certificate_key_file, or from mongo_certificate_file and "
+                "mongo_key_file -- under Helm, a key mongodb.tls names that its Secret does "
+                "not hold. A missing CA is reported by app.trust instead, since that one is "
+                "shared with every other destination."
             ) from missing
         self._database = self._client[settings.mongo_database]
 

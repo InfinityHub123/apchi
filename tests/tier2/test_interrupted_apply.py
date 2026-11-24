@@ -41,7 +41,7 @@ async def _apchi(
     app.state.kubernetes = kubernetes
     app.state.trino = Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
     async with (
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as client,
+        AsyncClient(transport=ASGITransport(app=app), base_url="https://apchi") as client,
         app.router.lifespan_context(app),
     ):
         client.app_under_test = app  # type: ignore[attr-defined]

@@ -56,7 +56,7 @@ async def _serving(settings: Settings, fake: FakeKubernetes, who: Identity) -> A
     app.dependency_overrides[caller] = lambda: who
     app.state.kubernetes = fake
     app.state.trino = Trino(url="http://127.0.0.1:1")
-    return AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi")
+    return AsyncClient(transport=ASGITransport(app=app), base_url="https://apchi")
 
 
 @pytest.fixture

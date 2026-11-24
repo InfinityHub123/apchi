@@ -128,13 +128,14 @@ serviceAccount:
 rbac:
   create: true
 
-# np | test | prep | prod. Decides the log level and format unless logging overrides
-# them: DEBUG and console in np and test, INFO and JSON in prep and prod.
-environment: np
+# Deprecated, and removed in the next release: set logging.level and logging.json instead.
+# While set, np and test still mean DEBUG and prep and prod mean INFO and JSON, and Apchi logs
+# a warning. Any value is accepted -- it no longer has to be one of those four.
+environment: null
 
 logging:
-  # Null means "derive from environment". An explicit value always wins, so the level
-  # can be raised during an incident without a rebuild.
+  # INFO and console lines when null. An explicit value can be raised during an incident
+  # without a rebuild.
   level: null
   json: null
   # Debugging mode: DEBUG unless level says otherwise, every line naming the code it came
@@ -252,6 +253,12 @@ mongodb:
     #
     # Either this or caKey on its own turns TLS on.
     certificateKeyKey: ""
+    # Or the certificate and its key as two keys of the same Secret, which is how most
+    # issuers write them (`tls.crt` and `tls.key` from cert-manager). Apchi joins the two
+    # itself as it starts, so nothing has to concatenate them first. Both or neither, and
+    # not alongside certificateKeyKey.
+    certificateKey: ""
+    keyKey: ""
     mountPath: /etc/apchi/mongo-tls
   # true deploys a single-replica MongoDB on an emptyDir alongside Apchi, for trying
   # Apchi out. It loses every Snapshot when its pod restarts. Point `uri` at a real

@@ -185,6 +185,29 @@ def _private_copy(path: str) -> str:
     return copy
 
 
+@cache
+def combined(certificate_file: str | None, key_file: str | None) -> str | None:
+    """One private file holding the certificate and then its key, or None.
+
+    For PyMongo, whose `tlsCertificateKeyFile` takes exactly one file holding both, from an
+    issuer that writes them as two. Joined here rather than by whatever mounts them, which
+    is where a real deployment did it -- in an initContainer shell, where it lost hours to a
+    certificate written with no trailing newline: `cat` glued `-----END CERTIFICATE-----`
+    to `-----BEGIN PRIVATE KEY-----` on one line, and OpenSSL reported the result as
+    `Private key doesn't match certificate`, which it did. So each part is stripped and
+    rejoined on its own line, whatever either file ends with.
+
+    0600 by way of `mkstemp`, like `presented`'s copies, and read once for the same reason.
+    """
+    if certificate_file is None or key_file is None:
+        return None
+    parts = (_read(certificate_file).strip(), _read(key_file).strip())
+    handle, path = mkstemp(prefix="apchi-mongo-", suffix=".pem")
+    with open(handle, "wb") as destination:
+        destination.write(b"\n".join(parts) + b"\n")
+    return path
+
+
 def recorded(path: str | None) -> str | None:
     """`path` unchanged, with what it holds remembered so `rotated` can notice a change.
 

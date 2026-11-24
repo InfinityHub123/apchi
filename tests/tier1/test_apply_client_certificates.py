@@ -117,7 +117,7 @@ async def test_an_upload_that_would_outgrow_the_secret_is_refused(
     app.state.kubernetes = fake_kubernetes
     app.state.trino = Trino(url="http://127.0.0.1:1")
     async with (
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as client,
+        AsyncClient(transport=ASGITransport(app=app), base_url="https://apchi") as client,
         app.router.lifespan_context(app),
     ):
         refused = await _upload(client, "finance")

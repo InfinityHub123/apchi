@@ -19,7 +19,7 @@ from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
 from app.adapters.kubernetes import CREDENTIAL_FILE_MODE, PodState, RolloutState
 from app.adapters.trino import Trino
-from app.config import Environment, Settings
+from app.config import Settings
 from app.main import create_app
 from app.sections.certificate_mapping.generator import FILE_KEY as MAPPING_KEY
 from app.sections.certificate_mapping.generator import MOUNT_DIR as MAPPING_DIR
@@ -556,7 +556,6 @@ def settings(mongo_container: MongoDbContainer) -> Settings:
     # other -- the same shared-mutable-state problem the design accepts for
     # Operators, which tests must not inherit.
     return Settings(
-        environment=Environment.TEST,
         mongo_uri=mongo_container.get_connection_url(),
         mongo_database=f"apchi_test_{uuid.uuid4().hex}",
     )
@@ -578,7 +577,7 @@ async def client(settings: Settings, fake_kubernetes: FakeKubernetes) -> AsyncIt
     app.state.kubernetes = fake_kubernetes
     app.state.trino = Trino(url="http://127.0.0.1:1")
     async with (
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as http_client,
+        AsyncClient(transport=ASGITransport(app=app), base_url="https://apchi") as http_client,
         app.router.lifespan_context(app),
     ):
         yield http_client
@@ -606,7 +605,7 @@ async def applying_client(
     baseline = await app.state.trino.catalogs()
     try:
         async with (
-            AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as http_client,
+            AsyncClient(transport=ASGITransport(app=app), base_url="https://apchi") as http_client,
             app.router.lifespan_context(app),
         ):
             yield http_client
