@@ -20,6 +20,38 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+### Breaking
+
+- **One chart: `charts/apchi` now installs Trino too**, and `charts/trino` is gone. It was
+  never published, so anyone running it ran it from the repository. The Trino values move
+  under `trino:` -- `worker.replicas` becomes `trino.worker.replicas`, `image.*` becomes
+  `trino.image.*`, `coordinator.*` becomes `trino.coordinator.*`, `authentication.type`
+  becomes `trino.authentication.type`, and so on; the ones already under `trino:` keep their
+  names. `trino.coordinatorDeployment`, `trino.workerDeployment` and `trino.containerName` are
+  gone: Apchi is configured from the names the chart gives Trino, set by `trino.name`
+  (default `trino`). `trino.url` defaults to that Service.
+
+  Moving an install from two releases to one restarts Trino once, because Helm cannot move
+  resources between releases:
+
+  1. `helm uninstall trino` -- the Trino release. Apchi's Secrets are kept on uninstall, so
+     the catalogs, permissions and mapping survive.
+  2. `helm upgrade apchi oci://ghcr.io/infinityhub123/charts/apchi --version <this>`, with the
+     Trino values moved under `trino:`.
+  3. If Resource Groups or an Event Listener are configured, run one Apply. Apchi adds those
+     two volumes to the coordinator itself, and a recreated Deployment starts without them.
+
+- **A coordinator that mounts `/etc/trino` as one volume is no longer supported** -- the
+  official `trinodb/charts` chart and most hand-written manifests (ADR-0008). Apchi supports
+  only the file-by-file shape its own chart renders, and refuses the other before an Apply as
+  it always has. `APCHI_RESOURCE_GROUPS_PROPERTIES_FROM_DEPLOYMENT` and
+  `APCHI_EVENT_LISTENER_CONFIG_FILES_FROM_DEPLOYMENT` are gone, with the chart's
+  `deployment.providesResourceGroupsProperties` and `deployment.setsEventListenerConfigFiles`;
+  an install still setting them stops at startup, naming them. `DELETE /event-listeners/{name}`
+  no longer refuses to empty the Section, since that refusal existed only for that shape.
+
+## 0.2.1 — 2026-11-24
+
 - **The bundled Trino chart starts under an arbitrary uid.** Its `node.properties` replaced
   the image's whole and dropped `node.data-dir`, so the launcher fell back to
   `/usr/lib/trino`, which only uid 1000 can write. It now sets `node.data-dir=/data/trino`

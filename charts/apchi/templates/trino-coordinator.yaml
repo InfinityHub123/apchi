@@ -16,7 +16,7 @@ spec:
       labels:
         {{- include "trino.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: coordinator
-      {{- with .Values.coordinator.podAnnotations }}
+      {{- with .Values.trino.coordinator.podAnnotations }}
       annotations: {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
@@ -40,7 +40,7 @@ spec:
         # Cluster comes up with no catalogs at all.
         - name: seed-catalogs
           image: {{ include "trino.image" . | quote }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.trino.image.pullPolicy }}
           command: ["sh", "-c"]
           args:
             - mkdir -p {{ .Values.trino.catalogStoreDir }} &&
@@ -49,13 +49,13 @@ spec:
           volumeMounts:
             - {name: catalog-seed, mountPath: /data/trino/catalog-seed, readOnly: true}
             - {name: catalog-store, mountPath: {{ .Values.trino.catalogStoreDir }}}
-          {{- with .Values.coordinator.seedResources }}
+          {{- with .Values.trino.coordinator.seedResources }}
           resources: {{- toYaml . | nindent 12 }}
           {{- end }}
       containers:
         - name: trino
           image: {{ include "trino.image" . | quote }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.trino.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.trino.httpPort }}
               name: http
@@ -63,9 +63,9 @@ spec:
             # Trino's own script. A Rollout's "complete" means every replica passed this,
             # which is what makes Apchi's Verification talk to a coordinator that answers.
             exec: {command: ["/usr/lib/trino/bin/health-check"]}
-            initialDelaySeconds: {{ .Values.coordinator.readinessProbe.initialDelaySeconds }}
-            periodSeconds: {{ .Values.coordinator.readinessProbe.periodSeconds }}
-            failureThreshold: {{ .Values.coordinator.readinessProbe.failureThreshold }}
+            initialDelaySeconds: {{ .Values.trino.coordinator.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.trino.coordinator.readinessProbe.periodSeconds }}
+            failureThreshold: {{ .Values.trino.coordinator.readinessProbe.failureThreshold }}
           volumeMounts:
             # The Admin's own files, one mount each. Deliberately NOT one mount of the
             # whole /etc/trino directory: Apchi still mounts single files inside it --
@@ -102,7 +102,7 @@ spec:
             # node.data-dir. The catalog store above is mounted inside it, separately,
             # because it is the seed initContainer's to fill.
             - {name: data, mountPath: /data/trino}
-          {{- with .Values.coordinator.resources }}
+          {{- with .Values.trino.coordinator.resources }}
           resources: {{- toYaml . | nindent 12 }}
           {{- end }}
       volumes:
@@ -126,12 +126,12 @@ spec:
         # absence of the mount is how "none configured" is expressed -- Trino refuses to
         # start if a file it was told to read is missing -- so Apchi adds and removes those
         # volumes itself. They are the only part of this pod template Apchi writes.
-      {{- with .Values.coordinator.nodeSelector }}
+      {{- with .Values.trino.coordinator.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.coordinator.tolerations }}
+      {{- with .Values.trino.coordinator.tolerations }}
       tolerations: {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.coordinator.affinity }}
+      {{- with .Values.trino.coordinator.affinity }}
       affinity: {{- toYaml . | nindent 8 }}
       {{- end }}

@@ -73,11 +73,10 @@ coordinator mounts — the chart's `secrets.*` values are those names, and `depl
 is a Trino that mounts exactly them. And **mount shape**: most of what Apchi writes goes into
 a directory the Admin mounts, which works on any deployment, but Resource Groups and Event
 Listeners are single-file mounts Apchi makes itself, because Trino pins their pointer files to
-that directory and no property relocates them. A deployment that mounts
-the whole of `/etc/trino` as one volume cannot accept those, and the official `trino/trino`
-chart is one — so there the deployment provides those two pointers instead (§16,
-[`docs/official-trino-chart.md`](docs/official-trino-chart.md)). Apchi checks all of this
-before an Apply and names what is wrong rather than half-applying.
+that directory and no property relocates them. So the coordinator has to mount `/etc/trino`
+file by file, as the chart's Trino does; a deployment that mounts it whole, as the official
+`trino/trino` chart does, is not supported (§16). Apchi checks all of this before an Apply and
+names what is wrong rather than half-applying.
 
 ### What using it looks like
 
@@ -114,7 +113,7 @@ promotes the lot.
 The chart and the image publish to GHCR on every tag:
 
 ```sh
-helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.1.1 \
+helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.3.0 \
   --namespace trino \
   --set mongodb.uri=mongodb://your-mongo:27017
 ```
@@ -128,32 +127,16 @@ helm install apchi charts/apchi \
   --set mongodb.uri=mongodb://your-mongo:27017
 ```
 
-Install it in the namespace Trino runs in — Apchi reads and writes exactly one namespace, and
-a validation reaches its probe pod by pod IP. The chart defaults to the image it was released
-with, for `linux/amd64` and `linux/arm64`.
+The release is Apchi and the Trino cluster it configures: a coordinator, its workers, and
+the six Secrets Trino mounts its configuration from, created before Trino starts. Apchi is
+told the same names the chart gives Trino, so there is nothing to line up. The chart defaults
+to the image it was released with, for `linux/amd64` and `linux/arm64`.
 
-Apchi's chart also creates the six Secrets Trino mounts its configuration from, because those
-are Apchi's data — so **install Apchi before Trino**. Trino reads two of them while loading
-and refuses to boot when either is missing; Apchi starts fine against a Trino that is not
-there yet.
+`charts/apchi/README.md` documents every value and what the chart guarantees about its Trino;
+the ones you are most likely to change are Trino's sizing and your MongoDB.
 
-If you do not already run Trino on Kubernetes, `charts/trino` is one Apchi can configure:
-
-```sh
-helm install trino charts/trino -n trino --set fullnameOverride=trino
-```
-
-It is not a general-purpose Trino chart — the official `trino/trino` is that — but it makes
-the things Apchi requires impossible to get wrong, and CI proves it by running Apchi's own
-preconditions against what it renders. `charts/trino/README.md` says what it guarantees and
-what it deliberately leaves out.
-
-`charts/apchi/README.md` documents every value; the ones you are most likely to change are the
-Trino Deployment names, the six Secret names and your MongoDB. To install from a clone instead,
-`helm install apchi charts/apchi` with the same values.
-
-To try it on minikube or kind with nothing else set up, one command brings up a Trino, an
-Apchi and a MongoDB and tells you what to do next:
+To try it on minikube or kind with nothing else set up, one command brings up the chart and a
+MongoDB and tells you what to do next:
 
 ```sh
 ./scripts/quickstart.sh
@@ -161,10 +144,10 @@ Apchi and a MongoDB and tells you what to do next:
 
 ## Requirements
 
-- A Trino cluster on Kubernetes, deployed so Apchi can configure it. `charts/trino` is one,
-  and CI proves it by running Apchi's own precondition checker against what that chart
-  renders. The requirements themselves are §7.1 and §16 of `apchi_implementation.md`, and
-  Apchi names which one failed rather than half-applying. Apchi is developed and tested
+- Kubernetes, to run Apchi's chart and the Trino it installs. CI runs Apchi's own
+  precondition checker against the Trino that chart renders; the requirements themselves are
+  §7.1 and §16 of `apchi_implementation.md`, and Apchi names which one failed rather than
+  half-applying. Apchi is developed and tested
   against Trino **483**, and several things it relies on were established by reading that
   version rather than its documentation — another version may well work, but no other
   version has been tried. A cluster that authenticates its callers also requires TLS of them
@@ -185,11 +168,6 @@ Apchi and a MongoDB and tells you what to do next:
 response from a real run. About ten minutes.
 
 [`docs/concepts.md`](docs/concepts.md) explains the loop, the vocabulary and who owns what.
-
-[`docs/official-trino-chart.md`](docs/official-trino-chart.md) is the values to run Apchi
-against the official `trinodb/charts` Trino chart, which mounts `/etc/trino` as one volume
-rather than file by file. Worth reading before adopting an existing cluster, because that
-shape changes two things Apchi can do.
 
 With Apchi running, `/docs` serves the interactive API reference. The same contract is
 published at
@@ -215,7 +193,6 @@ deploy/
 docs/
   concepts.md             the loop, the vocabulary, and who owns what
   getting-started.md      one catalog through the whole loop, from a real run
-  official-trino-chart.md the values for a deployment that mounts /etc/trino whole
   adr/                    the decisions, and what was tried before them
 tests/
   tier1/      the HTTP API against real MongoDB and real Trino, Kubernetes faked
@@ -229,8 +206,8 @@ scripts/
 
 ## Current state
 
-Apchi is under active development. **v0.1.1** is the first published release — the image and
-the chart are on GHCR, and `main` is usually ahead of it.
+Apchi is under active development. Releases publish the image and the chart to GHCR, and
+`main` is usually ahead of the latest.
 
 **If you automate against the API**, read this: while Apchi is `0.x` a breaking change may
 land in any minor release, and each one is named under `## Breaking` in
@@ -262,10 +239,7 @@ Built, and covered end to end:
 - **Adoption.** A cluster configured before Apchi, or by hand, can be brought under
   management without losing what it was running. See **Adoption** in `CONTEXT.md`.
 - **Admin raw files.** An Admin writes a path and its content and Apchi delivers it, with no
-  schema over it. One limit, and it is structural: a raw file's path is the Admin's to choose,
-  which makes it a single-file mount — so on a deployment that mounts the whole of
-  `/etc/trino` as one volume, every raw path is refused. See
-  [`docs/official-trino-chart.md`](docs/official-trino-chart.md).
+  schema over it.
 
 Not built:
 

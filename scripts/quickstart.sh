@@ -24,7 +24,6 @@ kubectl cluster-info >/dev/null 2>&1 || die "kubectl cannot reach a cluster; sta
 if [[ "${1:-}" == "--delete" ]]; then
   say "Removing everything"
   helm uninstall "$RELEASE" -n "$NAMESPACE" 2>/dev/null || true
-  helm uninstall trino -n "$NAMESPACE" 2>/dev/null || true
   # Deleting the namespace is what removes the bootstrap Secrets: they are pre-install
   # hooks, so helm uninstall deliberately leaves them -- they hold the Cluster's
   # configuration and the only durable copy of its catalogs.
@@ -55,24 +54,15 @@ esac
 say "Namespace $NAMESPACE"
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-# Apchi first, and the order is not arbitrary: Apchi's chart creates the Secrets Trino
-# mounts, and Trino refuses to boot without two of them. Apchi starts fine with no Trino --
-# its readiness depends on MongoDB and nothing else.
-say "Apchi"
+# One release: Apchi, its Trino and a MongoDB. The Secrets Trino mounts are install hooks,
+# so they exist before the coordinator starts.
+say "Apchi and Trino"
 helm upgrade --install "$RELEASE" "$ROOT/charts/apchi" \
   --namespace "$NAMESPACE" \
   --set image.repository="${IMAGE%:*}" \
   --set image.tag="${IMAGE##*:}" \
   --set mongodb.deploy=true \
-  --wait --timeout 10m
-
-# Apchi configures a Trino; it does not install one. charts/trino is a Trino that
-# satisfies Apchi's preconditions -- see charts/trino/README.md.
-say "Trino"
-helm upgrade --install trino "$ROOT/charts/trino" \
-  --namespace "$NAMESPACE" \
-  --set fullnameOverride=trino \
-  --set worker.replicas=1 \
+  --set trino.worker.replicas=1 \
   --wait --timeout 10m
 
 cat <<EOF

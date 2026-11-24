@@ -83,9 +83,9 @@ Of a Section: one Trino adopts only by restarting, and so applied by the third e
 **Deployment Shape**:
 How the Trino coordinator mounts its configuration directory, which decides what Apchi can
 deliver there. *File-by-file*: each file is its own mount, and Apchi can add single-file mounts
-inside it. *Whole-directory*: `/etc/trino` is one volume, and Kubernetes will not place a
-single file inside it — so the deployment provides the two files Trino pins to that directory,
-and Raw Files do not work at all. Asserted before every Apply, never guessed at.
+inside it -- the only shape Apchi supports. *Whole-directory*: `/etc/trino` is one volume,
+and Kubernetes will not place a single file inside it, so Apchi refuses it (ADR-0008).
+Asserted before every Apply, never guessed at.
 
 **Trust Bundle**:
 The one set of certificate authorities Apchi verifies every outbound TLS connection against —
