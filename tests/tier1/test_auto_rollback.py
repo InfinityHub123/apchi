@@ -69,7 +69,7 @@ async def _unverifiable(
     baseline = await app.state.trino.catalogs()
     try:
         async with (
-            AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as client,
+            AsyncClient(transport=ASGITransport(app=app), base_url="https://apchi") as client,
             app.router.lifespan_context(app),
         ):
             yield client

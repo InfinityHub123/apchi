@@ -21,7 +21,7 @@ async def test_health_is_degraded_when_mongo_is_unreachable(client: AsyncClient)
     app = create_app(unreachable)
     async with (
         AsyncClient(
-            transport=__import__("httpx").ASGITransport(app=app), base_url="http://apchi"
+            transport=__import__("httpx").ASGITransport(app=app), base_url="https://apchi"
         ) as offline,
         app.router.lifespan_context(app),
     ):

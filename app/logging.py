@@ -204,6 +204,13 @@ def configure_logging(settings: Settings) -> None:
         server.propagate = True
     logging.getLogger("uvicorn").setLevel(logging.INFO)
 
+    if settings.environment is not None:
+        logging.getLogger(__name__).warning(
+            "APCHI_ENVIRONMENT is deprecated and removed in the next release. It now decides "
+            "only the log defaults; set APCHI_LOG_LEVEL and APCHI_LOG_JSON instead",
+            extra={"environment": settings.environment},
+        )
+
     if settings.debug:
         # A warning so that it stands out in a production log, where it is most likely to
         # have been switched on during an incident and then forgotten.

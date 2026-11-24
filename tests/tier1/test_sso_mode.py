@@ -56,7 +56,7 @@ async def _serving(app: FastAPI, fake_kubernetes: FakeKubernetes) -> AsyncIterat
     app.state.kubernetes = fake_kubernetes
     app.state.trino = Trino(url="http://127.0.0.1:1")
     async with (
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as http,
+        AsyncClient(transport=ASGITransport(app=app), base_url="https://apchi") as http,
         app.router.lifespan_context(app),
     ):
         yield http
@@ -500,7 +500,7 @@ async def test_a_token_minted_under_sso_answers_to_the_claim(
 
     with_token = AsyncClient(
         transport=ASGITransport(app=sso._transport.app),  # type: ignore[attr-defined]
-        base_url="http://apchi",
+        base_url="https://apchi",
         headers={"authorization": f"Bearer {secret}"},
     )
     async with with_token:

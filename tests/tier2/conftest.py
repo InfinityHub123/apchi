@@ -864,7 +864,7 @@ async def running_apchi(
     app.state.kubernetes = kubernetes
     app.state.trino = Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
     async with (
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as client,
+        AsyncClient(transport=ASGITransport(app=app), base_url="https://apchi") as client,
         app.router.lifespan_context(app),
     ):
         yield client
@@ -888,7 +888,7 @@ async def e2e_client(
     app.state.trino = Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
     try:
         async with (
-            AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as http_client,
+            AsyncClient(transport=ASGITransport(app=app), base_url="https://apchi") as http_client,
             app.router.lifespan_context(app),
         ):
             yield http_client

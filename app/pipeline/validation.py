@@ -59,6 +59,9 @@ _CATALOG_MANAGEMENT_ENV = "CATALOG_MANAGEMENT"
 #: Validation as already existing, for a reason having nothing to do with it.
 _STATIC_CATALOG_DIR = "/etc/trino/catalog"
 
+#: Where the image keeps Trino's data directory, which Trino must be able to write.
+_DATA_DIR = "/data/trino"
+
 #: How often the probe is asked whether it is serving yet.
 _POLL_SECONDS = 2.0
 
@@ -111,7 +114,13 @@ def pod_name(validation_id: str) -> str:
 
 
 def validation_manifest(
-    name: str, image: str, deadline_seconds: int, files: dict[str, str] | None = None
+    name: str,
+    image: str,
+    deadline_seconds: int,
+    files: dict[str, str] | None = None,
+    *,
+    restricted: bool = False,
+    resources: dict[str, dict[str, str | int | float]] | None = None,
 ) -> dict[str, Any]:
     """A coordinator-only Trino and nothing else.
 
@@ -127,51 +136,65 @@ def validation_manifest(
     activeDeadlineSeconds is the backstop behind Apchi's own cleanup: an Apchi that
     dies mid-validation and never comes back still leaves a pod that stops itself.
     """
+    container: dict[str, Any] = {
+        "name": "trino",
+        "image": image,
+        "env": [{"name": _CATALOG_MANAGEMENT_ENV, "value": "dynamic"}],
+        "ports": [{"containerPort": 8080, "name": "http"}],
+        "volumeMounts": [
+            {"name": "no-catalogs", "mountPath": _STATIC_CATALOG_DIR},
+            *_file_mounts(files or {}),
+        ],
+    }
+    if resources:
+        container["resources"] = resources
+    volumes: list[dict[str, Any]] = [{"name": "no-catalogs", "emptyDir": {}}]
+
+    if restricted:
+        # The shape restricted-v2 admits, and nothing it would refuse: no fsGroup and no
+        # uid, both of which the platform assigns. `runAsNonRoot` is safe to ask for only
+        # here -- the image's USER is the name `trino`, which the kubelet cannot prove is
+        # not root, so on a cluster that assigns no uid it would refuse the container.
+        security: dict[str, Any] = {
+            "runAsNonRoot": True,
+            "seccompProfile": {"type": "RuntimeDefault"},
+        }
+        container["securityContext"] = {
+            "allowPrivilegeEscalation": False,
+            "capabilities": {"drop": ["ALL"]},
+        }
+        # The image's data directory belongs to uid 1000, and under an arbitrary uid Trino
+        # dies before it logs anything useful: `pid file is not writeable ... mkdir
+        # /data/trino/var: permission denied`. Measured with trinodb/trino:483.
+        container["volumeMounts"].append({"name": "data", "mountPath": _DATA_DIR})
+        volumes.append({"name": "data", "emptyDir": {}})
+        # World-readable, because the arbitrary uid belongs to no group the file could be
+        # given. The pod has one container and lives for one Validation.
+        file_mode = 0o644
+    else:
+        # The probe holds the same files as the Cluster, including Client Certificate
+        # private keys, so it restricts them the same way -- and unlike the Cluster's pod
+        # template this one is Apchi's, so both halves can simply be set. Without the group
+        # the 0640 below is root-only and the probe cannot read its own configuration.
+        # §13.2.
+        security = {"fsGroup": TRINO_GROUP}
+        file_mode = CREDENTIAL_FILE_MODE
+
+    if files:
+        volumes.append(
+            {"name": _FILES_VOLUME, "secret": {"secretName": name, "defaultMode": file_mode}}
+        )
     return {
         "apiVersion": "v1",
         "kind": "Pod",
-        "metadata": {
-            "name": name,
-            "labels": dict(LABELS),
-        },
+        "metadata": {"name": name, "labels": dict(LABELS)},
         "spec": {
             # A crash is a validation failure to report, never something to retry.
             "restartPolicy": "Never",
             "activeDeadlineSeconds": deadline_seconds,
-            # The probe holds the same files as the Cluster, including Client Certificate
-            # private keys, so it restricts them the same way -- and unlike the Cluster's
-            # pod template this one is Apchi's, so both halves can simply be set. Without
-            # the group the 0640 below is root-only and the probe cannot read its own
-            # configuration. §13.2.
-            "securityContext": {"fsGroup": TRINO_GROUP},
-            "containers": [
-                {
-                    "name": "trino",
-                    "image": image,
-                    "env": [{"name": _CATALOG_MANAGEMENT_ENV, "value": "dynamic"}],
-                    "ports": [{"containerPort": 8080, "name": "http"}],
-                    "volumeMounts": [
-                        {"name": "no-catalogs", "mountPath": _STATIC_CATALOG_DIR},
-                        *_file_mounts(files or {}),
-                    ],
-                }
-            ],
-            "volumes": [
-                {"name": "no-catalogs", "emptyDir": {}},
-                *(
-                    [
-                        {
-                            "name": _FILES_VOLUME,
-                            "secret": {
-                                "secretName": name,
-                                "defaultMode": CREDENTIAL_FILE_MODE,
-                            },
-                        }
-                    ]
-                    if files
-                    else []
-                ),
-            ],
+            "securityContext": security,
+            "containers": [container],
+            "volumes": volumes,
         },
     }
 
@@ -224,7 +247,16 @@ async def ephemeral_trino(
         # Born and dies with the pod, and labelled like it, so a crash mid-Validation
         # leaves a Secret the startup sweep can find.
         await kubernetes.create_secret(name, probe_secret(files), dict(LABELS))
-    await kubernetes.create_pod(validation_manifest(name, image, int(timeout) + 60, files))
+    await kubernetes.create_pod(
+        validation_manifest(
+            name,
+            image,
+            int(timeout) + 60,
+            files,
+            restricted=settings.restricted_pod_security,
+            resources=settings.validation_resources,
+        )
+    )
     logger.info(
         "validation pod created", extra={"pod": name, "image": image, "files": len(files or {})}
     )

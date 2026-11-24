@@ -67,7 +67,7 @@ async def _running(
     app.state.kubernetes = kubernetes
     app.state.trino = Trino(url=container_url(cluster), user=settings.trino_user)
     async with (
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://apchi") as client,
+        AsyncClient(transport=ASGITransport(app=app), base_url="https://apchi") as client,
         app.router.lifespan_context(app),
     ):
         yield client
