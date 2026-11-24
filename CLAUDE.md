@@ -114,7 +114,7 @@ rather than a scheduler (#196). See §18, #193.
 
 ## Deployment shapes
 
-One: **file-by-file**, which `charts/trino` and `deploy/trino-dev` use. Each file in
+One: **file-by-file**, which the chart's Trino and `deploy/trino-dev` use. Each file in
 `/etc/trino` is its own mount, so Apchi can add single-file mounts inside it -- which it does
 for `resource-groups.properties` and `event-listener.properties`, the two files Trino pins to
 that directory.

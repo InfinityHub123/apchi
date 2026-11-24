@@ -69,9 +69,14 @@ TLS_VALUES = VALUES + (
 FROM_FIELD_REF = {"APCHI_KUBERNETES_NAMESPACE"}
 
 
+#: Apchi's own Deployment, and nothing else the chart renders: its Trino pods carry an
+#: fsGroup and credential modes of their own, which check_trino_chart.py judges.
+APCHI_ONLY = ("--show-only", "templates/deployment.yaml")
+
+
 def rendered_environment(values: tuple[str, ...] = VALUES) -> dict[str, str]:
     manifests = subprocess.run(
-        ["helm", "template", "apchi", str(CHART), *values],
+        ["helm", "template", "apchi", str(CHART), *values, *APCHI_ONLY],
         capture_output=True,
         text=True,
         check=True,
@@ -124,7 +129,7 @@ def tls_mount_problems() -> list[str]:
     rather than from values, so a default that a template overrides cannot hide.
     """
     manifests = subprocess.run(
-        ["helm", "template", "apchi", str(CHART), *TLS_VALUES],
+        ["helm", "template", "apchi", str(CHART), *TLS_VALUES, *APCHI_ONLY],
         capture_output=True,
         text=True,
         check=True,

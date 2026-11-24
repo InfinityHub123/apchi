@@ -150,7 +150,10 @@ trino:
   # A URL and not a host plus a port: the Trino client reads https from a port only when the
   # port is exactly 443, so `port: 8443` -- the port Trino's own documentation uses for
   # HTTPS -- sent plaintext at a TLS listener and reported nothing.
-  url: http://trino:8080
+  #
+  # Empty means the coordinator Service below, over plain HTTP. Set it for a coordinator
+  # serving HTTPS.
+  url: ""
   # Reaching a coordinator that serves HTTPS.
   #
   # Trino requires TLS under every authentication type it supports, and with an
@@ -176,18 +179,111 @@ trino:
   # The identity Apchi issues DDL as, and the only identity granted `owner` on
   # catalogs -- which is what restricts catalog DDL to Apchi.
   user: apchi
-  # Validation reads the image from this Deployment, so the ephemeral coordinator is
-  # always the version the Cluster runs. A Rollout patches it.
-  coordinatorDeployment: trino-coordinator
-  # Compared against the worker count Trino reports, so the expectation adjusts when
-  # an Admin scales the Cluster.
-  workerDeployment: trino-worker
-  containerName: trino
   # Where Trino keeps its dynamic catalog store. Nothing read-only may be mounted here
   # or above it, or every CREATE CATALOG fails.
   catalogStoreDir: /data/trino/catalogs
   # The catalog the Verification smoke query runs against.
   verificationCatalog: system
+
+  # The cluster this chart runs. Its Deployments are `<name>-coordinator` and `<name>-worker`,
+  # its Service `<name>`, and Apchi is configured with exactly those -- one value, so they
+  # cannot disagree. Validation reads the coordinator's image, so the ephemeral coordinator
+  # is always the version the Cluster runs.
+  name: trino
+
+  image:
+    repository: trinodb/trino
+    # Apchi is developed and tested against 483. Several behaviours it relies on were
+    # established by reading that version rather than its documentation.
+    tag: "483"
+    pullPolicy: IfNotPresent
+  coordinator:
+    # Trino cannot drain a coordinator, so there is exactly one and a Rollout destroys every
+    # running query. That is a property of Trino, not a limit of this chart (ADR-0003).
+    resources: {}
+    # The initContainer that seeds the catalog store, which copies a few files. Its own value
+    # because a fleet requiring limits on every container refuses the pod without them, and
+    # it needs a fraction of what Trino does. Empty sets none.
+    seedResources: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+    # Trino's own health-check script. It is what makes a Rollout's "complete" mean the
+    # coordinator is answering, which Apchi's Verification depends on.
+    readinessProbe:
+      initialDelaySeconds: 15
+      periodSeconds: 5
+      failureThreshold: 30
+
+  worker:
+    replicas: 2
+    resources: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+    readinessProbe:
+      initialDelaySeconds: 15
+      periodSeconds: 5
+      failureThreshold: 30
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  # node.environment. Lowercase alphanumeric and underscores only; Trino rejects the rest.
+  environment: production
+  httpPort: 8080
+
+  # How often Trino re-reads the access-control rules. Not optional: without it the rules
+  # are read once at startup, and Apchi would report a permission change the Cluster never
+  # sees. Apchi refuses to Apply against a Cluster that does not set it.
+  securityRefreshPeriod: 30s
+
+  # The group every pod runs with, and the group that owns the files on Apchi's Secret
+  # volumes. It must be the `trino` user's group in the image -- gid 1000 in `trinodb/trino`
+  # -- and it is not decoration: a credential volume's `defaultMode` of 0640 makes the file
+  # root-owned and group-readable, so without the group Trino cannot read its own private
+  # keys at all.
+  #
+  # Both halves are needed and neither is sufficient. Measured on a real cluster with a
+  # readOnly secret mount:
+  #
+  #   neither                      0644 root:root   world-readable
+  #   fsGroup only                 0644 root:trino  world-readable
+  #   defaultMode 0640 + fsGroup   0640 root:trino  what we want
+  #
+  # 0600 is not reachable here, and asking for it is not an error: the kubelet ORs
+  # roMask = 0440 into every file's mode on a readOnly volume, so 0600 arrives as 0640.
+  # That is also exactly what libpq accepts for a root-owned key file, and what it refuses
+  # a world-readable one for. See §13.2.
+  #
+  # On OpenShift's restricted-v2 it has to be a group the namespace allows -- the first of
+  # its `openshift.io/sa.scc.supplemental-groups` annotation -- or the pod is refused; 1000
+  # is far below any range OpenShift allocates. null renders none and lets the platform
+  # choose, which Apchi accepts only with `restrictedPodSecurity`, because a 0640 credential
+  # is then unreadable and has to be 0644.
+  fsGroup: 1000
+
+  jvm:
+    maxHeapSize: 2G
+    extraArgs: []
+
+  # Added verbatim to the coordinator's config.properties. The escape hatch for anything
+  # this chart does not model -- but note that properties Apchi owns are not yours to set
+  # here, and the preconditions will tell you so.
+  additionalCoordinatorProperties: []
+  additionalWorkerProperties: []
+
+  # How callers authenticate to Trino, and how their certificate becomes a Trino Identity.
+  #
+  # `insecure` is the development shape: no TLS, and the user-mapping file fed to the
+  # insecure authenticator. `certificate` is the production shape. Both feed the same file to
+  # the same parser, so a pattern proven under one is proven under the other -- Trino simply
+  # rejects the certificate variant unless certificate authentication is configured. §7.6.
+  authentication:
+    type: insecure  # insecure | certificate
 
 # Set on a cluster that forbids pinning fsGroup and assigns each pod an arbitrary uid:
 # OpenShift's restricted-v2 SCC. Three things change, all because a mounted file can then
@@ -302,11 +398,15 @@ secrets:
 # belongs to the Admin, and Apchi never touches it.
 #
 # The user-mapping Secret is not here: the Admin mounts it as a directory and Apchi only
-# fills it (#93). `charts/trino` still names a volume for it, because something has to
-# mount it -- but Apchi does not need to know that name.
+# fills it (#93). The coordinator still names a volume for it, below, because something has
+# to mount it -- but Apchi does not need to know that name.
 volumes:
   eventListener: apchi-event-listener
   resourceGroups: apchi-resource-groups
+  # Mounted by the coordinator itself rather than by Apchi, because Trino is configured to
+  # read the user-mapping file at startup and refuses to boot when it is missing. Apchi takes
+  # the mount over from its first Apply; the name is what makes that handover invisible.
+  certificateMapping: apchi-user-mapping
 
 # Whether a Catalog the validation coordinator cannot connect to fails the Apply (#171).
 #
@@ -352,9 +452,8 @@ alertWebhookUrl: ""
 # writes into, **once, on install only**, and never touches them again -- Apchi owns their
 # content from its first Apply, and a `helm upgrade` must not revert a permission change.
 #
-# They live here rather than in the Trino chart because they are Apchi's data. Which means
-# installing this chart *before* Trino: Trino mounts these and will not start without two of
-# them, while Apchi starts fine with no Trino at all.
+# They are pre-install hooks, so they exist before the coordinator this chart also runs:
+# Trino mounts these and will not start without two of them.
 #
 # Set create: false when the Secrets already exist -- adopting a Cluster, or a second Apchi
 # release against one that is already configured.

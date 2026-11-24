@@ -43,9 +43,8 @@ jobs:
         run: |
           curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
           helm lint charts/apchi --set mongodb.deploy=true
-          helm lint charts/trino
           uv run python scripts/check_chart_env.py
-          # Renders the Trino chart and runs Apchi's own preconditions against it, rather
+          # Renders the chart's Trino and runs Apchi's own preconditions against it, rather
           # than a second opinion about what they mean. A chart that ships with Apchi must
           # not be able to drift into something Apchi refuses to Apply against.
           uv run python scripts/check_trino_chart.py
