@@ -20,6 +20,10 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.2.1 — 2026-11-24
+
 - **The bundled Trino chart starts under an arbitrary uid.** Its `node.properties` replaced
   the image's whole and dropped `node.data-dir`, so the launcher fell back to
   `/usr/lib/trino`, which only uid 1000 can write. It now sets `node.data-dir=/data/trino`
