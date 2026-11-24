@@ -241,7 +241,7 @@ async def test_the_admin_import_replaces_admin_values_it_does_not_mention(
 
 async def test_the_admin_import_requires_the_admin_block(client: AsyncClient) -> None:
     """Required rather than defaulted: an Operator document PUT here would otherwise turn
-    enforcement off and drop an adopted Cluster's preserved rules through an omission."""
+    enforcement off and drop an onboarded Cluster's preserved rules through an omission."""
     response = await client.put(ADMIN_CONFIGURATION, json=_document())
 
     assert response.status_code == 422, response.json()

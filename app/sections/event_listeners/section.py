@@ -6,7 +6,6 @@ is no reload path, so Trino adopts a listener change only by restarting. See sec
 """
 
 import logging
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -19,13 +18,9 @@ from app.sections.base import (
     Cluster,
     CoordinatorFile,
     Delivery,
-    DiscoveredPaths,
-    Parsed,
-    ParseProblem,
     Resources,
     SectionPlan,
     SmokeQuery,
-    Unaccounted,
     ValidationFailure,
     unreadable_each,
 )
@@ -33,8 +28,6 @@ from app.sections.event_listeners import SECTION
 from app.sections.event_listeners.generator import (
     FILE_KEY,
     MOUNT_PATH,
-    Unreadable,
-    parse_properties,
     render_secret,
 )
 from app.sections.event_listeners.model import (
@@ -168,36 +161,6 @@ class EventListenersSection:
     name: SectionName = SECTION
     #: Trino loads event listeners exactly once per process lifetime.
     requires_rollout = True
-
-    def discover_paths(self, settings: Settings, properties: Mapping[str, str]) -> DiscoveredPaths:
-        """Where Trino reads its listeners from: `etc/event-listener.properties`, if it is
-        there. Nothing points at it, so there is no property naming it and nowhere else it
-        could be. An Admin who sets `event-listener.config-files` anyway has their listeners
-        somewhere this cannot see, and the discovery says so by finding nothing here.
-        """
-        return DiscoveredPaths(files={MOUNT_PATH: MOUNT_PATH})
-
-    def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
-        """An absent file means no listener, which is this Section's whole way of saying so.
-
-        The listener is named after its type, because the file carries no name -- see
-        `parse_properties`. An Operator adopting a Cluster can rename it afterwards; what
-        matters is that the configuration is not lost.
-        """
-        where = MOUNT_PATH
-        content = files.get(where)
-        if content is None:
-            return Parsed()
-        try:
-            listener_type, properties, unaccounted = parse_properties(where, content)
-        except Unreadable as exc:
-            raise ParseProblem(exc.path, exc.reason) from exc
-        return Parsed(
-            resources={listener_type: {"type": listener_type, "properties": properties}},
-            unaccounted=tuple(
-                Unaccounted(path=where, what=what, content=found) for what, found in unaccounted
-            ),
-        )
 
     def read_back(self, resources: Resources) -> list[ValidationFailure]:
         return unreadable_each(SECTION, resources, lambda name: _as_listener(name, resources[name]))

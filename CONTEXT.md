@@ -101,11 +101,6 @@ edit cannot avoid, so a shared Candidate stays attributable.
 
 ### Lifecycle
 
-**Adoption**:
-The one-time onboarding of a Cluster whose configuration predates Apchi: existing
-configuration is imported into a Candidate and taken through the full lifecycle to
-produce the first Snapshot.
-
 **Validation**:
 Deciding whether the Candidate should be applied to the Cluster. Happens before the
 Cluster is touched.

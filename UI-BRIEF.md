@@ -40,7 +40,7 @@ Three roles. Only the first two ever see the interface.
 | Role | Who they are | What they can do |
 |---|---|---|
 | **Operator** | Platform staff at the organisation Apchi is run for. The primary user. | Everything in sections 5 and 6 below: all six configuration areas, plus Validate, Apply, Reset, Revert, Rollback. |
-| **Admin** | The people who run the underlying platform. | Everything an Operator can, plus: write arbitrary low-level Trino config, write raw files, engage Maintenance Mode, run Adoption, turn permission enforcement on and off. |
+| **Admin** | The people who run the underlying platform. | Everything an Operator can, plus: write arbitrary low-level Trino config, write raw files, engage Maintenance Mode, turn permission enforcement on and off. |
 | **End User** | People who run SQL queries against Trino. | **Never an Apchi user.** They are the *subject* of permissions and resource groups and never an audience for this interface. Nothing is designed for them. |
 
 They are platform engineers. They live in terminals, read dense tables comfortably, reach for
@@ -635,23 +635,11 @@ work at all**, because their path is the Admin's to choose and Apchi cannot plac
 inside a read-only directory. A design should not assume every Admin surface is available on
 every cluster.
 
-### 6.14 Adoption
+### 6.14 Onboarding an existing cluster
 
-A one-time onboarding flow for a cluster that was configured before Apchi existed.
-
-1. Apchi reads the cluster's current configuration, changing nothing.
-2. It reports what it found — and what it **could not** read. Trino will not report a catalog's
-   properties back, so some catalogs have to be supplied by hand.
-3. The operator fills the gaps, resource by resource.
-4. Adoption runs a real Apply and Verification, producing **Snapshot 1**.
-5. A separate **seed** step writes Apchi's own copies of the configuration without touching what
-   the cluster is currently serving — no restart, no Snapshot. Making those copies live is then
-   a manual platform task, and the response says exactly what is left to do. The interface has
-   to carry that hand-off clearly: the cluster is still serving its old configuration at this
-   point, and somebody has to go and change that.
-
-This is a multi-step, resumable flow with a discoverable "what's still missing" state. It can be
-discarded and restarted.
+Not a flow in this interface. A cluster configured before Apchi is brought under it by an
+Admin importing a configuration document (§6.9, at the Admin scope), and the first Apply after
+that produces **Snapshot 1**.
 
 ### 6.15 Drift: when the cluster is not what Apchi committed
 
@@ -730,10 +718,6 @@ The product generates these constantly; they are not edge cases.
 - **Concurrent edit** — someone else staged something while this person was looking.
 - **Rolling back** — a visible stage of its own during a failing Apply, between the failure and
   knowing whether the cluster was recovered.
-- **Never adopted** — a cluster that predates Apchi and has not been through Adoption. Distinct
-  from a fresh cluster: configuration exists, but Apchi does not own it yet.
-- **Adoption in progress** — a partially completed discovery, with some resources supplied by
-  hand and others still missing.
 
 ---
 

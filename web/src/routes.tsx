@@ -5,7 +5,7 @@ import type { RouteObject } from "react-router-dom";
  * the sidebar cannot disagree about where a screen is.
  *
  * Each screen is its own chunk, loaded when first visited: an Operator who opens the
- * Overview should not download the Adoption wizard first.
+ * Overview should not download the Admin screens first.
  */
 const screen = (load: () => Promise<object>, name: string): Pick<RouteObject, "lazy"> => ({
   lazy: async () => {
@@ -43,7 +43,6 @@ export const routes: RouteObject[] = [
   { path: "admin", ...screen(() => import("./screens/AdminValues"), "AdminValuesScreen") },
   { path: "admin/enforcement", ...screen(() => import("./screens/Enforcement"), "EnforcementScreen") },
   { path: "admin/raw-files", ...screen(() => import("./screens/RawFiles"), "RawFilesScreen") },
-  { path: "admin/adoption", ...screen(() => import("./screens/Adoption"), "AdoptionScreen") },
   { path: "maintenance", ...screen(() => import("./screens/Maintenance"), "MaintenanceScreen") },
   { path: "tokens", ...screen(() => import("./screens/Tokens"), "TokensScreen") },
   { path: "*", ...screen(() => import("./screens/NotFound"), "NotFound") },

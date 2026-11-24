@@ -1,7 +1,7 @@
 import { test, expect, type Route } from "@playwright/test";
-import { AUDIT, CLUSTER, Reply, stubApi } from "./fixtures";
+import { AUDIT, CLUSTER, stubApi } from "./fixtures";
 
-/** The Admin's own surfaces: values outside Snapshots, raw files, enforcement, maintenance, adoption. */
+/** The Admin's own surfaces: values outside Snapshots, raw files, enforcement, maintenance. */
 
 const ADMIN_STUBS = {
   "GET /api/v1/admin/permissions/enforcement": { enforced: false },
@@ -97,42 +97,6 @@ test("Maintenance Mode shows its history from the audit and engages with a reaso
   await page.getByLabel(/^Reason/).fill("Trino upgrade");
   await page.getByRole("button", { name: "Engage Maintenance Mode" }).click();
   await expect.poll(() => sent).toEqual({ engaged: true, reason: "Trino upgrade" });
-});
-
-test("adoption shows what it read, what is outstanding, and lets an incomplete catalog be supplied", async ({ page }) => {
-  let supplied: unknown = null;
-  await stubApi(page, {
-    "GET /api/v1/admin/adoption/discovery": {
-      read_at: "2026-11-17T16:10:00Z",
-      complete: false,
-      outstanding: [{ kind: "incomplete", section: "catalogs", path: "warehouse_hive", detail: "Trino is serving 'warehouse_hive' using the 'hive' connector." }],
-      changed_since_last_read: [],
-      sections: [
-        { section: "catalogs", readable: true, looked_at: ["/etc/trino/catalog/"], guessed_because: null, resources: { a: {}, b: {} }, amended: [], problems: [] },
-        { section: "permissions", readable: true, looked_at: ["rules.json"], guessed_because: null, resources: { g: {} }, amended: [], problems: [] },
-      ],
-      admin_values: { preserved_access_control: { tables: [1, 2] } },
-    },
-    "PUT /api/v1/admin/adoption/discovery/catalogs/*": (route: Route) => {
-      supplied = route.request().postDataJSON();
-      return {};
-    },
-  });
-  await page.goto("/admin/adoption");
-  await expect(page.getByText("Not complete · 1 outstanding")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Adopt and apply" })).toBeDisabled();
-  await page.getByRole("button", { name: "Supply properties" }).click();
-  const d = page.getByRole("dialog");
-  await d.getByLabel("Connector").fill("hive");
-  await d.getByLabel(/^Properties/).fill("hive.metastore.uri=thrift://metastore:9083");
-  await d.getByRole("button", { name: "Save to discovery" }).click();
-  await expect.poll(() => supplied).toEqual({ name: "warehouse_hive", connector: "hive", properties: { "hive.metastore.uri": "thrift://metastore:9083" } });
-});
-
-test("with no discovery yet, adoption says nothing has been read", async ({ page }) => {
-  await stubApi(page, { "GET /api/v1/admin/adoption/discovery": new Reply(404, { code: "not_found", message: "No discovery", request_id: "r" }) });
-  await page.goto("/admin/adoption");
-  await expect(page.getByText(/Nothing has been read yet/)).toBeVisible();
 });
 
 test("an unknown path says so", async ({ page }) => {

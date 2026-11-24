@@ -244,8 +244,8 @@ async def test_replacing_the_patterns_leaves_the_other_admin_values_alone(
     Two decisions live in there and both are consequential on a serving Cluster. The default
     for enforcement is off, so preserving a mapping pattern mid-migration opened the Cluster
     to every identity without a grant. And the default for the preserved access-control
-    rules is none, so it also dropped the rules an adopted Cluster was already running --
-    which only Adoption writes, which is why it is seeded here rather than sent.
+    rules is none, so it also dropped the rules an onboarded Cluster was already running --
+    which only an Admin import writes, which is why it is seeded here rather than sent.
     """
     assert (
         await client.put("/api/v1/admin/permissions/enforcement", json={"enforced": True})
@@ -267,5 +267,5 @@ async def test_replacing_the_patterns_leaves_the_other_admin_values_alone(
         await mongo.close()
     assert kept.enforce_permissions is True, "the request said nothing about enforcement"
     assert kept.preserved_access_control == rules, (
-        "nor about the rules the Cluster was running before Apchi adopted it"
+        "nor about the rules the Cluster was running before Apchi managed it"
     )

@@ -4,7 +4,6 @@ from typing import Annotated, Final
 
 from fastapi import Depends, Request
 
-from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.api.errors import Conflict, Forbidden, MaintenanceModeEngaged, Unauthenticated
 from app.audit.actor import acting_as
@@ -19,7 +18,6 @@ from app.config import AuthMode, Settings
 from app.pipeline.admin_values import AdminStore
 from app.pipeline.applies import ApplyStore
 from app.pipeline.candidate import CandidateStore
-from app.pipeline.discoveries import DiscoveryStore
 from app.pipeline.maintenance import MaintenanceStore
 from app.pipeline.snapshots import SnapshotStore
 from app.pipeline.validations import ValidationStore
@@ -331,22 +329,6 @@ def session_store(request: Request) -> SessionStore:
 
 
 SessionStoreDep = Annotated[SessionStore, Depends(session_store)]
-
-
-def discovery_store(request: Request) -> DiscoveryStore:
-    store: DiscoveryStore = request.app.state.discovery_store
-    return store
-
-
-DiscoveryStoreDep = Annotated[DiscoveryStore, Depends(discovery_store)]
-
-
-def kubernetes(request: Request) -> KubernetesAdapter:
-    adapter: KubernetesAdapter = request.app.state.kubernetes
-    return adapter
-
-
-KubernetesDep = Annotated[KubernetesAdapter, Depends(kubernetes)]
 
 
 def login_store(request: Request) -> LoginStore:

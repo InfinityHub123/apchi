@@ -19,12 +19,11 @@ and Apchi forms no opinion about it. The two are deliberately not the same mecha
 value is validated, merged into a generator and reasoned about, where a raw file is delivered
 as written and Trino decides.
 
-The preserved values are the shape Adoption needs (§15). A Cluster being onboarded has
-configuration Apchi's models cannot express -- access-control rules of kinds it does not
-model, certificate mapping patterns beyond the single one it holds -- and preserving them as
-Admin values is what makes adoption non-destructive by construction: nobody loses access on
-the day their Cluster is onboarded, and an Admin removes them deliberately when the migration
-is finished.
+The preserved values are for a Cluster brought under Apchi with configuration its models
+cannot express -- access-control rules of kinds it does not model, certificate mapping
+patterns beyond the single one it holds. Preserving them as Admin values means nobody loses
+access on the day the Cluster is onboarded, and an Admin removes them deliberately when the
+migration is finished.
 """
 
 from typing import Any

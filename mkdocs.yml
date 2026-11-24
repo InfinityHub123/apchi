@@ -77,7 +77,6 @@ nav:
   - Changelog: changelog.md
   - Deploying:
       - A development cluster: deploying/trino-dev.md
-      - Adopting a running cluster: deploying/trino-adopted.md
       - OpenShift and restricted clusters: deploying/openshift.md
   - Reference:
       - HTTP API: reference/api.md
@@ -94,3 +93,4 @@ nav:
           - adr/0006-validation-pod-is-a-probe-apchi-connects-to.md
           - adr/0007-the-deployment-owns-the-pinned-pointers.md
           - adr/0008-one-deployment-shape.md
+          - adr/0009-adoption-leaves-apchi.md

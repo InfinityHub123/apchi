@@ -6,7 +6,7 @@ constructed, so a change is adopted only by a new pod. See section 13.3.
 
 import logging
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 
 from app.adapters.trino import Trino
 from app.api.errors import NotFound, UnprocessablePayload
@@ -16,13 +16,9 @@ from app.sections.admin import AdminValues
 from app.sections.base import (
     Cluster,
     CoordinatorDirectory,
-    DiscoveredPaths,
-    Parsed,
-    ParseProblem,
     Resources,
     SectionPlan,
     SmokeQuery,
-    Unaccounted,
     ValidationFailure,
     unreadable,
 )
@@ -30,8 +26,6 @@ from app.sections.certificate_mapping import RESOURCE, SECTION
 from app.sections.certificate_mapping.generator import (
     MOUNT_DIR,
     MOUNT_PATH,
-    Unreadable,
-    parse_rules,
     render_rules,
 )
 from app.sections.certificate_mapping.model import CertificateMapping, CertificateMappingWrite
@@ -164,49 +158,6 @@ class CertificateMappingSection:
                 desired, settings.trino_user, admin.preserved_certificate_mappings
             )
         }
-
-    def discover_paths(self, settings: Settings, properties: Mapping[str, str]) -> DiscoveredPaths:
-        """Whichever authenticator is configured names the file, and they all parse it the
-        same way -- so the first `user-mapping.file` property found is the file in force.
-
-        There are several spellings because Trino has one per authentication type and
-        rejects the certificate variant unless certificate authentication is on (§7.6). A
-        Cluster being adopted may use any of them, so the property is matched by shape
-        rather than looked up by name.
-        """
-        for name, value in sorted(properties.items()):
-            if name.startswith("http-server.authentication.") and name.endswith(
-                ".user-mapping.file"
-            ):
-                return DiscoveredPaths(files={MOUNT_PATH: value})
-        return DiscoveredPaths(
-            files={MOUNT_PATH: MOUNT_PATH},
-            why=(
-                "no authenticator names a user-mapping file, so this is where Apchi would "
-                "put one rather than where the Cluster says it is"
-            ),
-        )
-
-    def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
-        """An absent file means nothing configured, not a Cluster to refuse.
-
-        The file is always present on a Cluster Apchi has applied to, but a Cluster being
-        adopted may have an authenticator pointed at a path with nothing there yet.
-        """
-        content = files.get(MOUNT_PATH)
-        if content is None:
-            return Parsed()
-        try:
-            resources, unaccounted = parse_rules(MOUNT_PATH, content, settings.trino_user)
-        except Unreadable as exc:
-            raise ParseProblem(exc.path, exc.reason) from exc
-        return Parsed(
-            resources=resources,
-            unaccounted=tuple(
-                Unaccounted(path=MOUNT_PATH, what=what, content=content)
-                for what, content in unaccounted
-            ),
-        )
 
     def read_back(self, resources: Resources) -> list[ValidationFailure]:
         """One pattern at most, so anything under another name is not a resource at all.

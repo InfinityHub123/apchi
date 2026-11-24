@@ -12,7 +12,6 @@ from app.adapters.mongo import Mongo
 from app.adapters.trino import Trino
 from app.api import errors
 from app.api.admin import router as admin_router
-from app.api.adoption import router as adoption_router
 from app.api.applies import router as applies_router
 from app.api.audit import router as audit_router
 from app.api.auth import router as auth_router
@@ -42,9 +41,7 @@ from app.logging import configure_logging
 from app.pipeline.admin_values import AdminStore
 from app.pipeline.applies import ApplyEngine, ApplyRunner, ApplyStore, recover_interrupted
 from app.pipeline.candidate import CandidateStore
-from app.pipeline.discoveries import DiscoveryStore
 from app.pipeline.engine import AdminEngine, Engine
-from app.pipeline.high_water import HighWaterMark
 from app.pipeline.maintenance import MaintenanceStore
 from app.pipeline.snapshots import SnapshotStore
 from app.pipeline.validation import VALIDATION_SELECTOR
@@ -77,7 +74,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.validation_store = ValidationStore(app.state.mongo.database)
     app.state.maintenance_store = MaintenanceStore(app.state.mongo.database, app.state.audit_store)
     app.state.admin_store = AdminStore(app.state.mongo.database, app.state.audit_store)
-    app.state.discovery_store = DiscoveryStore(app.state.mongo.database)
     app.state.user_store = UserStore(app.state.mongo.database)
     app.state.session_store = SessionStore(app.state.mongo.database)
     app.state.token_store = TokenStore(app.state.mongo.database, app.state.audit_store)
@@ -123,7 +119,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.apply_store, build_admin_engine, app.state.audit_store, category="admin"
     )
     app.state.validation_runner = ValidationRunner(app.state.validation_store, build_engine)
-    app.state.high_water = HighWaterMark(app.state.kubernetes, settings)
     logger.info("apchi starting")
 
     # An Apply left in flight by a restart would freeze the Candidate forever, and may
@@ -259,16 +254,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             dependencies=[Authenticated],
             responses=unauthenticated,
         )
-    # Admin surfaces, both of them under /admin: these inject low-level configuration and
-    # freeze mutation (§3), and PUT /admin/permissions/enforcement can open a Cluster to
-    # every identity without a grant.
-    for router in (admin_router, adoption_router):
-        app.include_router(
-            router,
-            prefix="/api/v1",
-            dependencies=[AdminOnly],
-            responses=unauthenticated | forbidden,
-        )
+    # The Admin surface, under /admin: it injects low-level configuration and freezes
+    # mutation (§3), and PUT /admin/permissions/enforcement can open a Cluster to every
+    # identity without a grant.
+    app.include_router(
+        admin_router,
+        prefix="/api/v1",
+        dependencies=[AdminOnly],
+        responses=unauthenticated | forbidden,
+    )
 
     # Last, because its catch-all GET must not shadow a real route. See app/api/web.py for
     # why the UI has to be on this origin rather than its own.
