@@ -195,15 +195,14 @@ trino:
 #
 # - Apchi's own pod renders no fsGroup and mounts its credentials 0644, ignoring
 #   pod.fsGroup and pod.credentialFileMode.
-# - The Validation pod Apchi creates carries no fsGroup either, plus the securityContext
-#   restricted-v2 demands. Give it limits under validation.resources if your cluster
-#   requires them.
+# - The Validation pod Apchi creates carries no fsGroup either, and gets a writable
+#   /data/trino. Give it limits under validation.resources if your cluster requires them.
 # - Apchi accepts 0644 credential mounts on the Trino pods, where it otherwise refuses
 #   anything looser than 0640 with an fsGroup. It still refuses a writable one.
 #
-# Every pod this chart renders is restricted-v2's shape either way -- runAsNonRoot, the
-# RuntimeDefault seccomp profile, no privilege escalation, every capability dropped -- and
-# the image runs as any uid. This setting only decides what happens to file modes.
+# The rest of restricted-v2's security context -- runAsNonRoot, the seccomp profile, the
+# dropped capabilities, the uid -- the platform adds to every pod itself, and the image runs
+# as any uid. This setting only decides fsGroup and file modes.
 restrictedPodSecurity: false
 
 # What Apchi's own pod runs as, and how it mounts its own credentials. Shared by both the

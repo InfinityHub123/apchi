@@ -150,19 +150,13 @@ def validation_manifest(
         container["resources"] = resources
     volumes: list[dict[str, Any]] = [{"name": "no-catalogs", "emptyDir": {}}]
 
+    security: dict[str, Any] = {}
     if restricted:
-        # The shape restricted-v2 admits, and nothing it would refuse: no fsGroup and no
-        # uid, both of which the platform assigns. `runAsNonRoot` is safe to ask for only
-        # here -- the image's USER is the name `trino`, which the kubelet cannot prove is
-        # not root, so on a cluster that assigns no uid it would refuse the container.
-        security: dict[str, Any] = {
-            "runAsNonRoot": True,
-            "seccompProfile": {"type": "RuntimeDefault"},
-        }
-        container["securityContext"] = {
-            "allowPrivilegeEscalation": False,
-            "capabilities": {"drop": ["ALL"]},
-        }
+        # No fsGroup, which restricted-v2 refuses outside the namespace's range and assigns
+        # itself. The rest of the securityContext it demands -- the uid, runAsNonRoot,
+        # seccomp, dropped capabilities -- it adds to the pod on admission, so nothing here
+        # has to know the platform's choices.
+        #
         # The image's data directory belongs to uid 1000, and under an arbitrary uid Trino
         # dies before it logs anything useful: `pid file is not writeable ... mkdir
         # /data/trino/var: permission denied`. Measured with trinodb/trino:483.
@@ -177,7 +171,7 @@ def validation_manifest(
         # template this one is Apchi's, so both halves can simply be set. Without the group
         # the 0640 below is root-only and the probe cannot read its own configuration.
         # §13.2.
-        security = {"fsGroup": TRINO_GROUP}
+        security["fsGroup"] = TRINO_GROUP
         file_mode = CREDENTIAL_FILE_MODE
 
     if files:
@@ -192,7 +186,7 @@ def validation_manifest(
             # A crash is a validation failure to report, never something to retry.
             "restartPolicy": "Never",
             "activeDeadlineSeconds": deadline_seconds,
-            "securityContext": security,
+            **({"securityContext": security} if security else {}),
             "containers": [container],
             "volumes": volumes,
         },

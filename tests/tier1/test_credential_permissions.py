@@ -391,8 +391,7 @@ async def test_nothing_on_a_worker_is_exempt_as_apchis_own(
 #
 # There the platform refuses a pinned fsGroup and runs every pod as an arbitrary uid, so a
 # mounted file reaches the process only by being world-readable. These are the shapes Apchi
-# builds and accepts under `restricted_pod_security`; `deploy/restricted-v2/policy.yaml` is
-# the emulation tier 2 runs them against.
+# builds and accepts under `restricted_pod_security`.
 
 _RESOURCES = {"requests": {"cpu": "500m", "memory": "2Gi"}, "limits": {"cpu": 2, "memory": "2Gi"}}
 
@@ -403,28 +402,13 @@ def _restricted_probe(files: dict[str, str] | None = None) -> dict[str, Any]:
     )
 
 
-def test_a_restricted_probe_pins_neither_a_group_nor_a_uid() -> None:
-    """restricted-v2 refuses a pod that pins fsGroup, and assigns the uid itself."""
+def test_a_restricted_probe_leaves_the_security_context_to_the_platform() -> None:
+    """restricted-v2 refuses an fsGroup outside the namespace's range, and adds the uid,
+    runAsNonRoot, seccomp and the dropped capabilities to every pod itself."""
     spec = _restricted_probe({"/etc/trino/certs/finance.key": "key"})["spec"]
-    container = spec["containers"][0]
 
-    assert "fsGroup" not in spec["securityContext"]
-    assert "runAsUser" not in spec["securityContext"]
-    assert "runAsUser" not in container["securityContext"]
-
-
-def test_a_restricted_probe_carries_the_security_context_restricted_v2_demands() -> None:
-    spec = _restricted_probe()["spec"]
-    container = spec["containers"][0]
-
-    assert spec["securityContext"] == {
-        "runAsNonRoot": True,
-        "seccompProfile": {"type": "RuntimeDefault"},
-    }
-    assert container["securityContext"] == {
-        "allowPrivilegeEscalation": False,
-        "capabilities": {"drop": ["ALL"]},
-    }
+    assert "securityContext" not in spec
+    assert "securityContext" not in spec["containers"][0]
 
 
 def test_a_restricted_probe_can_write_trinos_data_directory() -> None:

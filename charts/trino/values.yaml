@@ -25,6 +25,10 @@ coordinator:
   # Trino cannot drain a coordinator, so there is exactly one and a Rollout destroys every
   # running query. That is a property of Trino, not a limit of this chart (ADR-0003).
   resources: {}
+  # The initContainer that seeds the catalog store, which copies a few files. Its own value
+  # because a fleet requiring limits on every container refuses the pod without them, and
+  # it needs a fraction of what Trino does. Empty sets none.
+  seedResources: {}
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -57,10 +61,9 @@ trino:
   environment: production
   httpPort: 8080
 
-  # Where Trino keeps its dynamic catalog store. It must be writable by the non-root
-  # `trino` user and nothing read-only may be mounted at or above it, or every CREATE
-  # CATALOG fails. /data/trino is trino-owned in the image, which is why the default
-  # lives there and not under /var.
+  # Where Trino keeps its dynamic catalog store. It must be writable by whatever uid Trino
+  # runs as and nothing read-only may be mounted at or above it, or every CREATE CATALOG
+  # fails. Its own emptyDir, inside the data directory /data/trino, which is another.
   catalogStoreDir: /data/trino/catalogs
 
   # How often Trino re-reads the access-control rules. Not optional: without it the rules
@@ -85,6 +88,12 @@ trino:
   # roMask = 0440 into every file's mode on a readOnly volume, so 0600 arrives as 0640.
   # That is also exactly what libpq accepts for a root-owned key file, and what it refuses
   # a world-readable one for. See §13.2.
+  #
+  # On OpenShift's restricted-v2 it has to be a group the namespace allows -- the first of
+  # its `openshift.io/sa.scc.supplemental-groups` annotation -- or the pod is refused; 1000
+  # is far below any range OpenShift allocates. null renders none and lets the platform
+  # choose, which Apchi accepts only with `restrictedPodSecurity`, because a 0640 credential
+  # is then unreadable and has to be 0644.
   fsGroup: 1000
 
   jvm:

@@ -55,7 +55,10 @@ spec:
             # event listeners and user mapping are all coordinator-only. That asymmetry is
             # why a catalog or permission change restarts nothing (§7.4).
             - {name: client-certificates, mountPath: /etc/trino/certs, readOnly: true}
+            # node.data-dir, writable by whatever uid the pod is given. See the coordinator.
+            - {name: data, mountPath: /data/trino}
       volumes:
         - {name: config, configMap: {name: trino-config}}
         # Private keys, so not world-readable. 0640 with the fsGroup above. §13.2.
         - {name: client-certificates, secret: {secretName: trino-client-certificates, defaultMode: 0640}}
+        - {name: data, emptyDir: {}}
