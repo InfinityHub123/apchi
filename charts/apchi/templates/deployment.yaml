@@ -194,10 +194,6 @@ spec:
               value: {{ .Values.volumes.eventListener | quote }}
             - name: APCHI_RESOURCE_GROUPS_VOLUME_NAME
               value: {{ .Values.volumes.resourceGroups | quote }}
-            - name: APCHI_RESOURCE_GROUPS_PROPERTIES_FROM_DEPLOYMENT
-              value: {{ .Values.deployment.providesResourceGroupsProperties | quote }}
-            - name: APCHI_EVENT_LISTENER_CONFIG_FILES_FROM_DEPLOYMENT
-              value: {{ .Values.deployment.setsEventListenerConfigFiles | quote }}
             - name: APCHI_CATALOG_CONNECTIVITY_BLOCKS_APPLY
               value: {{ .Values.validation.catalogConnectivityBlocksApply | quote }}
             - name: APCHI_ROLLOUT_TIMEOUT_SECONDS

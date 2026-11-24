@@ -72,7 +72,7 @@ ProblemKind = Literal[
     #: to happen first.
     "cutover",
     #: A §16 precondition that fails on Apchi's own configuration rather than the
-    #: deployment's -- the ninth, which compares the two. Unlike a cutover change there may
+    #: deployment's -- the eighth, which compares the two. Unlike a cutover change there may
     #: be nothing in the Trino manifest to fix, so it is **not** excluded from completeness:
     #: when it fires Apchi cannot reach Trino at all, and a discovery made without Trino is
     #: not the whole truth by definition.

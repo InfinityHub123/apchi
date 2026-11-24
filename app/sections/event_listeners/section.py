@@ -17,7 +17,6 @@ from app.sections import SectionName
 from app.sections.admin import AdminValues
 from app.sections.base import (
     Cluster,
-    CoordinatorDirectory,
     CoordinatorFile,
     Delivery,
     DiscoveredPaths,
@@ -33,9 +32,7 @@ from app.sections.base import (
 from app.sections.event_listeners import SECTION
 from app.sections.event_listeners.generator import (
     FILE_KEY,
-    MOUNT_DIR,
     MOUNT_PATH,
-    PATH_IN_DIR,
     Unreadable,
     parse_properties,
     render_secret,
@@ -138,35 +135,6 @@ def delete_event_listener(stored: Resources, name: str) -> None:
     del stored[name]
 
 
-#: Why emptying this Section is refused when the deployment sets the pointer, in one place so
-#: the request-time refusal and the Apply-time one cannot drift apart.
-#:
-#: There is no second option here, unlike Resource Groups. Trino ships `http`, `mysql` and
-#: `kafka` listeners and every one of them needs real configuration -- a sink to write to --
-#: so there is no listener that does nothing to render in place of none at all.
-CANNOT_EMPTY = (
-    "This Cluster's deployment sets event-listener.config-files, which names a file Trino "
-    "refuses to start without. Removing the last Event Listener would leave a coordinator "
-    "that cannot come back, and Trino has no listener that does nothing to put in its place. "
-    "Remove event-listener.config-files from the deployment first, or keep at least one "
-    "listener."
-)
-
-
-def refuse_if_emptying(stored: Resources, settings: Settings) -> None:
-    """Refuse a change that would leave this Section with nothing, in that mode only.
-
-    At request time rather than only at Apply, because the Candidate is shared: an empty
-    Section that only Validation catches blocks everyone's Apply until somebody works out
-    whose edit did it (ADR-0002). `check` enforces the same rule for the paths that do not
-    come through here -- a Section Revert, and a whole-document import.
-    """
-    if not settings.event_listener_config_files_from_deployment:
-        return
-    if not stored:
-        raise Conflict(CANNOT_EMPTY)
-
-
 @dataclass
 class ListenerPlan:
     """What applying would change. Not yet used to change anything."""
@@ -202,37 +170,12 @@ class EventListenersSection:
     requires_rollout = True
 
     def discover_paths(self, settings: Settings, properties: Mapping[str, str]) -> DiscoveredPaths:
-        """Where Trino reads its listeners from, which depends on what points at it.
-
-        By default nothing does: Trino reads `etc/event-listener.properties` if it is there
-        and ignores its absence, so there is no property naming it and nowhere else it could
-        be. An Admin who sets `event-listener.config-files` anyway has their listeners
+        """Where Trino reads its listeners from: `etc/event-listener.properties`, if it is
+        there. Nothing points at it, so there is no property naming it and nowhere else it
+        could be. An Admin who sets `event-listener.config-files` anyway has their listeners
         somewhere this cannot see, and the discovery says so by finding nothing here.
-
-        When *this Cluster* is the one whose deployment sets that property (#125), the
-        property is read and followed -- it is the Admin's own statement of where the file
-        is, and ignoring it would make discovery look in a directory nothing reads.
         """
-        if settings.event_listener_config_files_from_deployment:
-            named = properties.get("event-listener.config-files")
-            if named:
-                return DiscoveredPaths(files={PATH_IN_DIR: named})
-            return DiscoveredPaths(
-                files={PATH_IN_DIR: PATH_IN_DIR},
-                why=(
-                    "this Cluster is configured for the deployment to set "
-                    "event-listener.config-files, and no such property was found -- so this "
-                    "is where Apchi would put the file rather than where Trino reads it"
-                ),
-            )
         return DiscoveredPaths(files={MOUNT_PATH: MOUNT_PATH})
-
-    @staticmethod
-    def _path(settings: Settings) -> str:
-        """Where Apchi writes the listener file, which depends on who owns the pointer."""
-        if settings.event_listener_config_files_from_deployment:
-            return PATH_IN_DIR
-        return MOUNT_PATH
 
     def parse_files(self, files: Mapping[str, str], settings: Settings) -> Parsed:
         """An absent file means no listener, which is this Section's whole way of saying so.
@@ -241,7 +184,7 @@ class EventListenersSection:
         `parse_properties`. An Operator adopting a Cluster can rename it afterwards; what
         matters is that the configuration is not lost.
         """
-        where = self._path(settings)
+        where = MOUNT_PATH
         content = files.get(where)
         if content is None:
             return Parsed()
@@ -271,30 +214,12 @@ class EventListenersSection:
         )
 
     def coordinator_files(self, settings: Settings) -> tuple[Delivery, ...]:
-        """One file Apchi mounts, or one directory the Admin does (#125).
-
-        **Trino's own path** by default, and that is not an arbitrary preference.
-        `event-listener.config-files` would let the file live anywhere, but it makes Trino
-        refuse to start when the file it names is missing -- so using it would make this
-        Section impossible to empty, and a Section that cannot be empty is not optional.
-        Trino's convention path is read if present and ignored if absent, which is exactly
-        the behaviour an optional Section needs.
-
-        **The deployment sets `event-listener.config-files`** when it mounts the whole of
-        `/etc/trino` and so cannot accept a single file inside it. That buys portability at
-        the cost named above, which is why it is the Admin's decision and not Apchi's
-        default: emptying the Section is then refused rather than silently breaking the
-        Cluster on its next restart.
+        """One file Apchi mounts, at Trino's own path -- and that is not an arbitrary
+        preference. `event-listener.config-files` would let the file live anywhere, but it
+        makes Trino refuse to start when the file it names is missing, so using it would make
+        this Section impossible to empty. Trino's convention path is read if present and
+        ignored if absent, which is exactly the behaviour an optional Section needs.
         """
-        if settings.event_listener_config_files_from_deployment:
-            return (
-                CoordinatorDirectory(
-                    secret=settings.event_listener_secret_name,
-                    path=MOUNT_DIR,
-                    probe_config={"event-listener.config-files": PATH_IN_DIR},
-                    credentials=True,
-                ),
-            )
         return (
             CoordinatorFile(
                 secret=settings.event_listener_secret_name,
@@ -313,8 +238,7 @@ class EventListenersSection:
         content = render_secret(desired).get(FILE_KEY)
         if not content:
             return {}
-        where = PATH_IN_DIR if settings.event_listener_config_files_from_deployment else MOUNT_PATH
-        return {where: content}
+        return {MOUNT_PATH: content}
 
     async def apply(self, cluster: Cluster, desired: Resources, plan: SectionPlan) -> None:
         """Nothing beyond the file, which the pipeline has already delivered.
@@ -337,26 +261,8 @@ class EventListenersSection:
     async def check(
         self, cluster: Cluster, desired: Resources, plan: SectionPlan
     ) -> list[ValidationFailure]:
-        """The net under `refuse_if_emptying`, for the ways this Section empties that do not
-        go through a DELETE: a Section Revert to an empty Snapshot, and a whole-document
-        import (#125).
-
-        The **state**, not the transition, and that distinction was got wrong once. Scoping it
-        to the transition looks kinder -- an Apply that touches only catalogs would stop being
-        blocked by a Section nobody asked about -- but it is unsafe: `files.by_secret` writes
-        each Secret whole, so an Apply with this Section empty writes an empty Secret, the
-        mounted directory loses the file `event-listener.config-files` names, and the next
-        restart leaves a coordinator that cannot come back. Apchi would have deleted the
-        Admin's own seeded file on its way past.
-
-        There is also no legitimate state this blocks. Trino will not start at all unless that
-        file already exists (§16), so a *running* Cluster in this mode always has a listener --
-        and a Candidate that does not is a Cluster waiting to be adopted (§15), not a Cluster
-        with no listener. The way out is to configure one or to take the pointer out of the
-        deployment, and the message says both.
-        """
-        if cluster.settings.event_listener_config_files_from_deployment and not desired:
-            return [ValidationFailure(section=SECTION, reason=CANNOT_EMPTY)]
+        """Nothing to check before an Apply: an empty Section is a Cluster with no listener,
+        which Trino starts happily."""
         return []
 
     def needs_probe(self, desired: Resources) -> bool:

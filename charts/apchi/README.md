@@ -27,12 +27,9 @@ nothing else, so it starts fine against a Trino that does not exist yet.
 To try it with nothing set up, `./scripts/quickstart.sh` from the repository root brings up a
 Trino, this chart and a MongoDB on minikube or kind in one command.
 
-**If your coordinator mounts the whole of `/etc/trino` as one volume** — which the official
-`trinodb/charts` chart does, and most hand-written manifests too — set
-`deployment.providesResourceGroupsProperties` and `deployment.setsEventListenerConfigFiles`,
-and have the deployment provide those two pointers.
-[`docs/official-trino-chart.md`](../../docs/official-trino-chart.md) is the full recipe. Apchi
-refuses an Apply rather than half-applying if the two disagree.
+**The coordinator has to mount `/etc/trino` file by file**, as `charts/trino` does. One that
+mounts the whole directory as one volume — the official `trinodb/charts` chart, and most
+hand-written manifests — is not supported, and Apchi refuses to Apply against it.
 
 ## What you have to set
 

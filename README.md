@@ -73,11 +73,10 @@ coordinator mounts — the chart's `secrets.*` values are those names, and `depl
 is a Trino that mounts exactly them. And **mount shape**: most of what Apchi writes goes into
 a directory the Admin mounts, which works on any deployment, but Resource Groups and Event
 Listeners are single-file mounts Apchi makes itself, because Trino pins their pointer files to
-that directory and no property relocates them. A deployment that mounts
-the whole of `/etc/trino` as one volume cannot accept those, and the official `trino/trino`
-chart is one — so there the deployment provides those two pointers instead (§16,
-[`docs/official-trino-chart.md`](docs/official-trino-chart.md)). Apchi checks all of this
-before an Apply and names what is wrong rather than half-applying.
+that directory and no property relocates them. So the coordinator has to mount `/etc/trino`
+file by file, as `charts/trino` does; a deployment that mounts it whole, as the official
+`trino/trino` chart does, is not supported (§16). Apchi checks all of this before an Apply and
+names what is wrong rather than half-applying.
 
 ### What using it looks like
 
@@ -186,11 +185,6 @@ response from a real run. About ten minutes.
 
 [`docs/concepts.md`](docs/concepts.md) explains the loop, the vocabulary and who owns what.
 
-[`docs/official-trino-chart.md`](docs/official-trino-chart.md) is the values to run Apchi
-against the official `trinodb/charts` Trino chart, which mounts `/etc/trino` as one volume
-rather than file by file. Worth reading before adopting an existing cluster, because that
-shape changes two things Apchi can do.
-
 With Apchi running, `/docs` serves the interactive API reference. The same contract is
 published at
 [the documentation site](https://infinityhub123.github.io/apchi/reference/api/), and
@@ -215,7 +209,6 @@ deploy/
 docs/
   concepts.md             the loop, the vocabulary, and who owns what
   getting-started.md      one catalog through the whole loop, from a real run
-  official-trino-chart.md the values for a deployment that mounts /etc/trino whole
   adr/                    the decisions, and what was tried before them
 tests/
   tier1/      the HTTP API against real MongoDB and real Trino, Kubernetes faked
@@ -262,10 +255,7 @@ Built, and covered end to end:
 - **Adoption.** A cluster configured before Apchi, or by hand, can be brought under
   management without losing what it was running. See **Adoption** in `CONTEXT.md`.
 - **Admin raw files.** An Admin writes a path and its content and Apchi delivers it, with no
-  schema over it. One limit, and it is structural: a raw file's path is the Admin's to choose,
-  which makes it a single-file mount — so on a deployment that mounts the whole of
-  `/etc/trino` as one volume, every raw path is refused. See
-  [`docs/official-trino-chart.md`](docs/official-trino-chart.md).
+  schema over it.
 
 Not built:
 

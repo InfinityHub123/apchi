@@ -152,11 +152,8 @@ async def _refuse_if_unmountable(
                     f"{mount.mount_path}, which covers {parent}. Apchi delivers a raw file by "
                     f"mounting that one file, and a single-file mount inside a directory "
                     f"volume has nothing to bind onto -- the container would fail to start "
-                    f'with "not a directory". Set what you need through the deployment '
-                    f"instead: on the official trino/trino chart that is "
-                    f"`additionalConfigProperties` for a property, or a `secretMounts` entry "
-                    f"for a whole directory. See docs/official-trino-chart.md. Raw files work "
-                    f"on a deployment that mounts {mount.mount_path} file by file.",
+                    f'with "not a directory". Apchi supports only a coordinator that mounts '
+                    f"{mount.mount_path} file by file, as its own chart does (ADR-0008).",
                     details=[
                         {
                             "property": "path",
