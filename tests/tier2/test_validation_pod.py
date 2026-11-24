@@ -34,6 +34,23 @@ pytestmark = pytest.mark.tier2
 TRINO_IMAGE = "trinodb/trino:483"
 
 
+def _manifest(
+    name: str, image: str, deadline: int, files: dict[str, str] | None = None
+) -> dict[str, object]:
+    """The probe as this cluster's Apchi would build it. CI runs tier 2 under an emulation
+    of restricted-v2, which refuses the fsGroup shape outright, so the shape follows the
+    same settings Apchi itself reads."""
+    settings = Settings()
+    return validation_manifest(
+        name,
+        image,
+        deadline,
+        files,
+        restricted=settings.restricted_pod_security,
+        resources=settings.validation_resources,
+    )
+
+
 async def _await_host(kubernetes: RealKubernetes, name: str, timeout: float = 300.0) -> str:
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
@@ -68,7 +85,7 @@ async def test_the_manifest_produces_a_coordinator_that_serves_and_accepts_ddl(
     wrong, every Validation fails for a reason that has nothing to do with the
     Candidate."""
     name = pod_name(f"probe-{uuid.uuid4().hex[:8]}")
-    await real_kubernetes.create_pod(validation_manifest(name, TRINO_IMAGE, 600))
+    await real_kubernetes.create_pod(_manifest(name, TRINO_IMAGE, 600))
     forward = PortForward(f"pod/{name}", 8080)
     try:
         await _await_host(real_kubernetes, name)
@@ -91,9 +108,7 @@ async def test_a_pod_that_cannot_start_is_reported_rather_than_waited_out(
     """A real kubelet's ImagePullBackOff, not a fake's. Validation fails on it
     immediately instead of burning its whole timeout."""
     name = pod_name(f"unpullable-{uuid.uuid4().hex[:8]}")
-    await real_kubernetes.create_pod(
-        validation_manifest(name, "trinodb/trino:no-such-tag-exists", 300)
-    )
+    await real_kubernetes.create_pod(_manifest(name, "trinodb/trino:no-such-tag-exists", 300))
     try:
         deadline = asyncio.get_running_loop().time() + 180
         problem = None
@@ -114,7 +129,7 @@ async def test_orphaned_validation_pods_are_swept_by_their_label(
 ) -> None:
     """What Apchi does at startup after a crash mid-validation."""
     name = pod_name(f"orphan-{uuid.uuid4().hex[:8]}")
-    await real_kubernetes.create_pod(validation_manifest(name, TRINO_IMAGE, 300))
+    await real_kubernetes.create_pod(_manifest(name, TRINO_IMAGE, 300))
 
     swept = await real_kubernetes.delete_pods(VALIDATION_SELECTOR)
 
@@ -222,7 +237,7 @@ async def test_a_credential_file_in_the_probe_is_not_world_readable(
     path = "/etc/trino/certs/apchi-permcheck.key"
     files = {path: "not-a-real-key\n"}
     await real_kubernetes.create_secret(name, probe_secret(files), LABELS)
-    await real_kubernetes.create_pod(validation_manifest(name, TRINO_IMAGE, 300, files))
+    await real_kubernetes.create_pod(_manifest(name, TRINO_IMAGE, 300, files))
     try:
         deadline = asyncio.get_running_loop().time() + 300
         while asyncio.get_running_loop().time() < deadline:
@@ -241,7 +256,10 @@ async def test_a_credential_file_in_the_probe_is_not_world_readable(
         await real_kubernetes.delete_secret(name)
 
     mode, ownership = described[0], described[1]
-    assert mode == f"{CREDENTIAL_FILE_MODE:o}", f"{path} is {mode}, not {CREDENTIAL_FILE_MODE:o}"
+    # World-readable where the platform forbids an fsGroup: the arbitrary uid is in no group
+    # the file could be given, so it is the only mode that reads at all.
+    expected = 0o644 if Settings().restricted_pod_security else CREDENTIAL_FILE_MODE
+    assert mode == f"{expected:o}", f"{path} is {mode}, not {expected:o}"
     # Root-owned and group-trino is the shape the mode above depends on: libpq allows
     # group-read only for a file owned by root, and Trino reads it through the group.
     assert ownership.startswith("root:"), ownership

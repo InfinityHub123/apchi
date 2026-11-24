@@ -22,14 +22,19 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "apchi.serviceAccountName" . }}
-      {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret }}
-      # A Secret volume's files are root-owned whatever their mode, so a key restricted to
-      # 0640 is unreadable to uid 10001 without this. One securityContext however many
-      # volumes hang off it, and only rendered when something is mounted: an fsGroup on a
-      # pod with no volumes changes nothing and would still cost every install a restart.
+      # restricted-v2's shape, on every cluster: it costs nothing where it is not enforced, and
+      # the image's USER is numeric so the kubelet can verify runAsNonRoot without a uid.
       securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+        {{- if and (or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret) (not .Values.restrictedPodSecurity) }}
+        # A Secret volume's files are root-owned whatever their mode, so a key restricted to
+        # 0640 is unreadable to uid 10001 without this. Only rendered when something is
+        # mounted: an fsGroup on a pod with no volumes changes nothing and would still cost
+        # every install a restart.
         fsGroup: {{ .Values.pod.fsGroup }}
-      {{- end }}
+        {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -37,6 +42,10 @@ spec:
         - name: apchi
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           ports:
             - containerPort: 8000
               name: http
@@ -182,6 +191,14 @@ spec:
               value: {{ .Values.timeouts.rolloutSeconds | int64 | quote }}
             - name: APCHI_VALIDATION_TIMEOUT_SECONDS
               value: {{ .Values.timeouts.validationSeconds | int64 | quote }}
+            {{- with .Values.validation.resources }}
+            - name: APCHI_VALIDATION_RESOURCES
+              value: {{ toJson . | quote }}
+            {{- end }}
+            {{- if .Values.restrictedPodSecurity }}
+            - name: APCHI_RESTRICTED_POD_SECURITY
+              value: "true"
+            {{- end }}
             - name: APCHI_CERTIFICATE_EXPIRING_WITHIN_DAYS
               value: {{ .Values.certificates.expiringWithinDays | int64 | quote }}
             - name: APCHI_CLIENT_CERTIFICATE_MAX_BYTES
@@ -258,14 +275,16 @@ spec:
           secret:
             secretName: {{ .Values.trino.tls.existingSecret | quote }}
             # A credential, and 0640 is the floor: the kubelet ORs 0440 into the mode of
-            # every file in a readOnly volume, so 0600 is unreachable.
-            defaultMode: {{ .Values.pod.credentialFileMode }}
+            # every file in a readOnly volume, so 0600 is unreachable. Under restricted pod
+            # security it is 0644, the only mode an arbitrary uid can read, in a pod with one
+            # container that reads each key once at startup.
+            defaultMode: {{ include "apchi.credentialFileMode" . }}
         {{- end }}
         {{- if .Values.mongodb.tls.existingSecret }}
         - name: mongo-tls
           secret:
             secretName: {{ .Values.mongodb.tls.existingSecret | quote }}
-            defaultMode: {{ .Values.pod.credentialFileMode }}
+            defaultMode: {{ include "apchi.credentialFileMode" . }}
         {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}

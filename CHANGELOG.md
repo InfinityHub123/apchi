@@ -20,7 +20,14 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
-Nothing yet.
+- **Apchi runs on OpenShift's `restricted-v2`.** The image runs as any uid: its tree belongs
+  to group 0 and its `USER` is the number `10001`. Every pod the chart renders now sets
+  `runAsNonRoot`, the `RuntimeDefault` seccomp profile, no privilege escalation and every
+  capability dropped. A cluster that forbids pinning `fsGroup` sets `restrictedPodSecurity`
+  (`APCHI_RESTRICTED_POD_SECURITY`). The Validation pod then carries no `fsGroup` and the
+  same security context, and Apchi accepts `0644` credential mounts on the Trino pods
+  instead of refusing them. `validation.resources` (`APCHI_VALIDATION_RESOURCES`) gives the
+  Validation pod requests and limits.
 
 ## 0.1.1 — 2026-11-02
 

@@ -1081,6 +1081,17 @@ root-owned key file, whose rule is `S_IWGRP | S_IXGRP | S_IRWXO` — group-write
 group-execute and any world bit, and nothing else. Group-read is allowed, and group-read is
 all Trino needs.
 
+**Where the platform forbids an `fsGroup`, the only readable mode is `0644`.** OpenShift's
+`restricted-v2` SCC refuses a pod that pins one and runs it as an arbitrary uid in no group a
+file could be given, so the table's last row cannot be built there and `0640` is unreadable.
+`restricted_pod_security` is that cluster's setting: Apchi accepts `0644` credential mounts
+on the Trino pods rather than refusing every deployment the cluster can run, builds its
+Validation pod without an `fsGroup`, and still refuses a credential that can be written or
+executed. The cost is the table's first column: every process in the pod can read the key,
+and a libpq-based client would refuse it. Trino's own JDBC connectors do not check, which is
+what makes the setting usable at all. Apchi's own pod has one container and reads each key
+once, at startup (§18), so `0644` there exposes nothing to anyone else.
+
 **Where Apchi mounts a file itself it restricts it only if the pod declares an `fsGroup`.**
 Apchi does not own the Admin's pod template, and `event-listener.properties` — which can
 carry a password in a JDBC URL — made unreadable is a coordinator that will not start.

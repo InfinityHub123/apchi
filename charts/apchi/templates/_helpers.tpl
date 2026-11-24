@@ -70,3 +70,10 @@ rather than starting an Apchi that cannot keep a Snapshot.
 {{- fail "set mongodb.uri to your MongoDB, or mongodb.deploy=true to run one alongside Apchi for trying it out" -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+The mode of Apchi's own credential mounts. 420 is 0644: Helm prints integers in decimal.
+*/}}
+{{- define "apchi.credentialFileMode" -}}
+{{- if .Values.restrictedPodSecurity }}420{{ else }}{{ .Values.pod.credentialFileMode }}{{ end }}
+{{- end }}

@@ -18,10 +18,18 @@ FROM python:3.13-slim-bookworm
 
 # Apchi reaches Kubernetes and Trino over HTTP and holds no state of its own, so
 # nothing here needs root.
-RUN useradd --create-home --uid 10001 apchi
-COPY --from=build --chown=apchi:apchi /src /src
+#
+# Runs as any uid, because OpenShift's restricted-v2 assigns one and ignores USER. Its
+# documented contract is that the process is in group 0, so the tree belongs to group 0 --
+# and is world-readable besides. Apchi writes only to /tmp, through mkstemp (app.trust).
+#
+# USER is the number, not the name: a pod that sets runAsNonRoot without a runAsUser is
+# refused by the kubelet when the image's USER is a name, since a name cannot be proved
+# not to be root.
+RUN useradd --create-home --uid 10001 --gid 0 apchi
+COPY --from=build --chown=10001:0 /src /src
 ENV PATH="/src/.venv/bin:$PATH"
-USER apchi
+USER 10001
 WORKDIR /src
 EXPOSE 8000
 
