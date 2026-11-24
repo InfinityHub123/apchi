@@ -1192,12 +1192,7 @@ export interface paths {
         get: operations["get_event_listener_api_v1_event_listeners__name__get"];
         put?: never;
         post?: never;
-        /**
-         * Remove a staged Event Listener
-         * @description Refused when it would empty the Section and this Cluster's deployment sets
-         *     `event-listener.config-files` -- that property names a file Trino will not start
-         *     without, and there is no listener that does nothing to render in its place (#125).
-         */
+        /** Remove a staged Event Listener */
         delete: operations["delete_event_listener_api_v1_event_listeners__name__delete"];
         options?: never;
         head?: never;
