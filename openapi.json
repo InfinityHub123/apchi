@@ -3205,7 +3205,7 @@
   "info": {
     "summary": "Control plane for configuring one Trino cluster",
     "title": "Apchi",
-    "version": "0.2.0"
+    "version": "0.2.1"
   },
   "openapi": "3.1.0",
   "paths": {
