@@ -94,3 +94,4 @@ nav:
           - adr/0007-the-deployment-owns-the-pinned-pointers.md
           - adr/0008-one-deployment-shape.md
           - adr/0009-adoption-leaves-apchi.md
+          - adr/0010-apchi-renders-every-trino-file.md
