@@ -82,6 +82,15 @@ Nothing yet.
 
 ### Fixed
 
+- An Admin Apply interrupted by an Apchi restart is rolled back as an Admin Apply: its Admin
+  values go back to what the Cluster last had. It used to be recovered the Operator's way, which
+  keeps them. Apply records now say which kind ran (`kind`: `apply` or `admin_apply`).
+- A Snapshot number is never reused. Deleting the latest Snapshot from MongoDB by hand used to
+  hand its number to the next commit, under a different configuration.
+- A Candidate derived from a Snapshot that has been deleted is refused by Review (409) and
+  Apply, naming it, instead of being compared with nothing. `POST /candidate/reset` re-derives
+  it from the latest remaining Snapshot.
+
 - An Admin change is validated on the probe even when no Section has anything to probe.
   Before, an Admin Apply on such a Cluster delivered raw files to the coordinator unvalidated.
 - An Admin Apply's rollback restarts the coordinator when it puts the Admin's files back.
