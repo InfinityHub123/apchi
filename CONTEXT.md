@@ -66,13 +66,14 @@ and delivered without Apchi forming any opinion about it. Not a Section: raw val
 enter a Snapshot, so they survive a rollback and leave only when an Admin removes them.
 
 **Server Configuration**:
-Trino's own files for each role (`config.properties`, `jvm.config`, `node.properties`,
-`log.properties`), written by an Admin as properties and rendered by Apchi. Like a Raw File it
-never enters a Snapshot; unlike one, Apchi knows the file and renders it.
+The Trino properties an Admin sets for each role, in `config.properties`, `node.properties` and
+`log.properties`, rendered by Apchi into Trino's own files. Like a Raw File it never enters a
+Snapshot; unlike one, Apchi knows the file it belongs in.
 
 **Wiring**:
-The properties in Trino's files that name something the deployment creates: a port, a path, a
-Service. Set by the deployment, rendered by Apchi, and never edited by anyone.
+The properties in Trino's files that the deployment decides: a port, a path, a Service, or the
+heap and query memory, which are sized with the pod. Rendered by Apchi, edited by no one in
+Apchi.
 
 **Review**:
 The diff between the Configuration Candidate and the latest Snapshot. What an Operator sees
