@@ -55,6 +55,13 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ### Added
 
+- **A disruption budget for the workers**, on by default (`trino.worker.podDisruptionBudget`,
+  `maxUnavailable: 1`): a node drain takes one worker at a time, and each drains its tasks.
+- **A NetworkPolicy for Trino**, off by default (`networkPolicy.enabled`). On, only Trino's own
+  pods, Apchi's API and the router or ingress controller reach the coordinator, plus the peers
+  you list; only Trino reaches a worker. Proved against Calico by a CI job of its own, because
+  kind's default network plugin enforces no policy at all.
+
 - `worker` in `/api/v1/admin/server-configuration`: the Admin's properties for every worker,
   refused where they are wiring or sizing as the coordinator's are. A worker-only change
   restarts the workers and not the coordinator, so it costs no query; Review reports it as

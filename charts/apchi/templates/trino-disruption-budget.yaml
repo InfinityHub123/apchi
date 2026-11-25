@@ -1,0 +1,31 @@
+{{- $budget := .Values.trino.worker.podDisruptionBudget -}}
+{{- if $budget.enabled }}
+{{- if and (hasKey $budget "minAvailable") (hasKey $budget "maxUnavailable") }}
+{{- fail "trino.worker.podDisruptionBudget: set minAvailable or maxUnavailable, not both -- Kubernetes refuses a budget with both" }}
+{{- end }}
+# How many workers a voluntary disruption -- a node drain, a cluster upgrade -- may take at
+# once. Each worker evicted drains first (its preStop hook), so a budget turns a node drain
+# into workers finishing their tasks one at a time, rather than every worker on the node
+# ending its tasks together.
+#
+# Workers only. The coordinator is one pod that cannot drain (ADR-0003): a budget there would
+# either allow its eviction, which protects nothing, or forbid it, which blocks every node drain
+# until somebody deletes the budget.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "trino.workerName" . }}
+  labels:
+    {{- include "trino.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  selector:
+    matchLabels:
+      {{- include "trino.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  {{- if hasKey $budget "minAvailable" }}
+  minAvailable: {{ $budget.minAvailable }}
+  {{- else }}
+  maxUnavailable: {{ $budget.maxUnavailable | default 1 }}
+  {{- end }}
+{{- end }}

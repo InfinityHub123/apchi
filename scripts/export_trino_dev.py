@@ -43,6 +43,7 @@ TEMPLATES = (
     "trino-coordinator.yaml",
     "trino-worker.yaml",
     "trino-service.yaml",
+    "trino-disruption-budget.yaml",
 )
 TARGET_DIR = ROOT / "deploy" / "trino-dev"
 #: Beside the directory, never inside it: CI and the tier 2 fixture both apply the
@@ -59,7 +60,10 @@ RELEASE = "trino"
 #: reviewer reads the manifests in the order they would install them.
 LAYOUT: dict[str, list[tuple[str, str]]] = {
     "10-coordinator.yaml": [("Deployment", "trino-coordinator"), ("Service", "trino")],
-    "20-worker.yaml": [("Deployment", "trino-worker")],
+    "20-worker.yaml": [
+        ("Deployment", "trino-worker"),
+        ("PodDisruptionBudget", "trino-worker"),
+    ],
 }
 
 #: Metadata that only means something inside a Helm release. These manifests are applied

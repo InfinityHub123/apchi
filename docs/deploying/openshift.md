@@ -110,3 +110,23 @@ trino:
 
 The initContainer that joins the certificate and the key takes `trino.coordinator.seedResources`,
 the same limits as the one that seeds the catalog store.
+
+## NetworkPolicy
+
+`networkPolicy.enabled: true` restricts who reaches Trino's pods: Trino itself, Apchi's API
+pods, and, when `expose.trino` is a Route, OpenShift's router. The router's namespace is
+selected by both labels in use, `policy-group.network.openshift.io/ingress: ""` (OVN-Kubernetes)
+and `network.openshift.io/policy-group: ingress` (OpenShift SDN), so nothing has to be set for
+it. Anything else that queries Trino directly, such as a Trino Gateway in its own namespace,
+goes in `networkPolicy.coordinator.from`:
+
+```yaml
+networkPolicy:
+  enabled: true
+  coordinator:
+    from:
+      - namespaceSelector:
+          matchLabels: {kubernetes.io/metadata.name: trino-gateway}
+```
+
+It is off by default because turning it on cuts off every client not listed.
