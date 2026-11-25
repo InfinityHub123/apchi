@@ -57,7 +57,15 @@ Three concepts, and only three.
 
 **Snapshot.** An immutable, complete record of the Apchi-managed desired configuration that
 has passed validation, been applied to the Cluster, and been verified against it. Numbered
-sequentially. A Snapshot is known-good by construction.
+sequentially, and a number is never reused: the next is one past the highest ever committed,
+so a Snapshot deleted from MongoDB by hand does not hand its number to a different
+configuration. A Snapshot is known-good by construction.
+
+Apchi never deletes one. Deleting an older Snapshot by hand is harmless -- nothing compares
+against it, and asking for it is a 404. Deleting the one the Candidate was derived from is not:
+Review and Apply then refuse, naming it, rather than compare the Candidate with nothing and plan
+the whole configuration as new; `POST /candidate/reset` re-derives the Candidate from the latest
+Snapshot that remains, which is the way out.
 
 **Configuration Candidate.** The single mutable configuration Operators edit, derived from
 the latest Snapshot. There is exactly one per Cluster. Every Operator change lands in it.
@@ -711,6 +719,12 @@ bounded attempt, escalating to an incident if it fails. It can do this from a pr
 run the Apply precisely because the rollback plan is a diff of two durable records. The Apply
 record is marked `interrupted`, so an Operator can tell a restart that landed mid-Apply from a
 configuration that failed.
+
+The rollback is the one that Apply's own kind would have made, and the record's `kind` says
+which ran. An Operator's Apply keeps the Admin values, which survive an Operator's rollback
+(invariant 2). An interrupted *Admin* Apply puts them back to what the last successful Apply
+delivered, because they are what may have broken the Cluster (§14) -- recovering it the
+Operator's way left them in place.
 
 Auto Rollback runs after an Apply or Verification failure and after no others. A **Validation**
 failure touched nothing, so there is nothing to undo. A **Commit** failure is the opposite case:

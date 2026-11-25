@@ -9,6 +9,7 @@ validation rejects before anything is stored; and the audit of who changed what 
 the only record of whose work an Apply is shipping.
 """
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -24,6 +25,8 @@ from app.audit.events import Action, AuditStore, Category, Entry
 from app.pipeline.snapshots import SnapshotStore
 from app.sections import SectionName
 from app.sections.registry import SECTIONS
+
+logger = logging.getLogger(__name__)
 
 # One Cluster per Apchi deployment, so the Candidate is a singleton document.
 CANDIDATE_ID = "candidate"
@@ -206,7 +209,15 @@ class CandidateStore:
         empty -- not that it is emptied. Because nothing reaches the Cluster before
         Apply, this leaves the Effective Cluster State untouched.
         """
-        if base_snapshot is None:
+        if base_snapshot is None or await self._snapshots.get(base_snapshot) is None:
+            # A base that is gone -- deleted from MongoDB by hand -- is what a Reset is the way
+            # out of: Review and Apply refuse a Candidate derived from it, and the Snapshot it
+            # would re-derive from no longer exists. The latest one is the Cluster's own.
+            if base_snapshot is not None:
+                logger.warning(
+                    "the candidate's base snapshot no longer exists; re-deriving from the latest",
+                    extra={"missing_snapshot": base_snapshot},
+                )
             fresh = await self._derive_from_latest()
         else:
             fresh = Candidate(
