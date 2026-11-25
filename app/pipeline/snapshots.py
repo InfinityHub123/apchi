@@ -15,6 +15,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 from pymongo.asynchronous.database import AsyncDatabase
 
+from app.api.errors import Conflict
 from app.api.pages import (
     DEFAULT_LIMIT,
     BadCursor,
@@ -34,9 +35,24 @@ class Snapshot(BaseModel):
     apply_id: str = Field(description="The Apply that produced this Snapshot.")
 
 
+class SnapshotMissing(Conflict):
+    """A Snapshot something refers to is no longer in MongoDB.
+
+    Snapshots are never deleted by Apchi, so this is one removed by hand. Read as an empty
+    baseline instead -- which is what happened before -- every resource the Candidate holds
+    would be planned as new, Review would show the whole configuration as added, and an Apply
+    would issue DDL for catalogs that already exist.
+    """
+
+
 class SnapshotStore:
     def __init__(self, database: AsyncDatabase[dict[str, Any]]) -> None:
         self._collection = database["snapshots"]
+        #: The highest number ever committed, kept apart from the Snapshots themselves so that
+        #: deleting the latest one by hand cannot make the next commit reuse its number -- and
+        #: every Apply record and audit event that named it point at a different configuration.
+        self._counters = database["counters"]
+        self._applies = database["applies"]
 
     @staticmethod
     def _as_snapshot(document: dict[str, Any]) -> Snapshot:
@@ -72,14 +88,44 @@ class SnapshotStore:
         )
 
     async def sections_of(self, number: int | None) -> dict[SectionName, dict[str, Any]]:
-        """The configuration a Snapshot holds, or an empty baseline before the first."""
+        """The configuration a Snapshot holds, or an empty baseline before the first.
+
+        Raises SnapshotMissing for a number that was committed and is gone: "before the first"
+        is `None`, and a number is never that.
+        """
         empty: dict[SectionName, dict[str, Any]] = {name: {} for name in SECTIONS}
         if number is None:
             return empty
         snapshot = await self.get(number)
         if snapshot is None:
-            return empty
+            raise SnapshotMissing(
+                f"Snapshot {number} is no longer in MongoDB, and the configuration was "
+                "derived from it. Compared with nothing, every resource would read as new and "
+                "an Apply would recreate what the Cluster already has. Re-derive the "
+                "Candidate from the latest Snapshot with POST /api/v1/candidate/reset -- it "
+                "discards the staged changes."
+            )
         return {name: snapshot.sections.get(name, {}) for name in SECTIONS}
+
+    async def _next_number(self) -> int:
+        """One past the highest number ever committed.
+
+        The highest of three records, because any of them can be the only one left: the
+        latest Snapshot, the counter, and the Apply records, which name every Snapshot they
+        committed -- so even an install from before the counter, whose latest Snapshot was
+        deleted, does not reuse a number.
+        """
+        latest = await self.latest()
+        counter = await self._counters.find_one({"_id": "snapshots"})
+        recorded = await self._applies.find_one(
+            {"snapshot": {"$ne": None}}, sort=[("snapshot", -1)], projection={"snapshot": 1}
+        )
+        highest = max(
+            0 if latest is None else latest.number,
+            0 if counter is None else int(counter["last"]),
+            0 if recorded is None else int(recorded["snapshot"]),
+        )
+        return highest + 1
 
     async def commit(self, sections: dict[SectionName, dict[str, Any]], apply_id: str) -> Snapshot:
         """Records a verified Candidate as the next Snapshot.
@@ -87,15 +133,17 @@ class SnapshotStore:
         Immutability is enforced by never updating a Snapshot document: the only
         write is this insert.
         """
-        previous = await self.latest()
         snapshot = Snapshot(
-            number=1 if previous is None else previous.number + 1,
+            number=await self._next_number(),
             sections=sections,
             created_at=datetime.now(UTC),
             apply_id=apply_id,
         )
         await self._collection.insert_one(
             {"_id": snapshot.number, **snapshot.model_dump(mode="json")}
+        )
+        await self._counters.update_one(
+            {"_id": "snapshots"}, {"$max": {"last": snapshot.number}}, upsert=True
         )
         return snapshot
 

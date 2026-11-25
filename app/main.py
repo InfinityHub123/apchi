@@ -134,7 +134,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # retried at the next start.
     try:
         recovered = await recover_interrupted(
-            app.state.apply_store, build_engine, app.state.audit_store
+            app.state.apply_store,
+            build_engine,
+            app.state.audit_store,
+            admin_engine_factory=build_admin_engine,
         )
     except Exception:
         logger.exception(
