@@ -12,7 +12,7 @@ preconditions against what it renders.
 They cannot disagree, because these manifests are **generated from the chart**.
 `scripts/export_trino_dev.py` renders the Trino part of `charts/apchi` with
 `deploy/trino-dev.values.yaml` and
-writes `00-config.yaml`, `10-coordinator.yaml` and `20-worker.yaml`; CI fails on a diff. Edit
+writes `10-coordinator.yaml`, `20-worker.yaml` and, from Apchi's own renderer, `03-server-config.yaml`; CI fails on a diff. Edit
 the chart or the values and regenerate — never these three files.
 
 The values file sits *beside* this directory rather than in it, because everything here is

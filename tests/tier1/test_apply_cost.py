@@ -113,6 +113,7 @@ async def test_an_empty_candidate_costs_nothing(applying_client: AsyncClient) ->
 
     assert review["cost"] == {
         "restarts_coordinator": False,
+        "restarts_workers": False,
         "queries_at_risk": None,
         "warning": None,
     }

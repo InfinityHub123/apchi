@@ -13,6 +13,7 @@ and occasionally too short.
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 
 from app.adapters.kubernetes import KubernetesAdapter
 
@@ -36,13 +37,48 @@ async def roll_out(
     still serving, and Verification would then be asking the old configuration whether it
     had adopted the new one.
     """
-    await kubernetes.restart_deployment(deployment, reason)
-    logger.warning(
-        "rolling out the coordinator; every running query is terminated",
-        extra={"deployment": deployment, "why": reason},
-    )
+    await roll_out_all(kubernetes, [Restart(deployment, timeout, drains=False)], reason)
 
-    deadline = time.monotonic() + timeout
+
+@dataclass(frozen=True)
+class Restart:
+    """One Deployment to restart: how long it may take, and whether its pods drain first."""
+
+    deployment: str
+    timeout: float
+    #: Workers drain their running tasks before they exit; the coordinator cannot (ADR-0003).
+    drains: bool
+
+
+async def roll_out_all(
+    kubernetes: KubernetesAdapter, deployments: list[Restart], reason: str
+) -> None:
+    """Restart every Deployment named, then wait for each, within its own timeout.
+
+    All restarted first, then all waited for, so the coordinator and the workers roll at the
+    same time when both changed: the coordinator's restart ends every query anyway, and a
+    worker drain it would wait behind would only make that outage longer.
+    """
+    for restart in deployments:
+        await kubernetes.restart_deployment(restart.deployment, reason)
+        logger.warning(
+            "rolling out %s%s",
+            restart.deployment,
+            ", draining each pod's running tasks first"
+            if restart.drains
+            else "; every running query is terminated",
+            extra={"deployment": restart.deployment, "why": reason},
+        )
+    started = time.monotonic()
+    for restart in deployments:
+        await _await_complete(
+            kubernetes, restart.deployment, started + restart.timeout, restart.timeout
+        )
+
+
+async def _await_complete(
+    kubernetes: KubernetesAdapter, deployment: str, deadline: float, timeout: float
+) -> None:
     state = await kubernetes.rollout_state(deployment)
     while True:
         if state.complete:

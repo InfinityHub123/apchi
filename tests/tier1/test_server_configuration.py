@@ -123,9 +123,8 @@ async def test_nothing_is_set_until_an_admin_sets_it(as_admin: AsyncClient) -> N
     response = await as_admin.get(SERVER_CONFIGURATION)
 
     assert response.status_code == 200, response.text
-    assert response.json() == _body(
-        {"config.properties": {}, "node.properties": {}, "log.properties": {}}
-    )
+    empty = {"config.properties": {}, "node.properties": {}, "log.properties": {}}
+    assert response.json() == {"coordinator": empty, "worker": empty}
 
 
 async def test_properties_are_stored_by_the_file_trino_reads_them_from(
@@ -226,16 +225,6 @@ async def test_files_that_are_not_the_admins_are_refused(as_admin: AsyncClient, 
     """jvm.config is the chart's -- sizing travels in JDK_JAVA_OPTIONS -- and the catalog store
     and access-control files are wiring through and through. Anything else is a Raw File."""
     response = await _put(as_admin, {file: {"x": "y"}})
-
-    assert response.status_code == 422, response.text
-
-
-async def test_the_workers_are_not_yet_part_of_it(as_admin: AsyncClient) -> None:
-    """Their files are still the chart's in this stage. Accepting worker properties that
-    reach no worker would be a setting that silently does nothing."""
-    response = await as_admin.put(
-        SERVER_CONFIGURATION, json={"worker": {"config.properties": {"task.concurrency": "8"}}}
-    )
 
     assert response.status_code == 422, response.text
 

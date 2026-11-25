@@ -128,7 +128,7 @@ async def test_a_nested_directory_mount_below_the_config_directory_is_not_the_si
         await check(fake_kubernetes, pod_spec(spec), settings)
 
     assert raised.value.problems == [
-        "Container 'trino' mounts 'catalogs' (ConfigMap 'trino-catalogs') at "
+        "The coordinator's container 'trino' mounts 'catalogs' (ConfigMap 'trino-catalogs') at "
         "/etc/trino/catalog. Apchi renders every file under /etc/trino, so nothing else may "
         "be mounted there: set the properties through the Server Configuration, or write the "
         "file as a Raw File, and remove this mount."
@@ -181,6 +181,6 @@ async def test_a_writable_directory_over_the_config_directory_is_not_the_sixths_
 
     assert not any("not a directory" in problem for problem in raised.value.problems)
     assert [problem.split(" (")[0] for problem in raised.value.problems] == [
-        "Container 'trino' mounts 'scratch'"
+        "The coordinator's container 'trino' mounts 'scratch'"
     ]
     assert "neither a Secret nor a ConfigMap" in raised.value.problems[0]

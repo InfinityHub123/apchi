@@ -42,6 +42,7 @@ from app.sections.server_configuration import (
     RENDERED_PATHS,
     ServerConfiguration,
     render_coordinator,
+    render_worker,
 )
 
 logger = logging.getLogger(__name__)
@@ -187,15 +188,18 @@ async def set_enforcement(
 
 
 class RenderedFiles(BaseModel):
-    """The files Apchi would write for the coordinator, as the next Apply would write them."""
+    """The files Apchi would write for each role, as the next Apply would write them."""
 
     model_config = ConfigDict(extra="forbid")
 
     coordinator: dict[str, str] = Field(
         description=(
-            "Each file Apchi renders under /etc/trino, by path: wiring first, then the "
-            "Admin's properties. Holds whatever credentials those properties hold."
+            "Each file Apchi renders under /etc/trino on the coordinator, by path: wiring "
+            "first, then the Admin's properties. Holds whatever credentials those hold."
         )
+    )
+    worker: dict[str, str] = Field(
+        description="The same for every worker, its drain rule included."
     )
 
 
@@ -237,8 +241,9 @@ async def set_server_configuration(
     logger.warning(
         "admin replaced the server configuration",
         extra={
-            file: len(properties)
-            for file, properties in saved.server_configuration.coordinator.by_file().items()
+            f"{role}_{file}": len(properties)
+            for role in ("coordinator", "worker")
+            for file, properties in saved.server_configuration.of(role).by_file().items()
         },
     )
     return saved.server_configuration
@@ -253,8 +258,10 @@ async def get_rendered_files(admin: AdminStoreDep, request: Request) -> Rendered
     """What the next Apply writes, wiring included -- the only place the wiring can be read
     whole, because it comes from the chart's settings rather than from anything stored."""
     values = await admin.load()
+    settings = request.app.state.settings
     return RenderedFiles(
-        coordinator=render_coordinator(values.server_configuration, request.app.state.settings)
+        coordinator=render_coordinator(values.server_configuration, settings),
+        worker=render_worker(values.server_configuration, settings),
     )
 
 

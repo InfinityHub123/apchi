@@ -228,6 +228,13 @@ class Settings(BaseSettings):
     #: every key with subPath, and never changes that mount: each file needs a restart to
     #: take effect anyway, and the Rollout is what makes new content live.
     server_configuration_secret_name: str = "trino-server-config-coordinator"
+    #: The workers' files, the same way: one Secret for the whole worker Deployment.
+    worker_server_configuration_secret_name: str = "trino-server-config-worker"
+    #: How long a worker waits for the coordinator to notice it is draining, before and after
+    #: its tasks finish -- so a drain takes at least twice this (measured: 5s gave 10s). The
+    #: chart sets the pod's termination grace period from the same value, and has to: a pod
+    #: killed before it has drained ends the tasks it was draining.
+    trino_worker_shutdown_grace_period: str = "120s"
     trino_http_port: int = 8080
     #: Where workers announce themselves: the coordinator's Service, never a pod.
     trino_discovery_uri: str = "http://trino:8080"
@@ -293,6 +300,10 @@ class Settings(BaseSettings):
     #: How long a rollout may take before the Apply fails. A coordinator that never comes
     #: back must not hang the pipeline.
     rollout_timeout_seconds: float = 600.0
+    #: The same for the workers, which are replaced one at a time and each drains its running
+    #: tasks first -- so the bound grows with the worker count and the longest task, and the
+    #: coordinator's would be wrong for it.
+    worker_rollout_timeout_seconds: float = 1800.0
 
     #: Where Trino keeps its dynamic catalog store. Nothing read-only may be mounted
     #: here or above it, or every CREATE CATALOG fails.

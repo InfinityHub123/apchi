@@ -31,6 +31,10 @@ spec:
       # and the `trino` user cannot read the keys a connector presents outward.
       securityContext:
         fsGroup: 1000
+      # Long enough for the drain below to finish: Trino waits its grace period for the
+      # coordinator to notice, lets its tasks finish, and waits the grace period again -- so at
+      # least twice it (measured). Killed before then, a worker ends the tasks it was draining.
+      terminationGracePeriodSeconds: 30
       containers:
         - name: trino
           image: "trinodb/trino:483"
@@ -46,6 +50,31 @@ spec:
           ports:
             - containerPort: 8080
               name: http
+          lifecycle:
+            # Drain before Kubernetes stops the container: a worker told to shut down stops
+            # taking tasks, finishes the ones it has, and exits by itself. The hook waits for
+            # that, because SIGTERM follows the moment it returns, and SIGTERM ends the drain.
+            # Apchi's identity asks, and the worker's own rules -- rendered by Apchi -- allow
+            # that one identity to and nobody else (measured: 403 for anyone else, and for
+            # every identity on a worker with no rules at all).
+            #
+            # A worker that is not serving yet has nothing to drain, so a refused request ends
+            # the hook rather than waiting out the grace period for nothing.
+            #
+            # Kubernetes records FailedPreStopHook for every drain that finishes: the worker
+            # exits while the hook is still waiting on it, and that is how a completed drain
+            # ends -- measured on kind, the event lands exactly twice the grace period after
+            # the pod was deleted.
+            preStop:
+              exec:
+                command:
+                  - sh
+                  - -c
+                  - >-
+                    curl -sf -X PUT -d '"SHUTTING_DOWN"' -H 'Content-Type: application/json'
+                    -H 'X-Trino-User: apchi'
+                    http://localhost:8080/v1/info/state || exit 0;
+                    while kill -0 1 2>/dev/null; do sleep 1; done
           readinessProbe:
             # The worker count Apchi's Verification expects comes from this Deployment's
             # ready replicas, so the probe is what decides whether a worker counts.
@@ -54,9 +83,16 @@ spec:
             periodSeconds: 5
             failureThreshold: 30
           volumeMounts:
-            - {name: config, mountPath: /etc/trino/config.properties, subPath: worker-config.properties}
-            - {name: config, mountPath: /etc/trino/node.properties, subPath: node.properties}
-            - {name: config, mountPath: /etc/trino/jvm.config, subPath: jvm.config}
+            # Trino's own files, which Apchi renders into its Secret and this chart only
+            # mounts (ADR-0010) -- the drain rule above among them. subPath and fixed, as on
+            # the coordinator: each needs a restart to take effect, and Apchi restarts the
+            # workers only when one of theirs changed.
+            - {name: server-config, mountPath: /etc/trino/config.properties, subPath: config.properties}
+            - {name: server-config, mountPath: /etc/trino/node.properties, subPath: node.properties}
+            - {name: server-config, mountPath: /etc/trino/jvm.config, subPath: jvm.config}
+            - {name: server-config, mountPath: /etc/trino/log.properties, subPath: log.properties}
+            - {name: server-config, mountPath: /etc/trino/access-control.properties, subPath: access-control.properties}
+            - {name: server-config, mountPath: /etc/trino/worker-rules.json, subPath: worker-rules.json}
             # Workers need the certificates: a connector presenting one to a data source
             # runs here. They need nothing else Apchi writes -- catalogs reach a worker
             # through the coordinator's announcement, and access control, resource groups,
@@ -66,7 +102,8 @@ spec:
             # node.data-dir, writable by whatever uid the pod is given. See the coordinator.
             - {name: data, mountPath: /data/trino}
       volumes:
-        - {name: config, configMap: {name: trino-config}}
+        # The Admin's properties can be credentials, so 0640 with the fsGroup above. §13.2.
+        - {name: server-config, secret: {secretName: trino-server-config-worker, defaultMode: 0640}}
         # Private keys, so not world-readable. 0640 with the fsGroup above. §13.2.
         - {name: client-certificates, secret: {secretName: trino-client-certificates, defaultMode: 0640}}
         - {name: data, emptyDir: {}}
