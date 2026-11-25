@@ -1613,8 +1613,8 @@ proved on the Cluster. Every raw file is now validated on the probe.
 ## Trino's server configuration
 
 [ADR-0010](./docs/adr/0010-apchi-renders-every-trino-file.md) records the decision; this is
-the design. **Stage 1 is built**: the coordinator's files, through
-`/api/v1/admin/server-configuration`. The workers' files are still the chart's until stage 2.
+the design. **Built**: both roles' files, through `/api/v1/admin/server-configuration` -- the
+coordinator's in stage 1, the workers' in stage 2.
 Every behaviour this design relies on was measured on Trino 483, in Docker and on kind
 (2026-11-25), and each fact is marked *measured* where it is used.
 
@@ -1696,7 +1696,7 @@ server_configuration:
     config.properties: {"query.max-execution-time": "2h", "query.max-queued-queries": "500"}
     log.properties: {"io.trino.plugin.postgresql": "DEBUG"}
     node.properties: {}
-  worker:                                  # stage 2; refused until then
+  worker:
     config.properties: {"task.concurrency": "16"}
     log.properties: {}
     node.properties: {}
@@ -1781,18 +1781,20 @@ unvalidated.
 
 The probe is a coordinator, and it judges the worker's properties too. *Measured:* a worker
 accepts coordinator-side query properties, a coordinator accepts worker-side ones such as
-`task.concurrency` and spill settings, and both refuse a misspelled one. The probe's
-`config.properties` is the Admin's properties with the probe's own wiring laid over them, and
-it **leaves out the sizing references**. The probe has no sizing variables, and its small heap
-would refuse any real memory setting.
+`task.concurrency` and spill settings, and both refuse a misspelled one. So the workers' keys
+join the coordinator's on one probe -- except a key the two roles give *different* values, which
+one probe cannot hold both of. Then the workers' properties get a probe of their own, run first,
+and a refusal there says "The workers' properties: …" so the Admin knows which role to fix. The
+probe's `config.properties` is the Admin's properties with the probe's own wiring laid over them,
+and it **leaves out the sizing references**. The probe has no sizing variables, and its small
+heap would refuse any real memory setting.
 
 Nothing catches a valid but wrong value (`2m` meant as `2h`), or a misspelled logger name in
 `log.properties`, which Trino accepts and ignores. Review shows both before Apply.
 
 ### Delivery
 
-One Secret per role, `trino-server-config-coordinator` and (stage 2)
-`trino-server-config-worker`, with one key per file, mounted 0640 like every Secret that can
+One Secret per role, `trino-server-config-coordinator` and `trino-server-config-worker`, with one key per file, mounted 0640 like every Secret that can
 hold a credential: the seventh precondition holds it to that. The chart mounts each file with `subPath`: a fixed mount, never patched by
 Apchi, which leaves Argo CD nothing to fight over. That is a deliberate exception to the first
 precondition. Every one of these files needs a restart anyway, so a frozen mount loses
@@ -1816,15 +1818,39 @@ environment and rolls with the chart.
 
 ### Rollout
 
-A change to a role's files restarts that role's Deployment:
+A change to a role's files restarts that role's Deployment, and only it:
 
-- **Workers only:** a rolling restart. Each worker drains through its graceful-shutdown hook
-  first, so no query is lost. The chart owns the hook and the termination grace period. The
-  Permissions Section has to grant the hook's user `system_information` write.
-- **The coordinator:** every running query ends, as today (ADR-0003). If both roles changed,
-  they restart together, because the coordinator restart ends those queries anyway.
-- **Verification** waits for every restarted Deployment to finish its rollout, then for the
-  expected worker count to register.
+- **The workers only**, when only their own files changed. A catalog or a permission never
+  reaches a worker's files (§7.4), and a raw file is mounted on the coordinator alone. Each
+  worker drains first, so no query is lost: the chart's `preStop` hook asks the worker to shut
+  down and waits for it to exit, because SIGTERM follows the moment the hook returns. A worker
+  told to shut down stops taking tasks, lets the coordinator notice, finishes its tasks and
+  exits by itself -- *measured*: "Shutdown requested … All active tasks are finished …
+  shutdown complete" in twice the grace period.
+- **The coordinator**, for a Section, a raw file or its own files: every running query ends, as
+  always (ADR-0003). If both roles changed they restart together, because the coordinator's
+  restart ends those queries anyway, and making it wait behind a worker drain would only make
+  that outage longer.
+- **Verification** waits for every restarted Deployment to finish its rollout, each within its
+  own bound -- `worker_rollout_timeout_seconds` for the workers, which are replaced one at a
+  time and each drains -- then for the expected worker count to register.
+- **Review** says which: `restarts_coordinator` and `restarts_workers`, with the coordinator's
+  warning when it restarts, and otherwise one saying the workers are replaced one at a time and
+  lose no query.
+
+**The drain needs a rule on the worker.** A worker with no access control configured still
+refuses the request -- Trino's default denies writing system information, *measured*: 403 for
+every identity. So Apchi renders each worker an access-control file of its own, pointing at
+`/etc/trino/worker-rules.json`, which grants Apchi's identity `system_information` write and
+nothing else. It is not the Operator's Permissions: those are the coordinator's, and
+authorization happens there. *Measured:* a worker with only this rule ran queries as before,
+refused the drain for any other identity (403), and accepted it for Apchi's. The rule's user is
+the identity escaped and anchored, because Trino reads it as a regular expression.
+
+**The grace period is the chart's.** `shutdown.grace-period` is wiring, from
+`trino.worker.gracefulShutdown.gracePeriodSeconds`, because it has to fit the
+`terminationGracePeriodSeconds` the chart gives the pod: a drain takes at least twice the grace
+period, and the render fails when the termination grace period is shorter than that.
 
 ### Raw Files
 
@@ -1884,10 +1910,10 @@ that would have collided with it, and the refusal names both mounts.
 - **Sizing** keeps its place in the chart, restructured per role:
   `trino.coordinator.jvm.{maxHeapSize,extraArgs}`, `trino.worker.jvm.{…}` and the three query
   memory values, all required, with defaults.
-- **Everything else leaves the chart:** `trino.additionalCoordinatorProperties` and
-  `trino.jvm.*` now; `trino.additionalWorkerProperties` in stage 2. Setting either of the first
-  two fails the render and names its replacement. `trino.securityRefreshPeriod` stays, as
-  wiring.
+- **Everything else leaves the chart:** `trino.additionalCoordinatorProperties`, `trino.jvm.*`
+  and, in stage 2, `trino.additionalWorkerProperties` -- and with it the chart's Trino ConfigMap,
+  which no longer exists. Setting any of them fails the render and names its replacement.
+  `trino.securityRefreshPeriod` stays, as wiring.
 - **An existing install** moves its additional properties into the Admin configuration
   through `PUT /api/v1/admin/configuration` before upgrading. The first startup after the
   upgrade writes the Secrets from them.
@@ -1897,8 +1923,9 @@ that would have collided with it, and the refusal names both mounts.
 1. **Built.** The coordinator's files: the wiring settings, the sizing variables and their
    render check, the Secret and the first write, the write-time checks, probe validation, the
    Raw File path refusal and the ninth precondition.
-2. The workers' files: the worker rollout, the graceful-shutdown hook in the chart, and the
-   `system_information` rule in Permissions.
+2. **Built.** The workers' files: the worker rollout and its own timeout, the graceful-shutdown
+   hook in the chart, and the drain rule -- in the workers' own access control rather than in
+   Permissions, because a worker checks the request against its own rules (*measured*).
 3. Authentication, as a design of its own.
 
 ## Maintenance Mode

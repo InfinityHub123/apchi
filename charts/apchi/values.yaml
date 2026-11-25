@@ -272,6 +272,14 @@ trino:
   worker:
     replicas: 2
     resources: {}
+    # A worker drains before it stops: it finishes its running tasks, so replacing one costs
+    # no query. Trino waits this long for the coordinator to notice, before and after the
+    # tasks finish, and Apchi renders it as the worker's shutdown.grace-period.
+    gracefulShutdown:
+      gracePeriodSeconds: 120
+    # At least twice the grace period, plus the longest task you want a drain to wait for.
+    # The render fails below twice it.
+    terminationGracePeriodSeconds: 600
     # Sizing, which is this chart's and not Apchi's, because it has to fit the memory limit
     # in resources: the heap and every JVM flag go into JDK_JAVA_OPTIONS, and query memory
     # into the variables Apchi's config.properties refers to. The render fails when the heap
@@ -346,10 +354,6 @@ trino:
   # is then unreadable and has to be 0644.
   fsGroup: 1000
 
-  # Added verbatim to the workers' config.properties, until Apchi renders those too (the
-  # next stage of ADR-0010). The coordinator's are Apchi's: set them through
-  # PUT /api/v1/admin/server-configuration.
-  additionalWorkerProperties: []
 
   # How callers authenticate to Trino, and how their certificate becomes a Trino Identity.
   #
@@ -477,6 +481,8 @@ secrets:
   # (ADR-0010). Created by Apchi, not by this chart -- its content is rendered from the Admin
   # values in MongoDB, which a chart cannot read.
   serverConfiguration: trino-server-config-coordinator
+  # The workers' own files, the same way.
+  workerServerConfiguration: trino-server-config-worker
 
 # The volumes Apchi owns on the coordinator's pod template. Everything else there
 # belongs to the Admin, and Apchi never touches it.
@@ -514,6 +520,9 @@ timeouts:
   # How long a Rollout may take before the Apply fails. A coordinator that never comes
   # back must not hang the pipeline.
   rolloutSeconds: 600
+  # The same for the workers, which are replaced one at a time and each drains first: allow
+  # roughly (workers x (startup + terminationGracePeriodSeconds)).
+  workerRolloutSeconds: 1800
   # The hard limit on Validation. A coordinator that never starts serving fails
   # Validation rather than hanging it.
   validationSeconds: 300

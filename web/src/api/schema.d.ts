@@ -1625,6 +1625,12 @@ export interface components {
              */
             restarts_coordinator: boolean;
             /**
+             * Restarts Workers
+             * @description Whether it restarts the workers, which happens only when their own server configuration changes. They drain first, so this costs no query.
+             * @default false
+             */
+            restarts_workers: boolean;
+            /**
              * Rollout Sections
              * @description Which Sections the Rollout is for, in Section order. §21 requires an Operator to see which changes force a restart and which do not, and a client cannot work it out from `Section.requires_rollout`: a Section also forces a Rollout when what Apchi would render is not what the Cluster has mounted. A name here with no entry in the diff is a Rollout that no staged change accounts for.
              */
@@ -2116,12 +2122,12 @@ export interface components {
         };
         /**
          * CoordinatorFiles
-         * @description The Admin's properties for the coordinator, one map per file Trino reads.
+         * @description The Admin's properties for the coordinator.
          */
         CoordinatorFiles: {
             /**
              * Config.Properties
-             * @description Properties for the coordinator's config.properties. Wiring and sizing are refused: they belong to the chart.
+             * @description Properties for this role's config.properties. Wiring and sizing are refused: they belong to the chart.
              */
             "config.properties"?: {
                 [key: string]: string;
@@ -2629,14 +2635,21 @@ export interface components {
         };
         /**
          * RenderedFiles
-         * @description The files Apchi would write for the coordinator, as the next Apply would write them.
+         * @description The files Apchi would write for each role, as the next Apply would write them.
          */
         RenderedFiles: {
             /**
              * Coordinator
-             * @description Each file Apchi renders under /etc/trino, by path: wiring first, then the Admin's properties. Holds whatever credentials those properties hold.
+             * @description Each file Apchi renders under /etc/trino on the coordinator, by path: wiring first, then the Admin's properties. Holds whatever credentials those hold.
              */
             coordinator: {
+                [key: string]: string;
+            };
+            /**
+             * Worker
+             * @description The same for every worker, its drain rule included.
+             */
+            worker: {
                 [key: string]: string;
             };
         };
@@ -3046,10 +3059,11 @@ export interface components {
         };
         /**
          * ServerConfiguration
-         * @description The Admin's half of Trino's own files. Workers arrive in the next stage.
+         * @description The Admin's half of Trino's own files.
          */
         ServerConfiguration: {
             coordinator?: components["schemas"]["CoordinatorFiles"];
+            worker?: components["schemas"]["WorkerFiles"];
         };
         /**
          * SignIn
@@ -3216,6 +3230,34 @@ export interface components {
              * @description Things worth knowing that did not stop the Apply. A Catalog the validation coordinator could not connect to is the one case today: `CREATE CATALOG` succeeds against a host that does not resolve, so this is the only stage that would notice -- and the probe's network is not the coordinator's, so it reports rather than refuses. `catalog_connectivity_blocks_apply` moves these into `failures` on a deployment where the two are known to match.
              */
             warnings?: components["schemas"]["ValidationFailure"][];
+        };
+        /**
+         * WorkerFiles
+         * @description The Admin's properties for every worker: one set, because the workers are one
+         *     Deployment and Trino expects them alike.
+         */
+        WorkerFiles: {
+            /**
+             * Config.Properties
+             * @description Properties for this role's config.properties. Wiring and sizing are refused: they belong to the chart.
+             */
+            "config.properties"?: {
+                [key: string]: string;
+            };
+            /**
+             * Log.Properties
+             * @description Log levels, by logger name: {"io.trino.plugin.postgresql": "DEBUG"}.
+             */
+            "log.properties"?: {
+                [key: string]: string;
+            };
+            /**
+             * Node.Properties
+             * @description Extra node.properties.
+             */
+            "node.properties"?: {
+                [key: string]: string;
+            };
         };
     };
     responses: never;

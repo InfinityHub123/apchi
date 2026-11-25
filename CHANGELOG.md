@@ -26,6 +26,19 @@ Nothing yet.
 
 ### Breaking
 
+- **Apchi renders the workers' own files too** (ADR-0010, stage 2): `config.properties`,
+  `jvm.config`, `node.properties`, `log.properties` and their access control, into
+  `trino-server-config-worker`. The chart's Trino ConfigMap is gone.
+  `trino.additionalWorkerProperties` fails the render: set those properties with
+  `PUT /api/v1/admin/server-configuration`, under `worker`, before upgrading.
+- **Workers drain before they restart.** The chart adds a `preStop` hook and
+  `trino.worker.gracefulShutdown.gracePeriodSeconds` (120) with
+  `trino.worker.terminationGracePeriodSeconds` (600), and fails the render when the second is
+  under twice the first. Apchi renders each worker a rule letting its identity, and nobody
+  else, ask for the drain.
+- **The ninth precondition covers the workers**, and each role must mount every file Apchi
+  renders for it from Apchi's Secret.
+
 - **Apchi renders the coordinator's own files** (ADR-0010): `config.properties`, `jvm.config`,
   `node.properties`, `log.properties`, `catalog-store.properties` and
   `access-control.properties`, into the Secret `trino-server-config-coordinator`, which the
@@ -45,6 +58,12 @@ Nothing yet.
   not write.
 
 ### Added
+
+- `worker` in `/api/v1/admin/server-configuration`: the Admin's properties for every worker,
+  refused where they are wiring or sizing as the coordinator's are. A worker-only change
+  restarts the workers and not the coordinator, so it costs no query; Review reports it as
+  `restarts_workers`.
+- `timeouts.workerRolloutSeconds` (1800), because a worker rollout drains one worker at a time.
 
 - `GET`/`PUT /api/v1/admin/server-configuration`: the Admin's properties for the coordinator's
   `config.properties`, `node.properties` and `log.properties`, with no schema over them. Wiring

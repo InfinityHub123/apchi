@@ -23,13 +23,14 @@ from app.pipeline.candidate import CandidateStore
 from app.pipeline.files import deliver
 from app.pipeline.impact import sections_needing_rollout
 from app.pipeline.maintenance import MaintenanceStore
-from app.pipeline.rollout import roll_out
+from app.pipeline.rollout import Restart, roll_out_all
 from app.pipeline.snapshots import SnapshotStore
 from app.pipeline.validation import validate_candidate
 from app.pipeline.verification import CheckResult, VerificationFailed, verify
 from app.sections import SectionName
 from app.sections.base import Cluster, Resources, SectionPlan, ValidationFailure
 from app.sections.registry import REGISTERED
+from app.sections.server_configuration import Role
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ class Engine:
         self._plans: dict[SectionName, SectionPlan] = {}
         self._rollout: set[SectionName] = set()
         self._raw_files_changed = False
-        self._server_configuration_changed = False
+        self._server_configuration_roles: set[Role] = set()
         self._warnings: list[ValidationFailure] = []
         self._verification: list[CheckResult] = []
         self._cluster = Cluster(trino=trino, kubernetes=kubernetes, settings=settings)
@@ -114,13 +115,13 @@ class Engine:
         self._raw_files_changed = await raw_files.changed(self._cluster)
         # The same question for Trino's own files, which every Apply renders from the Admin
         # values and the chart's wiring. Either can have moved without any Section moving.
-        self._server_configuration_changed = await server_configuration.changed(self._cluster)
+        self._server_configuration_roles = await server_configuration.changed_roles(self._cluster)
         self._warnings = await validate_candidate(
             self._desired,
             self._plans,
             self._cluster,
             self._apply_id,
-            admin_changed=self._raw_files_changed or self._server_configuration_changed,
+            admin_changed=self._raw_files_changed or bool(self._server_configuration_roles),
         )
 
     def warnings(self) -> list[ValidationFailure]:
@@ -194,19 +195,37 @@ class Engine:
         Apply on a Cluster with an Event Listener configured would terminate every running
         query for nothing.
         """
-        return bool(self._rollout) or self._raw_files_changed or self._server_configuration_changed
+        return (
+            bool(self._rollout) or self._raw_files_changed or bool(self._server_configuration_roles)
+        )
 
     async def roll_out(self) -> None:
+        """Restart the roles whose files changed, and only those.
+
+        The coordinator for a Section, a raw file -- raw files are mounted on it alone -- or its
+        own server configuration. The workers only for theirs: a catalog or a permission never
+        reaches a worker's files (§7.4), and a worker-only change drains rather than ending
+        every query.
+        """
         changed: list[str] = sorted(self._rollout)
-        if self._server_configuration_changed:
-            changed.append("server configuration")
+        if self._server_configuration_roles:
+            roles = " and ".join(sorted(self._server_configuration_roles))
+            changed.append(f"the {roles} server configuration")
         if self._raw_files_changed:
             changed.append("raw files")
-        await roll_out(
+        coordinator = (
+            bool(self._rollout)
+            or self._raw_files_changed
+            or "coordinator" in self._server_configuration_roles
+        )
+        await roll_out_all(
             self._kubernetes,
-            self._settings.coordinator_deployment_name,
+            restarts(
+                self._settings,
+                coordinator=coordinator,
+                workers="worker" in self._server_configuration_roles,
+            ),
             f"apply {self._apply_id} changed {', '.join(changed)}",
-            self._settings.rollout_timeout_seconds,
         )
 
     async def verify(self) -> None:
@@ -286,6 +305,28 @@ class Engine:
         return snapshot.number
 
 
+def restarts(settings: Settings, *, coordinator: bool, workers: bool) -> list[Restart]:
+    """The Deployments to restart, each with its own bound."""
+    chosen: list[Restart] = []
+    if coordinator:
+        chosen.append(
+            Restart(
+                settings.coordinator_deployment_name,
+                settings.rollout_timeout_seconds,
+                drains=False,
+            )
+        )
+    if workers:
+        chosen.append(
+            Restart(
+                settings.worker_deployment_name,
+                settings.worker_rollout_timeout_seconds,
+                drains=True,
+            )
+        )
+    return chosen
+
+
 class AdminEngine(Engine):
     """An Apply that carries an Admin change and creates no Snapshot.
 
@@ -346,9 +387,8 @@ class AdminEngine(Engine):
         # afterwards the answer is always no. Before this they were written *after* the
         # restart and the verification, so a restored file reached the coordinator only if
         # some Section happened to restart it.
-        admin_files_changed = await server_configuration.changed(
-            self._cluster
-        ) or await raw_files.changed(self._cluster)
+        roles = await server_configuration.changed_roles(self._cluster)
+        raw_changed = await raw_files.changed(self._cluster)
         await server_configuration.deliver(self._cluster)
         await raw_files.deliver(self._cluster)
         # And the coordinator restarted onto them *before* the Sections are restored: those
@@ -356,12 +396,15 @@ class AdminEngine(Engine):
         # it what it holds. Measured on kind with `query.max-run-time=1ms`: restoring first
         # asked the broken coordinator, failed, and declared an incident over a rollback that
         # one restart would have finished.
-        if admin_files_changed:
-            await roll_out(
+        if roles or raw_changed:
+            await roll_out_all(
                 self._kubernetes,
-                self._settings.coordinator_deployment_name,
+                restarts(
+                    self._settings,
+                    coordinator=raw_changed or "coordinator" in roles,
+                    workers="worker" in roles,
+                ),
                 f"auto rollback of apply {self._apply_id}: the admin's files",
-                self._settings.rollout_timeout_seconds,
             )
         await restore(sections, self._cluster)
 

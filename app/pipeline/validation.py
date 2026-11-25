@@ -343,6 +343,58 @@ async def ephemeral_trino(
 _NUMBERED_ERROR = re.compile(r"^\d+\) ")
 
 
+def _merged(
+    coordinator: dict[str, dict[str, str]], worker: dict[str, dict[str, str]]
+) -> dict[str, dict[str, str]]:
+    """Both roles' properties in one probe, the coordinator's value where they clash."""
+    return {file: {**worker[file], **coordinator[file]} for file in coordinator}
+
+
+def _clashing(coordinator: dict[str, dict[str, str]], worker: dict[str, dict[str, str]]) -> bool:
+    """Whether some key has a different value on each role."""
+    return any(
+        key in coordinator[file] and coordinator[file][key] != value
+        for file in worker
+        for key, value in worker[file].items()
+    )
+
+
+def _probe_node_and_log(admin_files: dict[str, dict[str, str]]) -> dict[str, str]:
+    files: dict[str, str] = {}
+    if admin_files["node.properties"]:
+        files[_NODE_PATH] = "".join(
+            f"{key}={value}\n"
+            for key, value in {**admin_files["node.properties"], **_PROBE_NODE}.items()
+        )
+    if admin_files["log.properties"]:
+        files[_LOG_PATH] = "".join(
+            f"{key}={value}\n" for key, value in sorted(admin_files["log.properties"].items())
+        )
+    return files
+
+
+async def _probe_the_workers_apart(
+    cluster: Cluster, validation_id: str, worker_files: dict[str, dict[str, str]]
+) -> None:
+    """Boot a probe on the workers' properties alone. Raises ValidationFailed if it will not."""
+    files = _probe_node_and_log(worker_files)
+    properties = {**worker_files["config.properties"], **_PROBE_CONFIG}
+    files[_CONFIG_PATH] = "".join(f"{key}={value}\n" for key, value in properties.items())
+    logger.info("probing the workers' properties on a probe of their own")
+    try:
+        async with ephemeral_trino(
+            cluster.kubernetes, cluster.settings, f"{validation_id}-workers", files
+        ):
+            pass
+    except ValidationFailed as failed:
+        raise ValidationFailed(
+            [
+                failure.model_copy(update={"reason": f"The workers' properties: {failure.reason}"})
+                for failure in failed.failures
+            ]
+        ) from failed
+
+
 def _why(logs: str) -> str:
     """The lines of a failed probe's log that say what went wrong."""
     interesting = [
@@ -477,17 +529,19 @@ async def validate_candidate(
     # The Admin's properties first and the probe's own wiring over them: the probe needs its
     # wiring to read the files under test at all, and the Admin's keys are what is on trial.
     # Sizing never reaches the probe -- see `probe_properties`.
-    admin_files = probe_properties(cluster.admin.server_configuration)
+    #
+    # The probe is a coordinator, and it judges the workers' properties too: measured on 483, a
+    # coordinator accepts worker-side properties and a worker coordinator-side ones, and both
+    # refuse a misspelled one. So the workers' keys join the coordinator's -- except where the
+    # two roles give one key different values, which one probe cannot hold both of. Those are
+    # proved on a second probe of the workers' own.
+    configuration = cluster.admin.server_configuration
+    coordinator_files = probe_properties(configuration, "coordinator")
+    worker_files = probe_properties(configuration, "worker")
+    admin_files = _merged(coordinator_files, worker_files)
+    worker_only = _clashing(coordinator_files, worker_files)
     properties = {**admin_files["config.properties"], **_PROBE_CONFIG}
-    if admin_files["node.properties"]:
-        files[_NODE_PATH] = "".join(
-            f"{key}={value}\n"
-            for key, value in {**admin_files["node.properties"], **_PROBE_NODE}.items()
-        )
-    if admin_files["log.properties"]:
-        files[_LOG_PATH] = "".join(
-            f"{key}={value}\n" for key, value in sorted(admin_files["log.properties"].items())
-        )
+    files.update(_probe_node_and_log(admin_files))
     # Which resource to blame if the probe refuses to start: Trino names the file, and the
     # file is the Section's, so the path is what ties a startup failure back to a resource.
     blame: dict[str, str] = {}
@@ -513,6 +567,9 @@ async def validate_candidate(
 
     if files or admin_files["config.properties"]:
         files[_CONFIG_PATH] = "".join(f"{key}={value}\n" for key, value in properties.items())
+
+    if worker_only:
+        await _probe_the_workers_apart(cluster, validation_id, worker_files)
 
     async with ephemeral_trino(
         cluster.kubernetes, cluster.settings, validation_id, files, blame

@@ -26,6 +26,7 @@ from app.pipeline.coordinator import Container, PodSpec, Volume, VolumeMount, co
 from app.pipeline.files import admin_mounted_secrets, credential_secrets, owned_paths
 from app.sections.permissions.generator import PROPERTIES_PATH, REFRESH_PERIOD
 from app.sections.registry import REGISTERED
+from app.sections.server_configuration import ROLE_PATHS, Role, secret_name
 
 __all__ = [
     "Container",
@@ -176,22 +177,59 @@ async def check(kubernetes: KubernetesAdapter, spec: PodSpec, settings: Settings
     #    every file there (ADR-0010), and a file of anyone else's would either be replaced by
     #    Apchi's mount at the same path -- Kubernetes merges mounts by path, measured on kind --
     #    or would put back into the directory a second owner that Apchi cannot see.
-    problems.extend(_foreign_mounts_in_config_dir(spec, volumes, settings))
+    #    On both roles: the workers' files are Apchi's as well. And every file Apchi renders for
+    #    a role must actually be mounted from Apchi's Secret, or Apchi would write it, report the
+    #    change applied, and Trino would go on reading something else.
+    problems.extend(_foreign_mounts_in_config_dir(spec, volumes, settings, "coordinator"))
+    problems.extend(_unmounted_rendered_files(spec, settings, "coordinator"))
+    worker = await _worker_spec(kubernetes, settings)
+    if worker is not None:
+        worker_volumes = {volume.name: volume for volume in worker.volumes}
+        problems.extend(_foreign_mounts_in_config_dir(worker, worker_volumes, settings, "worker"))
+        problems.extend(_unmounted_rendered_files(worker, settings, "worker"))
 
     if problems:
         raise PreconditionFailed(problems)
     logger.debug("deployment preconditions hold")
 
 
+def _unmounted_rendered_files(spec: PodSpec, settings: Settings, role: Role) -> list[str]:
+    """Files Apchi renders for this role that its Trino container does not mount from them."""
+    ours = secret_name(role, settings)
+    volumes = {volume.name: volume for volume in spec.volumes}
+    problems: list[str] = []
+    for container in spec.containers:
+        if container.name != settings.trino_container_name:
+            continue
+        mounted = {
+            mount.mount_path.rstrip("/"): volumes.get(mount.name)
+            for mount in container.volume_mounts
+        }
+        for path in ROLE_PATHS[role]:
+            volume = mounted.get(path)
+            if volume is None or volume.secret_name != ours:
+                problems.append(
+                    f"The {role} does not mount {path} from Secret {ours!r}, where Apchi renders "
+                    "it. Trino would read something else there -- or nothing -- and every change "
+                    "Apchi applied to it would be reported applied and never arrive. Mount each "
+                    f"key of {ours!r} at its file, as the chart does."
+                )
+    return problems
+
+
 def apchi_secrets(settings: Settings) -> set[str]:
-    """Every Secret Apchi writes that the coordinator may mount under /etc/trino."""
+    """Every Secret Apchi writes that a Trino pod may mount under /etc/trino."""
     return {
         spec.secret for section in REGISTERED for spec in section.coordinator_files(settings)
-    } | {settings.server_configuration_secret_name, settings.raw_files_secret_name}
+    } | {
+        settings.server_configuration_secret_name,
+        settings.worker_server_configuration_secret_name,
+        settings.raw_files_secret_name,
+    }
 
 
 def _foreign_mounts_in_config_dir(
-    spec: PodSpec, volumes: dict[str, Volume], settings: Settings
+    spec: PodSpec, volumes: dict[str, Volume], settings: Settings, role: str
 ) -> list[str]:
     """Mounts in Trino's configuration directory that come from somewhere other than Apchi.
 
@@ -221,7 +259,7 @@ def _foreign_mounts_in_config_dir(
                 else "a volume that is neither a Secret nor a ConfigMap"
             )
             problems.append(
-                f"Container {container.name!r} mounts {mount.name!r} ({source}) at "
+                f"The {role}'s container {container.name!r} mounts {mount.name!r} ({source}) at "
                 f"{mount.mount_path}. Apchi renders every file under {_CONFIG_DIR}, so "
                 "nothing else may be mounted there: set the properties through the Server "
                 "Configuration, or write the file as a Raw File, and remove this mount."
@@ -303,6 +341,7 @@ def _exposure_in(
     bearing = credential_secrets(REGISTERED, settings) | {
         settings.catalog_secret_name,
         settings.server_configuration_secret_name,
+        settings.worker_server_configuration_secret_name,
     }
     mounted = [volume for volume in spec.volumes if volume.secret_name in bearing]
     if not mounted:

@@ -178,6 +178,10 @@ spec:
             # mounts, so the files and the objects cannot disagree (ADR-0010).
             - name: APCHI_SERVER_CONFIGURATION_SECRET_NAME
               value: {{ .Values.secrets.serverConfiguration | quote }}
+            - name: APCHI_WORKER_SERVER_CONFIGURATION_SECRET_NAME
+              value: {{ .Values.secrets.workerServerConfiguration | quote }}
+            - name: APCHI_TRINO_WORKER_SHUTDOWN_GRACE_PERIOD
+              value: {{ printf "%ds" (int .Values.trino.worker.gracefulShutdown.gracePeriodSeconds) | quote }}
             - name: APCHI_TRINO_HTTP_PORT
               value: {{ .Values.trino.httpPort | int64 | quote }}
             - name: APCHI_TRINO_DISCOVERY_URI
@@ -223,6 +227,8 @@ spec:
               value: {{ .Values.validation.catalogConnectivityBlocksApply | quote }}
             - name: APCHI_ROLLOUT_TIMEOUT_SECONDS
               value: {{ .Values.timeouts.rolloutSeconds | int64 | quote }}
+            - name: APCHI_WORKER_ROLLOUT_TIMEOUT_SECONDS
+              value: {{ .Values.timeouts.workerRolloutSeconds | int64 | quote }}
             - name: APCHI_VALIDATION_TIMEOUT_SECONDS
               value: {{ .Values.timeouts.validationSeconds | int64 | quote }}
             {{- if include "apchi.hasTruststore" . }}

@@ -465,6 +465,9 @@ rendering a Trino that silently ignores it.
 {{- if hasKey .Values.trino "jvm" -}}
 {{- fail "trino.jvm is gone: the heap and JVM flags are per role now, under trino.coordinator.jvm and trino.worker.jvm" -}}
 {{- end -}}
+{{- if .Values.trino.additionalWorkerProperties -}}
+{{- fail "trino.additionalWorkerProperties is gone: Apchi renders the workers' config.properties. Set those properties through PUT /api/v1/admin/server-configuration, under worker (memory sizing is trino.worker.memory)" -}}
+{{- end -}}
 {{- if .Values.trino.additionalCoordinatorProperties -}}
 {{- fail "trino.additionalCoordinatorProperties is gone: Apchi renders the coordinator's config.properties. Set those properties through PUT /api/v1/admin/server-configuration (memory sizing is trino.coordinator.memory)" -}}
 {{- end -}}
@@ -506,4 +509,21 @@ Takes (dict "root" . "role" "coordinator|worker").
   value: {{ $role.memory.maxMemoryPerNode | quote }}
 - name: TRINO_MEMORY_HEAP_HEADROOM_PER_NODE
   value: {{ $role.memory.heapHeadroomPerNode | quote }}
+{{- end -}}
+
+{{/*
+The workers' termination grace period, checked against the drain it has to outlast: Trino waits
+its grace period, lets its tasks finish, and waits it again, so anything under twice that ends
+the drain early -- the tasks it was letting finish with it.
+*/}}
+{{- define "trino.workerTerminationGrace" -}}
+{{- $grace := int (required "trino.worker.gracefulShutdown.gracePeriodSeconds is required" .Values.trino.worker.gracefulShutdown.gracePeriodSeconds) -}}
+{{- $termination := int (required "trino.worker.terminationGracePeriodSeconds is required" .Values.trino.worker.terminationGracePeriodSeconds) -}}
+{{- if lt $grace 1 -}}
+{{- fail "trino.worker.gracefulShutdown.gracePeriodSeconds must be at least 1" -}}
+{{- end -}}
+{{- if lt $termination (mul 2 $grace) -}}
+{{- fail (printf "trino.worker.terminationGracePeriodSeconds (%d) is less than twice trino.worker.gracefulShutdown.gracePeriodSeconds (%d): Kubernetes would kill a worker before its drain can finish" $termination $grace) -}}
+{{- end -}}
+{{- $termination -}}
 {{- end -}}
