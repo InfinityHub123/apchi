@@ -1753,6 +1753,12 @@ Two departures from the first draft of this design, both found while building it
   `additionalCoordinatorProperties`. It moved with them, into the Server Configuration. The
   eighth precondition still reads the result from the coordinator's file.
 
+  Turning it on needs `internal-communication.shared-secret` too, on both roles and the same on
+  each: *measured* on 483, a coordinator with an authenticator and no secret refuses to start --
+  "Shared secret (internal-communication.shared-secret) is required when authentication is
+  enabled". Apchi does not check for it, because that failure is visible: the probe refuses the
+  Apply, or Verification fails and Auto Rollback restores the previous properties.
+
 ### Checks: only where a failure would be invisible
 
 Apchi does not judge whether the Admin's settings make sense. Trino judges that, and Auto

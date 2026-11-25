@@ -527,3 +527,57 @@ the drain early -- the tasks it was letting finish with it.
 {{- end -}}
 {{- $termination -}}
 {{- end -}}
+
+{{/*
+A container's securityContext: what Kubernetes' "restricted" Pod Security level demands of
+every container, and what OpenShift's restricted-v2 sets anyway. Both images run as a non-root
+user already -- Apchi as 10001, Trino as 1000 -- so nothing here changes what runs, only what
+the container may ask for.
+*/}}
+{{- define "apchi.containerSecurity" -}}
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities: {drop: [ALL]}
+  runAsNonRoot: true
+  seccompProfile: {type: RuntimeDefault}
+{{- end -}}
+
+{{/*
+The same for a Trino container, which also needs its uid stated: the image names its user
+`trino` rather than a number, and with runAsNonRoot the kubelet cannot verify a name and
+refuses the container -- measured on kind, "container has runAsNonRoot and image has
+non-numeric user (trino), cannot verify user is non-root". 1000 is that user. Left out under
+restrictedPodSecurity, where the platform assigns the uid and refuses one fixed here.
+*/}}
+{{- define "trino.containerSecurity" -}}
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities: {drop: [ALL]}
+  runAsNonRoot: true
+  seccompProfile: {type: RuntimeDefault}
+  {{- if and (not .Values.restrictedPodSecurity) .Values.trino.runAsUser }}
+  runAsUser: {{ .Values.trino.runAsUser }}
+  {{- end }}
+{{- end -}}
+
+{{/*
+A Trino role's startup and liveness probes, both Trino's own health-check script, as the
+readiness probe is. Startup covers the boot, so liveness never sees a coordinator still loading
+and kills it. Liveness is loose on purpose: restarting the coordinator ends every query, so it
+only fires on a Trino that has stopped answering for minutes, not one in a long GC pause. A
+draining worker still answers, so a drain never trips it. Takes (dict "root" . "role" ...).
+*/}}
+{{- define "trino.probes" -}}
+{{- $role := index .root.Values.trino .role -}}
+startupProbe:
+  exec: {command: ["/usr/lib/trino/bin/health-check"]}
+  periodSeconds: {{ $role.startupProbe.periodSeconds }}
+  failureThreshold: {{ $role.startupProbe.failureThreshold }}
+{{- if $role.livenessProbe.enabled }}
+livenessProbe:
+  exec: {command: ["/usr/lib/trino/bin/health-check"]}
+  periodSeconds: {{ $role.livenessProbe.periodSeconds }}
+  timeoutSeconds: {{ $role.livenessProbe.timeoutSeconds }}
+  failureThreshold: {{ $role.livenessProbe.failureThreshold }}
+{{- end }}
+{{- end -}}
