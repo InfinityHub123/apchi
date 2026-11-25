@@ -256,3 +256,165 @@ JVM by Kubernetes' own $(VAR) expansion, so it is never in a ConfigMap or the po
 {{- end -}}
 {{- $d | toJson -}}
 {{- end -}}
+
+{{/*
+Route or Ingress. `auto` asks the API being installed into, which only `helm install` and
+`helm upgrade` can do: `helm template` and GitOps renderers see no cluster, find no Route API,
+and would always choose an Ingress -- so they set `route` or `ingress` outright.
+*/}}
+{{- define "trino.httpsKeystore" -}}/data/trino-https/keystore.pem{{- end -}}
+
+{{- define "apchi.exposeKind" -}}
+{{- $kind := .Values.expose.kind -}}
+{{- if eq $kind "auto" -}}
+{{- if .Capabilities.APIVersions.Has "route.openshift.io/v1/Route" -}}route{{- else -}}ingress{{- end -}}
+{{- else if has $kind (list "route" "ingress") -}}
+{{- $kind -}}
+{{- else -}}
+{{- fail (printf "expose.kind must be auto, route or ingress, not %q" $kind) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Whether Trino is exposed through something that ends TLS in front of it. Trino then sees
+plain HTTP from the router and, without trusting X-Forwarded-Proto, refuses password and
+OAuth authentication as insecure.
+*/}}
+{{- define "trino.behindTlsProxy" -}}
+{{- $e := .Values.expose.trino -}}
+{{- if and $e.host (ne ($e.termination | default "edge") "passthrough") -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+The CA a `reencrypt` Route verifies its backend with: the value given, or the chart's
+caBundle as it exists in the cluster. `lookup` sees the cluster only on install and upgrade,
+so a rendered manifest carries no CA and the router falls back to the service CA.
+*/}}
+{{- define "apchi.reencryptCa" -}}
+{{- $root := .root -}}
+{{- if .exposure.destinationCACertificate -}}
+{{- .exposure.destinationCACertificate -}}
+{{- else if include "apchi.hasCaBundle" $root -}}
+{{- $s := $root.Values.caBundle -}}
+{{- if $s.configMap -}}
+{{- $found := lookup "v1" "ConfigMap" $root.Release.Namespace $s.configMap -}}
+{{- if $found -}}{{- index ($found.data | default dict) $s.key | default "" -}}{{- end -}}
+{{- else -}}
+{{- $found := lookup "v1" "Secret" $root.Release.Namespace $s.existingSecret -}}
+{{- if $found -}}{{- index ($found.data | default dict) $s.key | default "" | b64dec -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The annotations an Ingress controller needs for the terminations Ingress has no field for.
+Only the controllers named; any other takes its own through `annotations`.
+*/}}
+{{- define "apchi.ingressTerminationAnnotations" -}}
+{{- $controller := .controller -}}
+{{- if eq .termination "passthrough" -}}
+{{- if eq $controller "nginx" }}
+nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+{{- else if eq $controller "haproxy" }}
+haproxy.org/ssl-passthrough: "true"
+{{- end }}
+{{- else if eq .termination "reencrypt" -}}
+{{- if eq $controller "nginx" }}
+nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+{{- else if eq $controller "haproxy" }}
+haproxy.org/server-ssl: "true"
+{{- end }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+One Route or one Ingress in front of one Service, or nothing when no host is set. `edge`
+reaches the Service's `http` port; `passthrough` and `reencrypt` reach `https`, because the
+router then speaks TLS to the pod.
+*/}}
+{{- define "apchi.exposure" -}}
+{{- $root := .root -}}
+{{- $e := .exposure -}}
+{{- if $e.host }}
+{{- $termination := $e.termination | default "edge" -}}
+{{- if not (has $termination (list "edge" "passthrough" "reencrypt")) -}}
+{{- fail (printf "expose.%s.termination must be edge, passthrough or reencrypt, not %q" .component $termination) -}}
+{{- end -}}
+{{- if and (ne $termination "edge") (not .https) -}}
+{{- if eq .component "trino" -}}
+{{- fail (printf "expose.trino.termination %s sends TLS to the pod: set trino.https.enabled and trino.https.existingSecret, or use edge." $termination) -}}
+{{- else -}}
+{{- fail (printf "expose.%s.termination %s sends TLS to the pod, and %s serves only plain HTTP. Use edge." .component $termination .component) -}}
+{{- end -}}
+{{- end -}}
+{{- $port := ternary "http" "https" (eq $termination "edge") -}}
+{{- $controller := $root.Values.expose.ingress.controller -}}
+{{- if not (has $controller (list "" "nginx" "haproxy")) -}}
+{{- fail (printf "expose.ingress.controller must be nginx, haproxy or empty, not %q" $controller) -}}
+{{- end }}
+---
+{{- if eq (include "apchi.exposeKind" $root) "route" }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ .name }}
+  labels: {{- .labels | nindent 4 }}
+  {{- with $e.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  host: {{ $e.host | quote }}
+  to:
+    kind: Service
+    name: {{ .service }}
+    weight: 100
+  port:
+    targetPort: {{ $port }}
+  tls:
+    termination: {{ $termination }}
+    {{- if ne $termination "passthrough" }}
+    insecureEdgeTerminationPolicy: Redirect
+    {{- end }}
+    {{- if eq $termination "reencrypt" }}
+    {{- with include "apchi.reencryptCa" (dict "root" $root "exposure" $e) }}
+    destinationCACertificate: |
+      {{- . | trim | nindent 6 }}
+    {{- end }}
+    {{- end }}
+  wildcardPolicy: None
+{{- else }}
+{{- $annotations := include "apchi.ingressTerminationAnnotations" (dict "controller" $controller "termination" $termination) | fromYaml | default dict }}
+{{- $annotations = merge (deepCopy ($e.annotations | default dict)) $annotations }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .name }}
+  labels: {{- .labels | nindent 4 }}
+  {{- with $annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $root.Values.expose.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- if ne $termination "passthrough" }}
+  tls:
+    - hosts: [{{ $e.host | quote }}]
+      {{- with $e.tlsSecret }}
+      secretName: {{ . | quote }}
+      {{- end }}
+  {{- end }}
+  rules:
+    - host: {{ $e.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .service }}
+                port:
+                  name: {{ $port }}
+{{- end }}
+{{- end }}
+{{- end -}}

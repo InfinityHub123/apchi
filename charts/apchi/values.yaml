@@ -67,7 +67,8 @@ auth:
     # port-forward is in front of it, and it must be registered with the provider verbatim.
     #
     # A wrong one is a login loop with no error anywhere -- the provider refuses a redirect
-    # URI it does not recognise, and the browser never gets as far as Apchi. Set it.
+    # URI it does not recognise, and the browser never gets as far as Apchi. Set it, or set
+    # expose.apchi.host and it becomes https://<host>/api/v1/auth/sso/callback.
     redirectUrl: ""
     # `groups` is not a standard OIDC scope, and providers disagree about whether one is
     # needed to emit group membership at all: Dex and Keycloak want it, Entra puts roles in
@@ -116,6 +117,41 @@ candidateMaxBytes: 15728640
 service:
   type: ClusterIP
   port: 8000
+
+# Apchi and Trino reached from outside the cluster: a Route on OpenShift, an Ingress anywhere
+# else. Each is created only when its host is set, and there is no default host.
+expose:
+  # auto creates a Route where the API serves route.openshift.io/v1 and an Ingress
+  # otherwise. Only `helm install` and `helm upgrade` can ask: `helm template`, Argo CD and
+  # other renderers see no cluster, so they would always get an Ingress. Set route or
+  # ingress there.
+  kind: auto  # auto | route | ingress
+  ingress:
+    className: ""
+    # Ingress has no field for passthrough or reencrypt, so each controller takes its own
+    # annotation. Named here, the chart adds it; any other controller takes it through the
+    # exposure's `annotations`.
+    controller: ""  # nginx | haproxy | ""
+  apchi:
+    host: ""
+    # edge only: Apchi serves plain HTTP, so there is no TLS for a router to pass through.
+    termination: edge
+    # Ingress with edge: the Secret holding the certificate the controller presents. Empty
+    # uses the controller's default certificate. A Route uses the router's.
+    tlsSecret: ""
+    annotations: {}
+  trino:
+    host: ""
+    # edge | passthrough | reencrypt. passthrough and reencrypt need trino.https. Behind
+    # edge or reencrypt Trino is told to trust X-Forwarded-Proto, or it sees plain HTTP from
+    # the router and refuses password and OAuth authentication.
+    termination: edge
+    tlsSecret: ""
+    # A Route with reencrypt: the CA that signed Trino's server certificate, in PEM. Empty
+    # takes caBundle from the cluster at install time, and failing that the router's
+    # service CA. Argo CD renders without reading the cluster, so set it there.
+    destinationCACertificate: ""
+    annotations: {}
 
 serviceAccount:
   create: true
@@ -235,6 +271,20 @@ trino:
   # node.environment. Lowercase alphanumeric and underscores only; Trino rejects the rest.
   environment: production
   httpPort: 8080
+
+  # Trino serving HTTPS itself, on the coordinator. Needed for expose.trino.termination
+  # passthrough or reencrypt, where the router speaks TLS to the pod; edge needs none of it.
+  # Plain HTTP stays on httpPort beside it, for the workers and for Apchi.
+  #
+  # existingSecret holds the server certificate and its key apart, the way cert-manager
+  # writes them. Trino reads a PEM keystore only as one file holding both, so an
+  # initContainer joins them at pod start into a volume only this pod can read.
+  https:
+    enabled: false
+    port: 8443
+    existingSecret: ""
+    certificateKey: tls.crt
+    keyKey: tls.key
 
   # How often Trino re-reads the access-control rules. Not optional: without it the rules
   # are read once at startup, and Apchi would report a permission change the Cluster never
