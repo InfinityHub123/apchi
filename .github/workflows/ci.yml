@@ -195,3 +195,60 @@ jobs:
           kubectl describe deploy/trino-coordinator
           kubectl logs deploy/trino-coordinator -c seed-catalogs --tail=50 || true
           kubectl logs deploy/trino-coordinator -c trino --tail=100 || true
+
+  network-policy:
+    # charts/apchi's NetworkPolicy, enforced. Its own job because the tier 2 clusters run kind's
+    # default network plugin, kindnet, which accepts a NetworkPolicy and enforces none of it --
+    # a policy tested there passes whatever it says. This cluster runs Calico instead, and the
+    # test refuses to run on a cluster without it rather than pass vacuously.
+    name: NetworkPolicy -- enforced, on kind with Calico
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --extra dev
+      - name: Install Helm
+        run: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Cluster config without kindnet
+        run: |
+          cat > kind-calico.yaml <<'CONFIG'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          networking:
+            disableDefaultCNI: true
+            podSubnet: 192.168.0.0/16
+          CONFIG
+      - name: Create cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: apchi
+          config: kind-calico.yaml
+          # No network plugin yet, so the node is not Ready until Calico is in.
+          wait: 0s
+      - name: Install Calico
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.29.1/manifests/calico.yaml
+          kubectl -n kube-system rollout status ds/calico-node --timeout=600s
+          kubectl wait --for=condition=ready node --all --timeout=300s
+
+      - name: Deploy Trino
+        run: |
+          kubectl apply -f deploy/trino-dev/
+          kubectl rollout status deploy/trino-coordinator --timeout=600s
+          kubectl rollout status deploy/trino-worker --timeout=600s
+
+      - name: NetworkPolicy -- against the enforcing cluster
+        # Not APCHI_-prefixed: Apchi refuses to start with an APCHI_ variable it does not read,
+        # and the test suite builds its Settings on import.
+        env:
+          REQUIRE_POLICY_ENFORCEMENT: "1"
+        run: uv run pytest tests/network_policy -q -rs
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide
+          kubectl get networkpolicy -A

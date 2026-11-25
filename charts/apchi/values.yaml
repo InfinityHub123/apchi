@@ -280,6 +280,13 @@ trino:
     # At least twice the grace period, plus the longest task you want a drain to wait for.
     # The render fails below twice it.
     terminationGracePeriodSeconds: 600
+    # How many workers a node drain or a cluster upgrade may take at once. Each drains first,
+    # so the default lets a drain proceed one worker at a time without ending their tasks.
+    # Set minAvailable instead, not both. Workers only: a budget on the single coordinator
+    # would either protect nothing or block every node drain.
+    podDisruptionBudget:
+      enabled: true
+      maxUnavailable: 1
     # Sizing, which is this chart's and not Apchi's, because it has to fit the memory limit
     # in resources: the heap and every JVM flag go into JDK_JAVA_OPTIONS, and query memory
     # into the variables Apchi's config.properties refers to. The render fails when the heap
@@ -379,6 +386,28 @@ trino:
 # dropped capabilities, the uid -- the platform adds to every pod itself, and the image runs
 # as any uid. This setting only decides fsGroup and file modes.
 restrictedPodSecurity: false
+
+# Who may reach Trino's pods. Off by default, because turning it on cuts off every client this
+# chart cannot know about -- a Trino Gateway, BI tools in another namespace -- until they are
+# listed below. Turn it on: without it, any pod that can route to the coordinator can query it,
+# and with `insecure` authentication it can claim to be any user.
+#
+# What is always allowed: Trino's own pods, Apchi, and the router or ingress controller when
+# Trino is exposed by expose.trino. Egress is never restricted -- Trino reaches databases, object
+# stores and DNS the chart cannot enumerate. Your cluster's network plugin must enforce
+# NetworkPolicy, or this renders and protects nothing; kind's default plugin does not.
+networkPolicy:
+  enabled: false
+  # Extra NetworkPolicyPeers allowed to the coordinator, e.g.
+  #   - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: trino-gateway}}
+  coordinator:
+    from: []
+  # And to the workers -- normally nothing: only Trino talks to a worker.
+  worker:
+    from: []
+  # Where the ingress controller runs, when Trino is exposed by an Ingress. Required then; a
+  # Route needs nothing, OpenShift's router namespace is selected by its own labels.
+  ingressControllerNamespaceSelector: {}
 
 # The certificate authorities every pod trusts, mounted into each one the same way. Both are
 # optional and render nothing when unset, and both are named rather than looked up: Helm's
