@@ -186,6 +186,13 @@ undoes one:
   For platform upgrades, and what an auto rollback failure engages.
 - **Preserved certificate mapping patterns**, for a migration that has to keep an old pattern
   working.
+- **Server configuration.** Trino's own files — `config.properties`, `node.properties`,
+  `log.properties` and the rest under `/etc/trino` — are rendered by Apchi, not by the chart
+  (ADR-0010). The lines that name something the deployment creates, a port, a path, a Service,
+  come from the chart and nobody edits them in Apchi; so does sizing, the heap and query
+  memory, which has to fit the pod's memory limit. Every other property is the admin's, as a
+  map per file with no schema over it: Trino judges it, on the validation probe before the
+  cluster ever sees it. Like raw files, these never enter a snapshot.
 - **Raw files.** An admin writes a path under Trino's configuration directory and the content
   to put there, and Apchi delivers it with no schema over it: if Trino accepts it, it works;
   if not, validation refuses it; if the cluster fails anyway, auto rollback takes it back. The
@@ -194,7 +201,9 @@ undoes one:
   request time by a typed model, a typo in a raw file is a validation failure minutes later.
 
   A raw file's path is the admin's to choose, which makes it a single-file mount — so it needs
-  a coordinator that mounts `/etc/trino` file by file, as Apchi's own chart does.
+  a coordinator that mounts `/etc/trino` file by file, as Apchi's own chart does. It cannot be
+  one of the files Apchi renders itself, nor a path the deployment already mounts: either
+  would replace a file somebody else owns.
 
 **End users** query Trino. They are never Apchi users — only the subject of permissions and
 resource groups.

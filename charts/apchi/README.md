@@ -72,11 +72,14 @@ does not create.
 | `trino.coordinator.resources`, `trino.worker.resources`, `trino.coordinator.seedResources` | `{}` | Requests and limits for the two roles and for the catalog-seeding initContainer. Each renders nothing when empty |
 | `trino.coordinator.*`, `trino.worker.*` | | Also `nodeSelector`, `tolerations`, `affinity`, `podAnnotations` and `readinessProbe` |
 | `trino.environment` | `production` | `node.environment`; lowercase alphanumeric and underscores only |
-| `trino.jvm.maxHeapSize` | `2G` | Per node |
+| `trino.coordinator.jvm.maxHeapSize`, `trino.worker.jvm.maxHeapSize` | `2G` | The heap, in `-Xmx` units. Into `JDK_JAVA_OPTIONS`, never a file: `jvm.config` is read after it and its last `-Xmx` would win. The render fails when it exceeds the role's `resources.limits.memory` |
+| `trino.coordinator.jvm.extraArgs`, `trino.worker.jvm.extraArgs` | `[]` | JVM flags, after the chart's defaults (G1, exit on OOM), so one here wins over them |
+| `trino.coordinator.memory.queryMaxMemory` | `20GB` | `query.max-memory`, in Trino's units (`MB`, `GB`): the whole Cluster's ceiling for one query |
+| `trino.<role>.memory.maxMemoryPerNode`, `.heapHeadroomPerNode` | `600MB`, `600MB` | `query.max-memory-per-node` and `memory.heap-headroom-per-node`, reaching Trino as `${ENV:...}` from the pod. The render fails when their sum exceeds the heap -- Trino refuses that at startup anyway |
 | `trino.fsGroup` | `1000` | The group that owns the credential volumes, which are `0640`. On OpenShift's `restricted-v2` it must be a group the namespace allows -- the first of its `openshift.io/sa.scc.supplemental-groups` annotation -- or the pods are refused. `null` renders none, which Apchi accepts only with `restrictedPodSecurity` set. See [OpenShift and other restricted clusters](../../docs/deploying/openshift.md) |
-| `trino.securityRefreshPeriod` | `30s` | How soon a permission change takes effect. Lower is a faster Apply and more file reads |
+| `trino.securityRefreshPeriod` | `30s` | How soon a permission change takes effect. Lower is a faster Apply and more file reads. Required: Apchi refuses to start without it |
 | `trino.authentication.type` | `insecure` | `certificate` for production. Both feed the same file to the same parser; Trino rejects the certificate variant unless certificate authentication is configured (§13.3) |
-| `trino.additionalCoordinatorProperties`, `trino.additionalWorkerProperties` | `[]` | Verbatim into `config.properties`. Properties Apchi owns are not yours to set here, and the preconditions will say so |
+| `trino.additionalWorkerProperties` | `[]` | Verbatim into the workers' `config.properties`, until Apchi renders those too. The coordinator's properties are set in Apchi -- `PUT /api/v1/admin/server-configuration` -- and `trino.additionalCoordinatorProperties` fails the render, saying so |
 | `trino.catalogStoreDir` | `/data/trino/catalogs` | Where Trino keeps its dynamic catalog store, inside its writable data directory `/data/trino` |
 | `trino.verificationCatalog` | `system` | What the smoke query reads |
 | `mongodb.uri` | — | Required unless `mongodb.deploy`. With `mongodb.tls` set it may carry `?authMechanism=MONGODB-X509`, which is worth preferring: the URI then holds no secret at all, where a SCRAM password in it sits in `helm get values` and the pod spec |
@@ -92,6 +95,7 @@ does not create.
 | `pod.credentialFileMode` | `0640` | Not `0600`: the kubelet ORs `0440` into every file in a read-only volume, so `0600` cannot be produced. `0644` would leave a private key world-readable. Ignored under `restrictedPodSecurity`, where `0644` is the only mode an arbitrary uid can read |
 | `mongodb.deploy`, `mongodb.image` | `false`, `mongo:7` | A MongoDB beside Apchi, for trying it out. Loses Snapshots on restart |
 | `secrets.*` | see above | Must be what Trino mounts |
+| `secrets.serverConfiguration` | `trino-server-config-coordinator` | The coordinator's own files -- `config.properties`, `jvm.config`, `node.properties`, `log.properties`, `catalog-store.properties`, `access-control.properties` -- which Apchi renders and this chart only mounts (ADR-0010). Not created by the chart: Apchi writes it on its first start, and the coordinator waits in `ContainerCreating` until then |
 | `volumes.*` | `apchi-*` | The volumes Apchi adds to the coordinator's pod template. Everything else there is the Admin's. The user-mapping Secret is not here: the Admin mounts it as a directory and Apchi only fills it |
 | `deployment.providesResourceGroupsProperties` | `false` | Set on a coordinator that mounts the whole of `/etc/trino`, where Apchi cannot mount `resource-groups.properties` itself. The deployment then provides it, pointing `resource-groups.config-file` at `/etc/trino/resource-groups/` |
 | `deployment.setsEventListenerConfigFiles` | `false` | The same, for `event-listener.config-files` naming a file in `/etc/trino/event-listener/`. Costs the ability to empty that Section, because Trino refuses to start without the file the property names |

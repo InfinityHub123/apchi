@@ -190,25 +190,6 @@ async def test_a_path_apchi_generates_is_refused_naming_the_owner(
     assert response.json()["details"][0]["property"] == "path"
 
 
-async def test_the_admins_own_access_control_properties_is_writable(
-    as_admin: AsyncClient,
-) -> None:
-    """Not everything near Apchi's files is Apchi's.
-
-    `/etc/trino/access-control.properties` is the Admin's own file -- it points Trino at the
-    rules directory Apchi fills -- so writing it raw is exactly the escape hatch working. If
-    they leave out the refresh period, precondition 5 refuses the Apply, which is "if it works
-    it works" doing its job rather than this endpoint second-guessing them.
-    """
-    response = await _write(
-        as_admin,
-        "/etc/trino/access-control.properties",
-        content="access-control.name=file\nsecurity.refresh-period=1s\n",
-    )
-
-    assert response.status_code == 200, response.text
-
-
 @pytest.mark.parametrize(
     "path",
     [
@@ -350,3 +331,88 @@ async def test_config_properties_is_refused_there_too(
     refused = await _write(as_admin, "/etc/trino/config.properties")
 
     assert refused.status_code == 422, refused.text
+
+
+# --- the files Apchi renders itself (ADR-0010) ---------------------------------------------
+
+#: Every file Apchi now renders under /etc/trino. A raw file at one would replace the whole
+#: file, wiring included -- Kubernetes merges container mounts by path, measured on kind.
+RENDERED = (
+    "/etc/trino/config.properties",
+    "/etc/trino/jvm.config",
+    "/etc/trino/node.properties",
+    "/etc/trino/log.properties",
+    "/etc/trino/catalog-store.properties",
+    "/etc/trino/access-control.properties",
+)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        *RENDERED,
+        # The same files, spelled the ways a path can be spelled. Normalised before it is
+        # compared, or the rule would have a hole the width of a dot.
+        "/etc/trino/./config.properties",
+        "/etc/trino//jvm.config",
+        "/etc/trino/extra/../log.properties",
+        "/etc/trino/x/./../node.properties",
+        "/etc/trino/catalog-store.properties/",
+    ],
+)
+async def test_a_file_apchi_renders_is_refused_and_points_at_the_server_configuration(
+    as_admin: AsyncClient, path: str
+) -> None:
+    refused = await _write(as_admin, path, "query.max-memory=1GB\n")
+
+    assert refused.status_code == 422, refused.text
+    assert "renders" in refused.json()["message"]
+    assert "/api/v1/admin/server-configuration" in refused.json()["message"]
+    assert (await as_admin.get(FILES)).json() == [], "a refused file was stored anyway"
+
+
+async def test_the_same_name_somewhere_else_is_an_ordinary_raw_file(as_admin: AsyncClient) -> None:
+    """Only the six paths Trino reads are Apchi's. A file that happens to share a name, in a
+    directory Trino does not read it from, is the Admin's like any other."""
+    accepted = await _write(as_admin, "/etc/trino/extra/config.properties")
+
+    assert accepted.status_code == 200, accepted.text
+
+
+async def test_a_path_the_deployment_already_mounts_is_refused(
+    as_admin: AsyncClient, fake_kubernetes: FakeKubernetes
+) -> None:
+    """Apchi's mount would replace the deployment's -- mounts merge by path -- and the next
+    sync of the deployment would silently put theirs back, which is what happened to a raw
+    config.properties on kind."""
+    fake_kubernetes.pod_spec["containers"][0]["volumeMounts"].append(
+        {
+            "name": "chart-file",
+            "mountPath": "/etc/trino/exchange-manager.properties",
+            "subPath": "x",
+        }
+    )
+    fake_kubernetes.pod_spec["volumes"].append({"name": "chart-file", "configMap": {"name": "c"}})
+
+    refused = await _write(as_admin, "/etc/trino/exchange-manager.properties")
+
+    assert refused.status_code == 422, refused.text
+    assert "already mounts 'chart-file'" in refused.json()["message"]
+
+
+async def test_rewriting_a_raw_file_apchi_already_mounts_is_not_that_refusal(
+    as_admin: AsyncClient, fake_kubernetes: FakeKubernetes, settings: Settings
+) -> None:
+    """The mount at that path is Apchi's own raw-file mount, so changing the content of a file
+    that is already delivered must still work."""
+    path = "/etc/trino/session-property-config.properties"
+    fake_kubernetes.pod_spec["containers"][0]["volumeMounts"].append(
+        {"name": settings.raw_files_volume_name, "mountPath": path, "subPath": "k"}
+    )
+    fake_kubernetes.pod_spec["volumes"].append(
+        {"name": settings.raw_files_volume_name, "secret": {"secretName": "trino-admin-raw-files"}}
+    )
+
+    rewritten = await _write(as_admin, path, "session-property-config.configuration-manager=file\n")
+
+    assert rewritten.status_code == 200, rewritten.text

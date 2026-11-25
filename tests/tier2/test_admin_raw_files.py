@@ -6,24 +6,28 @@ that Trino actually consumes the file. A delivery mechanism that satisfies Apchi
 and lands somewhere Trino never looks passes every tier 1 test and does nothing.
 
 That distinction is load-bearing, and it was not what the first version of this file assumed.
-Trino reads `config.properties`, `node.properties`, `jvm.config` and its catalog files; an
-arbitrary `.properties` file in `/etc/trino` is **ignored**. So the mechanics are tested
-against a path Trino ignores, and delivery itself is proved against `config.properties`.
+An arbitrary `.properties` file in `/etc/trino` is **ignored**. So the mechanics are tested
+against a path Trino ignores, and delivery itself is proved against a file Trino reads by
+itself when it exists -- `session-property-config.properties` -- now that `config.properties`
+and the other files Trino reads at start are Apchi's to render (ADR-0010).
 """
 
 import asyncio
+import json
+from pathlib import Path
 
 import pytest
 from httpx import AsyncClient
 
+from app.adapters.trino import Trino
 from app.config import Settings
 from tests.tier2.conftest import (
-    ForwardedKubernetes,
+    COORDINATOR,
+    SERVER_CONFIG_SECRET,
     PortForward,
-    _restore_baseline,
+    _live_secret,
     kubectl,
     mounted_paths,
-    running_apchi,
 )
 
 pytestmark = pytest.mark.tier2
@@ -37,8 +41,14 @@ RAW_VOLUME = "apchi-admin-raw-files"
 #: wrong first time.
 RAW_PATH = "/etc/trino/apchi-raw-test.properties"
 
-#: The file Trino really does read, for the one test that proves delivery reaches it.
-CONFIG_PATH = "/etc/trino/config.properties"
+#: A file Trino reads by itself when it is there, and refuses to start over when it is wrong:
+#: the session property manager's. Two raw files -- this one, and the rules it points at.
+SESSION_CONFIG = "/etc/trino/session-property-config.properties"
+SESSION_RULES = "/etc/trino/session-properties.json"
+SESSION_CONTENT = (
+    "session-property-config.configuration-manager=file\n"
+    f"session-property-manager.config-file={SESSION_RULES}\n"
+)
 
 
 async def _write(client: AsyncClient, content: str, path: str = RAW_PATH) -> None:
@@ -117,45 +127,117 @@ async def test_a_file_trino_does_not_read_is_delivered_and_harmless(
     assert record["snapshot"] is None, "an Admin Apply creates no Snapshot (§14)"
 
 
-async def test_trino_reads_a_raw_config_properties(
-    settings: Settings,
-    forwarded_kubernetes: ForwardedKubernetes,
-    forward: PortForward,
+def _coordinator_pod() -> str:
+    pods = json.loads(
+        kubectl("get", "pods", "-l", "app.kubernetes.io/component=coordinator", "-o", "json")
+    )["items"]
+    running = [pod for pod in pods if pod["status"].get("phase") == "Running"]
+    assert len(running) == 1, [pod["metadata"]["name"] for pod in pods]
+    return str(running[0]["metadata"]["uid"])
+
+
+async def _admin_apply(client: AsyncClient) -> dict:
+    started = await client.post(ADMIN_APPLIES, json={})
+    assert started.status_code == 202, started.text
+    return await _settled(client, started.json()["id"], timeout=900.0)
+
+
+async def test_trino_reads_raw_files_delivered_with_the_server_configuration(
+    e2e_client: AsyncClient, forward: PortForward, settings: Settings
 ) -> None:
-    """The assertion that actually proves delivery: a file Trino **does** read.
-
-    The deployment's own `config.properties` plus one property Trino rejects. Trino then fails
-    to start, which is only possible if it read the file Apchi delivered -- a mount landing
-    somewhere Trino never looks would leave the Cluster healthy, which is exactly what the
-    test above shows happens for an unread path.
-
-    It also exercises the limit §14 records: `config.properties` is the one raw file the probe
-    cannot validate, because the probe assembles its own. So this fails on the **Cluster**, and
-    Auto Rollback is what puts it back.
-    """
-    live = kubectl("exec", "deploy/trino-coordinator", "--", "cat", CONFIG_PATH)
-    assert "coordinator=true" in live, live
-
-    # A short rollout timeout, because what is under test is that Trino *rejected* the file --
-    # not how long Apchi waits for a pod that will never be ready. With the 600s default this
-    # test waits out the whole timeout to learn something it knows within seconds, which is
-    # the difference between a slow test and an unrunnable one in CI.
-    impatient = settings.model_copy(update={"rollout_timeout_seconds": 90.0})
-    async with running_apchi(impatient, forwarded_kubernetes, forward) as client:
-        await _write(client, f"{live}\nthis-is-not-a-trino-property=whatever\n", path=CONFIG_PATH)
-        started = await client.post(ADMIN_APPLIES, json={})
-        assert started.status_code == 202, started.text
-        record = await _settled(client, started.json()["id"], timeout=300.0)
-
-    assert record["stage"] in ("failed", "incident"), (
-        "Trino started cleanly with a config.properties it should have rejected, which means "
-        f"it never read the file Apchi delivered: {record}"
+    """The assertion that proves delivery: Trino's own session property manager, configured
+    entirely by two raw files, sets a session default for Apchi's identity -- and a Server
+    Configuration property arrives in the same Admin Apply, for one restart."""
+    rules = [
+        {
+            "user": f"{settings.trino_user}.*",
+            "sessionProperties": {"query_max_execution_time": "7h"},
+        }
+    ]
+    await _write(e2e_client, SESSION_CONTENT, path=SESSION_CONFIG)
+    await _write(e2e_client, json.dumps(rules), path=SESSION_RULES)
+    response = await e2e_client.put(
+        "/api/v1/admin/server-configuration",
+        json={"coordinator": {"config.properties": {"query.max-run-time": "5h"}}},
     )
+    assert response.status_code == 200, response.text
 
-    # Put the Cluster back, because this test deliberately broke it. Auto Rollback restores
-    # Sections from the latest Snapshot, which is not the same as the manifests the suite
-    # starts from -- so the catalog seed can be left differing from `deploy/trino-dev`, and
-    # every later test in this shard would inherit that. A test that breaks a Cluster on
-    # purpose is the one that should pay for putting it back, rather than leaving the rest of
-    # the shard to tolerate it.
-    _restore_baseline(settings)
+    record = await _admin_apply(e2e_client)
+
+    assert record["stage"] == "succeeded", record
+    assert [event["stage"] for event in record["history"]].count("rolling_out") == 1
+    forward.restart()
+    trino = Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
+    shown = {row[0]: row[1] for row in await trino.query("SHOW SESSION LIKE 'query_max_%'")}
+    assert shown["query_max_execution_time"] == "7h", "the raw files were not read"
+    assert shown["query_max_run_time"] == "5.00h", "the server configuration was not read"
+
+
+@pytest.mark.parametrize(
+    ("content", "trino_says"),
+    [
+        ("session-property-config.configuration-manager=nosuch\n", "is not registered"),
+        ("nonsense=1\n", "does not contain"),
+        (
+            "session-property-config.configuration-manager=file\n"
+            "session-property-manager.config-file=/etc/trino/missing.json\n",
+            "file does not exist",
+        ),
+    ],
+)
+async def test_a_raw_file_trino_refuses_is_refused_on_the_probe(
+    e2e_client: AsyncClient, content: str, trino_says: str
+) -> None:
+    """Before this stage a raw file was probed only when some Section had something to probe,
+    and on an empty Cluster this would have reached the coordinator."""
+    before = _coordinator_pod()
+    await _write(e2e_client, content, path=SESSION_CONFIG)
+
+    record = await _admin_apply(e2e_client)
+
+    assert record["stage"] == "failed", record
+    assert trino_says in (record["failure_reason"] or ""), record["failure_reason"]
+    assert record["rolled_out"] is False
+    assert _coordinator_pod() == before
+    assert SESSION_CONFIG not in mounted_paths(RAW_VOLUME)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/etc/trino/config.properties",
+        "/etc/trino/jvm.config",
+        "/etc/trino/node.properties",
+        "/etc/trino/log.properties",
+        "/etc/trino/catalog-store.properties",
+        "/etc/trino/access-control.properties",
+    ],
+)
+async def test_a_raw_file_at_a_file_apchi_renders_is_refused(
+    e2e_client: AsyncClient, path: str
+) -> None:
+    response = await e2e_client.put(f"{FILES}{path}", json={"content": "x=y\n"})
+
+    assert response.status_code == 422, response.text
+    assert "/api/v1/admin/server-configuration" in response.json()["message"]
+
+
+async def test_a_raw_file_survives_a_sync_of_the_deployment(
+    e2e_client: AsyncClient, settings: Settings
+) -> None:
+    """What Argo CD's sync does: re-apply the Deployment as the chart renders it, which does not
+    know about the raw file's mount. Measured on kind, both client- and server-side, before
+    this was written: a mount at a path the manifest does not name is left alone."""
+    await _write(e2e_client, SESSION_CONTENT, path=SESSION_CONFIG)
+    await _write(e2e_client, "[]", path=SESSION_RULES)
+    assert (await _admin_apply(e2e_client))["stage"] == "succeeded"
+    server_config = _live_secret(SERVER_CONFIG_SECRET)
+
+    coordinator = str(Path(__file__).resolve().parents[2] / "deploy/trino-dev/10-coordinator.yaml")
+    kubectl("apply", "-f", coordinator)
+    kubectl("apply", "--server-side", "--force-conflicts", "-f", coordinator)
+    kubectl("rollout", "status", COORDINATOR, "--timeout=600s")
+
+    assert SESSION_CONFIG in mounted_paths(RAW_VOLUME)
+    assert SESSION_RULES in mounted_paths(RAW_VOLUME)
+    assert _live_secret(SERVER_CONFIG_SECRET) == server_config

@@ -1353,6 +1353,11 @@ Secret behind that volume. Nothing mounted there at all is also a failure — Tr
 not be reading Apchi's rules file, and every permission Apchi applied would be written and
 ignored. Apchi reads that one property and nothing else from a file that is not its own.
 
+Since ADR-0010 the file *is* Apchi's own, rendered with the refresh period from the chart's
+wiring -- so this can only fail on a coordinator still running a file Apchi did not render.
+It still reads what is mounted rather than what Apchi would write, because the mounted file is
+the one Trino runs.
+
 **Permission observability** is a goal: explain what an identity can access, and which
 identities can access a given resource, without anyone reading access-control files.
 
@@ -1598,20 +1603,20 @@ carrying that mount crashes the same way. Recovery means taking the mount and th
 which is what restoring the pre-image does and what nothing else will do by accident. That is
 why the pre-image exists and why a raw-file Apply must never skip the rollback path.
 
-**A raw `config.properties` is proved on the Cluster, not on the probe.** Every other raw
-file is validated on the ephemeral coordinator like anything else — they are the class most
-able to stop Trino booting, so that is where it should be found out. But the probe assembles
-its *own* `config.properties` from the properties without which it would not read the files
-under test at all, and a raw file at that path would replace them: a probe configured by the
-thing it is probing starts cleanly having validated nothing. So that one file reaches the
-Cluster unvalidated, and if it is broken the Cluster fails and Auto Rollback puts it back —
-the same contract, one stage later. Apchi logs a warning saying so when an Admin writes it.
+**No raw file can be one of Trino's own files.** `config.properties`, `jvm.config`,
+`node.properties`, `log.properties`, `catalog-store.properties` and `access-control.properties`
+are rendered by Apchi (ADR-0010; *Trino's server configuration* below), so a raw file at one
+of them is refused like a path a Section generates. That retired a limit this section used to
+state: the probe assembles its *own* `config.properties`, so a raw one could only ever be
+proved on the Cluster. Every raw file is now validated on the probe.
 
 ## Trino's server configuration
 
-**Proposed, not built.** [ADR-0010](./docs/adr/0010-apchi-renders-every-trino-file.md) records
-the decision; this is the design. Every behaviour this design relies on was measured on Trino
-483, in Docker and on kind (2026-11-25). Each fact is marked *measured* where it is used.
+[ADR-0010](./docs/adr/0010-apchi-renders-every-trino-file.md) records the decision; this is
+the design. **Stage 1 is built**: the coordinator's files, through
+`/api/v1/admin/server-configuration`. The workers' files are still the chart's until stage 2.
+Every behaviour this design relies on was measured on Trino 483, in Docker and on kind
+(2026-11-25), and each fact is marked *measured* where it is used.
 
 Apchi renders every file under `/etc/trino`, and the chart renders none. Ownership follows
 what changes together, not which file a line sits in:
@@ -1633,7 +1638,10 @@ Apply in flight and nothing to roll back. So all of sizing is the chart's, set p
 to that role's `resources`, and it reaches Trino on the pod itself:
 
 - **JVM:** the chart builds `JDK_JAVA_OPTIONS` from `trino.<role>.jvm` (`maxHeapSize` and
-  `extraArgs`). The `java` launcher reads it before Trino's launcher runs. *Measured:* with
+  `extraArgs`, after the chart's defaults: G1, exit on OOM, stack traces kept). The `java`
+  launcher reads it before Trino's launcher runs. A Java truststore's password travels in it
+  too, after a `TRUSTSTORE_PASSWORD` variable from its Secret, because Kubernetes expands
+  `$(VAR)` only to a variable defined earlier. *Measured:* with
   only the variable set, the heap is what it asks for. With `-XX:MaxRAMPercentage=50` and a
   3 GiB container, the heap is 1.5 GiB.
 - **Query memory:** the chart sets `TRINO_QUERY_MAX_MEMORY`, `TRINO_QUERY_MAX_MEMORY_PER_NODE`
@@ -1651,8 +1659,9 @@ Three rules follow from what was measured:
 - **`jvm.config` carries no heap flag.** Java places `JDK_JAVA_OPTIONS` *before* the command
   line. Trino's launcher passes `jvm.config` on the command line, and the last `-Xmx` wins.
   *Measured:* `JDK_JAVA_OPTIONS=-Xmx2G` with `-Xmx1G` in `jvm.config` gives a 1 GiB heap.
-  `jvm.config` is therefore wiring only: the fixed flags plus the truststore. Admins set no
-  JVM flags in Apchi at all.
+  `jvm.config` therefore carries only what Trino or the mounts require --
+  `-Djdk.attach.allowAttachSelf=true` and the truststore path -- and no tuning, which would
+  override the chart's in the same way. Admins set no JVM flags in Apchi at all.
 - **Every sizing variable is always set.** A `${ENV:...}` reference to a variable that is not
   set stops Trino: *measured*, "Environment variable is not set: TRINO_…". So the chart
   requires every sizing value, with defaults, and fails the render on an empty one. Apchi
@@ -1671,7 +1680,15 @@ Three rules follow from what was measured:
 
 Every Trino property that is neither wiring nor sizing is the Admin's, written in Apchi. It is
 an **Admin value** (invariant 9): Admin-only, applied by an Admin Apply, never recorded in a
-Snapshot, and restored from the Admin Apply's pre-image by Auto Rollback.
+Snapshot, and restored by Auto Rollback to what the Cluster had.
+
+"What the Cluster had" is the Admin values the last successful Apply delivered, recorded as
+that Apply commits -- an Operator's included, because every Apply delivers the Admin values in
+force. It used to be the document the last *write* replaced, which is not the same thing: an
+Admin who wrote a raw file and then a property between two Applies had only the property
+undone, and the raw file that broke the Cluster stayed. An install upgrading from before the
+record existed falls back to that one-write pre-image until its first successful Apply,
+because falling back to the defaults would wipe its Admin values on the first failure.
 
 ```
 server_configuration:
@@ -1679,11 +1696,21 @@ server_configuration:
     config.properties: {"query.max-execution-time": "2h", "query.max-queued-queries": "500"}
     log.properties: {"io.trino.plugin.postgresql": "DEBUG"}
     node.properties: {}
-  worker:
+  worker:                                  # stage 2; refused until then
     config.properties: {"task.concurrency": "16"}
     log.properties: {}
     node.properties: {}
 ```
+
+`PUT /api/v1/admin/server-configuration` replaces it whole; `GET` returns it with its values,
+unlike a Raw File's content, because these are named properties edited one at a time on a
+surface that is the Admin's alone. `GET /api/v1/admin/server-configuration/files` returns the
+files as the next Apply would write them, wiring included -- the one place the wiring can be
+read whole, since it comes from settings rather than from anything stored.
+
+Apchi supplies one default the Admin may override: `node-scheduler.include-coordinator=false`,
+because Trino's own default would have the coordinator compete with the queries it is
+coordinating.
 
 One map per file and role. Keys and values are strings that Apchi does not interpret: a model
 of Trino's properties would be a second, worse copy that is wrong after every upgrade. Apchi
@@ -1705,16 +1732,26 @@ refuses them as Admin input, naming the chart value that owns each one.
 | `query.max-memory`, `query.max-memory-per-node`, `memory.heap-headroom-per-node` | `config.properties` | sizing, as `${ENV:...}` |
 | `catalog.management`, `catalog.store` | coordinator `config.properties` | fixed: dynamic, file (§7.1) |
 | the user-mapping property | coordinator `config.properties` | `trino.authentication.type` and the mapping mount |
-| `http-server.authentication.type` | coordinator `config.properties` | `trino.authentication.type`, until authentication has its own design |
 | `http-server.process-forwarded` | coordinator `config.properties` | `expose.trino` |
 | `http-server.https.enabled`, `.port`, `.keystore.path` | coordinator `config.properties` | `trino.https` |
 | `node.environment`, `node.data-dir` | `node.properties` | `trino.environment`, the data volume |
+| `node.id` | `node.properties` | the pod: the image sets it from the hostname |
 | all of `jvm.config` | `jvm.config` | fixed flags and `javaTruststore` |
 | `catalog.config-dir` | `catalog-store.properties` | `trino.catalogStoreDir` |
-| `access-control.name`, `security.config-file` | `access-control.properties` | the rules mount |
+| all of `access-control.properties` | `access-control.properties` | the rules mount, and `trino.securityRefreshPeriod` |
 
-`security.refresh-period` is the Admin's, and it is required: Apchi refuses to render
-`access-control.properties` without it.
+Two departures from the first draft of this design, both found while building it:
+
+- **`security.refresh-period` is wiring**, from `trino.securityRefreshPeriod`. It was going to
+  be the Admin's and required. But Apchi's own correctness depends on it (§13.4), the chart
+  already had the value, and an Admin default would have differed from what every running
+  Cluster had -- so the first Apply after an upgrade would have restarted every coordinator
+  for nothing. Apchi refuses to start with it empty.
+- **`http-server.authentication.type` is the Admin's.** The chart never set it: it chooses
+  which user-mapping property applies, and turning the authenticator on -- the type, and the
+  truststore certificate authentication validates clients against -- was always done through
+  `additionalCoordinatorProperties`. It moved with them, into the Server Configuration. The
+  eighth precondition still reads the result from the coordinator's file.
 
 ### Checks: only where a failure would be invisible
 
@@ -1726,15 +1763,21 @@ cross into the chart's territory:
 | When | Check | Why rollback is not enough |
 |---|---|---|
 | at write | a wiring key is refused, naming its chart value | it is the chart's; the boundary is the point |
-| at write | no line break in a key or value; no `=`, `:` or leading `#` in a key | a line break would add a hidden line, wiring included |
-| at write | `security.refresh-period` is present | without it Trino starts fine and never re-reads the rules: every later permission change is reported applied and never arrives (§13.4) |
+| at write | no line break in a key or value; no whitespace, `=`, `:` or `\` in a key, nor a leading `#` or `!`; no value ending in an odd run of backslashes | a line break would add a hidden line, wiring included, and a trailing backslash joins the next line onto this one |
+| at Apchi's start | `trino.securityRefreshPeriod` is set, `trino.environment` is one Trino accepts | without the refresh period Trino starts fine and never re-reads the rules: every later permission change is reported applied and never arrives (§13.4) |
 | before Apply | **the probe** boots with the Admin's properties | rollback would catch it, but only after a production restart that ends every query, a failed start and a second restart |
 | after the Rollout | Verification, then Auto Rollback from the pre-image | what only the real Cluster shows |
 
 What the probe catches, *measured*:
 - a misspelled property ("Configuration property 'query.max-memroy' was not used. Did you
   mean …");
-- an invalid value ("Invalid value '2hours' for type Duration").
+- an invalid value ("Invalid value '2hours' for type Duration");
+- an invalid log level ("No enum constant io.airlift.log.Level.DEBUGG").
+
+The probe runs whenever the Admin's files would change -- the Server Configuration or a Raw
+File -- even when no Section has anything to probe. Before this stage it did not: an Admin
+Apply on a Cluster with nothing else to validate delivered raw files to the coordinator
+unvalidated.
 
 The probe is a coordinator, and it judges the worker's properties too. *Measured:* a worker
 accepts coordinator-side query properties, a coordinator accepts worker-side ones such as
@@ -1748,8 +1791,9 @@ Nothing catches a valid but wrong value (`2m` meant as `2h`), or a misspelled lo
 
 ### Delivery
 
-One Secret per role, `trino-server-config-coordinator` and `trino-server-config-worker`, with
-one key per file. The chart mounts each file with `subPath`: a fixed mount, never patched by
+One Secret per role, `trino-server-config-coordinator` and (stage 2)
+`trino-server-config-worker`, with one key per file, mounted 0640 like every Secret that can
+hold a credential: the seventh precondition holds it to that. The chart mounts each file with `subPath`: a fixed mount, never patched by
 Apchi, which leaves Argo CD nothing to fight over. That is a deliberate exception to the first
 precondition. Every one of these files needs a restart anyway, so a frozen mount loses
 nothing, and the Rollout is what makes new content live. *Measured on kind:* rewriting the
@@ -1787,24 +1831,35 @@ A change to a role's files restarts that role's Deployment:
 Raw Files stay the escape hatch for Trino files Apchi does not know. Nothing changes for them
 except which paths they may take.
 
-**What is wrong today, measured on kind.** A Raw File at `/etc/trino/config.properties` does
+**What was wrong before stage 1, measured on kind.** A Raw File at `/etc/trino/config.properties` does
 not add a mount next to the chart's. Kubernetes merges container mounts by `mountPath`, so
 Apchi's patch *replaces* the chart's `config` mount with `apchi-admin-raw-files`. A re-apply of
 the manifests, which is what Argo CD's sync does, then silently puts the chart's mount back,
 both client-side and server-side with `--force-conflicts`. The Raw File disappears from Trino
 while Apchi still lists it as delivered, and the next Apply swaps it in again.
 
-**After this design:**
+**Now:**
 - **Owned paths are refused.** `config.properties`, `jvm.config`, `node.properties`,
   `log.properties`, `catalog-store.properties` and `access-control.properties` become Apchi's.
   A Raw File at any of them is refused at write time, the way a path a Section generates is,
-  and the refusal names the Server Configuration as the place for the properties.
+  and the refusal names the Server Configuration as the place for the properties. Every
+  spelling of the path is the same path: `./`, `..`, a doubled slash and a trailing one are
+  normalised away before it is compared. A file of the same name in another directory --
+  `/etc/trino/extra/config.properties` -- is an ordinary Raw File, because Trino does not read
+  it from there. An Admin import carrying one is refused the same way.
+- **A path the deployment already mounts is refused**, whatever volume mounts it there:
+  Apchi's mount would replace it, and the next sync would put it back.
 - **Paths the chart does not mount keep working.** *Measured:* an Apchi mount at
   `/etc/trino/session.properties` survived both client-side and server-side re-apply of the
   manifests, because neither touches a list entry the manifests do not name. Not measured: how
   Argo CD *displays* such a mount (in sync, or out of sync). The mount itself is not removed.
-- **Probed as before,** minus the owned paths. The special case "a raw `config.properties` is
-  proved on the Cluster, not on the probe" goes away, because no Raw File can be one.
+- **Probed whenever one changes,** minus the owned paths. The special case "a raw
+  `config.properties` is proved on the Cluster, not on the probe" goes away, because no Raw
+  File can be one.
+- **Rolled back with a restart.** An Admin Apply's rollback used to rewrite the raw files
+  *after* its restart and Verification, so a restored file reached the coordinator only if a
+  Section happened to restart it. The Admin's files are now put back first, and their
+  difference counts towards the rollback's one restart.
 - **Coordinator only,** as today. Raw Files are mounted on the coordinator; the Server
   Configuration is what reaches workers.
 - **They can reference sizing** through `${ENV:...}` like any other file Trino substitutes.
@@ -1829,18 +1884,19 @@ that would have collided with it, and the refusal names both mounts.
 - **Sizing** keeps its place in the chart, restructured per role:
   `trino.coordinator.jvm.{maxHeapSize,extraArgs}`, `trino.worker.jvm.{…}` and the three query
   memory values, all required, with defaults.
-- **Everything else leaves the chart:** `trino.additionalCoordinatorProperties`,
-  `trino.additionalWorkerProperties`, `trino.jvm.*` and `trino.securityRefreshPeriod`. Setting
-  any of them fails the render and names its replacement.
+- **Everything else leaves the chart:** `trino.additionalCoordinatorProperties` and
+  `trino.jvm.*` now; `trino.additionalWorkerProperties` in stage 2. Setting either of the first
+  two fails the render and names its replacement. `trino.securityRefreshPeriod` stays, as
+  wiring.
 - **An existing install** moves its additional properties into the Admin configuration
   through `PUT /api/v1/admin/configuration` before upgrading. The first startup after the
   upgrade writes the Secrets from them.
 
 ### Stages
 
-1. The coordinator's files: the wiring settings, the sizing variables and their render check,
-   the Secret and the first write, the write-time checks, probe validation, the Raw File path
-   refusal and the ninth precondition.
+1. **Built.** The coordinator's files: the wiring settings, the sizing variables and their
+   render check, the Secret and the first write, the write-time checks, probe validation, the
+   Raw File path refusal and the ninth precondition.
 2. The workers' files: the worker rollout, the graceful-shutdown hook in the chart, and the
    `system_information` rule in Permissions.
 3. Authentication, as a design of its own.
@@ -1927,6 +1983,14 @@ file at.** A `subPath` mount of one key at a path inside a ConfigMap or Secret d
 has no file to bind onto, and runc fails the container with "not a directory" before Trino
 runs at all. Reproduced on a real cluster; a nested *directory* mount in the same position
 works, which is what makes the shape below the answer rather than a workaround.
+
+**The ninth precondition: nothing under `/etc/trino` is mounted from a volume Apchi does not
+write.** Apchi renders every file there (ADR-0010). A file of anyone else's is either replaced
+by Apchi's mount at the same path -- Kubernetes merges container mounts by path, measured on
+kind -- or puts back a second owner Apchi cannot see. Judged by the Secret behind the volume,
+not the volume's name, which is the deployment's to choose; a ConfigMap, an emptyDir or any
+Secret Apchi does not name is refused, and only in the Trino container, because a sidecar's
+filesystem is its own.
 
 Every check reports every problem it finds rather than the first, because an Admin fixing a
 manifest should see the whole list.

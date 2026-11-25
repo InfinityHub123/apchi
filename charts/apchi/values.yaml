@@ -237,6 +237,23 @@ trino:
     # Trino cannot drain a coordinator, so there is exactly one and a Rollout destroys every
     # running query. That is a property of Trino, not a limit of this chart (ADR-0003).
     resources: {}
+    # Sizing, which is this chart's and not Apchi's, because it has to fit the memory limit
+    # in resources: the heap and every JVM flag go into JDK_JAVA_OPTIONS, and query memory
+    # into the variables Apchi's config.properties refers to. The render fails when the heap
+    # exceeds resources.limits.memory, or when maxMemoryPerNode + heapHeadroomPerNode exceeds
+    # the heap -- Trino refuses that at startup anyway. Leave room outside the heap: the JVM
+    # needs some for itself, so a heap near the limit is an OOM kill under load.
+    jvm:
+      maxHeapSize: 2G   # -Xmx units: k, m, g
+      # After the chart's defaults (G1, exit on OOM), so a flag here wins over them.
+      extraArgs: []
+    memory:
+      # Trino's DataSize units: MB, GB. The whole Cluster's ceiling for one query.
+      queryMaxMemory: 20GB
+      # The coordinator schedules no tasks (node-scheduler.include-coordinator=false), but
+      # Trino still checks these two against its heap at startup.
+      maxMemoryPerNode: 600MB
+      heapHeadroomPerNode: 600MB
     # The initContainer that seeds the catalog store, which copies a few files. Its own value
     # because a fleet requiring limits on every container refuses the pod without them, and
     # it needs a fraction of what Trino does. Empty sets none.
@@ -255,6 +272,19 @@ trino:
   worker:
     replicas: 2
     resources: {}
+    # Sizing, which is this chart's and not Apchi's, because it has to fit the memory limit
+    # in resources: the heap and every JVM flag go into JDK_JAVA_OPTIONS, and query memory
+    # into the variables Apchi's config.properties refers to. The render fails when the heap
+    # exceeds resources.limits.memory, or when maxMemoryPerNode + heapHeadroomPerNode exceeds
+    # the heap -- Trino refuses that at startup anyway. Leave room outside the heap: the JVM
+    # needs some for itself, so a heap near the limit is an OOM kill under load.
+    jvm:
+      maxHeapSize: 2G   # -Xmx units: k, m, g
+      # After the chart's defaults (G1, exit on OOM), so a flag here wins over them.
+      extraArgs: []
+    memory:
+      maxMemoryPerNode: 600MB
+      heapHeadroomPerNode: 600MB
     nodeSelector: {}
     tolerations: []
     affinity: {}
@@ -316,14 +346,9 @@ trino:
   # is then unreadable and has to be 0644.
   fsGroup: 1000
 
-  jvm:
-    maxHeapSize: 2G
-    extraArgs: []
-
-  # Added verbatim to the coordinator's config.properties. The escape hatch for anything
-  # this chart does not model -- but note that properties Apchi owns are not yours to set
-  # here, and the preconditions will tell you so.
-  additionalCoordinatorProperties: []
+  # Added verbatim to the workers' config.properties, until Apchi renders those too (the
+  # next stage of ADR-0010). The coordinator's are Apchi's: set them through
+  # PUT /api/v1/admin/server-configuration.
   additionalWorkerProperties: []
 
   # How callers authenticate to Trino, and how their certificate becomes a Trino Identity.
@@ -448,6 +473,10 @@ secrets:
   certificateMapping: trino-user-mapping
   clientCertificates: trino-client-certificates
   resourceGroups: trino-resource-groups
+  # Apchi writes it on its first start and on every Apply: the coordinator's own files
+  # (ADR-0010). Created by Apchi, not by this chart -- its content is rendered from the Admin
+  # values in MongoDB, which a chart cannot read.
+  serverConfiguration: trino-server-config-coordinator
 
 # The volumes Apchi owns on the coordinator's pod template. Everything else there
 # belongs to the Admin, and Apchi never touches it.

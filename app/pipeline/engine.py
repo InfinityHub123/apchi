@@ -16,7 +16,7 @@ from app import trust
 from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.config import Settings
-from app.pipeline import preconditions, raw_files
+from app.pipeline import preconditions, raw_files, server_configuration
 from app.pipeline.admin_values import AdminStore
 from app.pipeline.auto_rollback import declare_incident, restore
 from app.pipeline.candidate import CandidateStore
@@ -60,6 +60,7 @@ class Engine:
         self._plans: dict[SectionName, SectionPlan] = {}
         self._rollout: set[SectionName] = set()
         self._raw_files_changed = False
+        self._server_configuration_changed = False
         self._warnings: list[ValidationFailure] = []
         self._verification: list[CheckResult] = []
         self._cluster = Cluster(trino=trino, kubernetes=kubernetes, settings=settings)
@@ -86,6 +87,11 @@ class Engine:
         """
         await self._assert_preconditions()
         await self._freeze_admin_values()
+        # A Raw File at a path Apchi now renders -- one written before Apchi rendered it --
+        # would replace Apchi's mount of that file (Kubernetes merges mounts by path, measured
+        # on kind). Refused on every Apply until the Admin moves it, rather than converted:
+        # splitting an arbitrary file into wiring and Admin keys would be a guess.
+        raw_files.refuse_rendered_paths(self._cluster.admin)
 
         self._desired, current = await self._desired_and_baseline()
         self._plans = {
@@ -106,8 +112,15 @@ class Engine:
         # ask for a Rollout -- and §14 requires it to, because these values are read once at
         # start and are the class most able to stop Trino booting.
         self._raw_files_changed = await raw_files.changed(self._cluster)
+        # The same question for Trino's own files, which every Apply renders from the Admin
+        # values and the chart's wiring. Either can have moved without any Section moving.
+        self._server_configuration_changed = await server_configuration.changed(self._cluster)
         self._warnings = await validate_candidate(
-            self._desired, self._plans, self._cluster, self._apply_id
+            self._desired,
+            self._plans,
+            self._cluster,
+            self._apply_id,
+            admin_changed=self._raw_files_changed or self._server_configuration_changed,
         )
 
     def warnings(self) -> list[ValidationFailure]:
@@ -166,6 +179,7 @@ class Engine:
             # a file does nothing here at all.
             await deliver(section, self._cluster, desired)
             await section.apply(self._cluster, desired, self._plans[section.name])
+        await server_configuration.deliver(self._cluster)
         # After the Sections, so a raw file an Admin wrote to override something a Section
         # generates lands on top of it -- "Admin wins on conflict" (§14), expressed as
         # ordering rather than as a merge, because Apchi does not parse a raw file and so
@@ -180,10 +194,14 @@ class Engine:
         Apply on a Cluster with an Event Listener configured would terminate every running
         query for nothing.
         """
-        return bool(self._rollout) or self._raw_files_changed
+        return bool(self._rollout) or self._raw_files_changed or self._server_configuration_changed
 
     async def roll_out(self) -> None:
-        changed = sorted(self._rollout)
+        changed: list[str] = sorted(self._rollout)
+        if self._server_configuration_changed:
+            changed.append("server configuration")
+        if self._raw_files_changed:
+            changed.append("raw files")
         await roll_out(
             self._kubernetes,
             self._settings.coordinator_deployment_name,
@@ -262,6 +280,9 @@ class Engine:
             )
             raise
         logger.info("committed", extra={"snapshot": snapshot.number})
+        # Every Apply delivers the Admin values in force too, so after this one they are what
+        # the Cluster has -- and what an Admin Apply's rollback must go back to.
+        await self._admin.record_applied(self._cluster.admin)
         return snapshot.number
 
 
@@ -321,9 +342,30 @@ class AdminEngine(Engine):
         )
         latest = await self._snapshots.latest()
         sections = await self._snapshots.sections_of(None if latest is None else latest.number)
-        await restore(sections, self._cluster)
+        # The Admin's files first, and their difference asked before they are written, because
+        # afterwards the answer is always no. Before this they were written *after* the
+        # restart and the verification, so a restored file reached the coordinator only if
+        # some Section happened to restart it.
+        admin_files_changed = await server_configuration.changed(
+            self._cluster
+        ) or await raw_files.changed(self._cluster)
+        await server_configuration.deliver(self._cluster)
         await raw_files.deliver(self._cluster)
+        # And the coordinator restarted onto them *before* the Sections are restored: those
+        # files are what broke it, and restoring a Section talks to Trino -- the catalogs ask
+        # it what it holds. Measured on kind with `query.max-run-time=1ms`: restoring first
+        # asked the broken coordinator, failed, and declared an incident over a rollback that
+        # one restart would have finished.
+        if admin_files_changed:
+            await roll_out(
+                self._kubernetes,
+                self._settings.coordinator_deployment_name,
+                f"auto rollback of apply {self._apply_id}: the admin's files",
+                self._settings.rollout_timeout_seconds,
+            )
+        await restore(sections, self._cluster)
 
     async def commit(self) -> int | None:
         logger.info("admin apply committed no snapshot")
+        await self._admin.record_applied(self._cluster.admin)
         return None

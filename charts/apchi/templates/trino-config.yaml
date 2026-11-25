@@ -4,68 +4,32 @@ metadata:
   name: {{ include "trino.fullname" . }}-config
   labels: {{- include "trino.labels" . | nindent 4 }}
 data:
-  # catalog.store selects the store and belongs HERE. In catalog-store.properties it is
-  # rejected with "Configuration property 'catalog.store' was not used".
-  coordinator-config.properties: |
-    coordinator=true
-    node-scheduler.include-coordinator=false
-    http-server.http.port={{ .Values.trino.httpPort }}
-    discovery.uri={{ include "trino.discoveryUri" . }}
-    catalog.management=dynamic
-    catalog.store=file
-    {{ include "trino.userMappingProperty" . }}=/etc/trino/user-mapping/user-mapping.json
-    {{- if include "trino.behindTlsProxy" . }}
-    http-server.process-forwarded=true
-    {{- end }}
-    {{- if .Values.trino.https.enabled }}
-    http-server.https.enabled=true
-    http-server.https.port={{ .Values.trino.https.port }}
-    http-server.https.keystore.path={{ include "trino.httpsKeystore" . }}
-    {{- end }}
-    {{- range .Values.trino.additionalCoordinatorProperties }}
-    {{ . }}
-    {{- end }}
+  # The workers' files, and only theirs. The coordinator's are rendered by Apchi into the
+  # server-configuration Secret, and this chart renders none of them (ADR-0010); the workers'
+  # follow in the next stage. Sizing is not in any file: it reaches Trino on the pod, beside
+  # the memory limit it has to fit -- see trino.<role>.jvm and trino.<role>.memory.
   worker-config.properties: |
     coordinator=false
     http-server.http.port={{ .Values.trino.httpPort }}
     discovery.uri={{ include "trino.discoveryUri" . }}
     catalog.management=dynamic
+    query.max-memory-per-node=${ENV:TRINO_QUERY_MAX_MEMORY_PER_NODE}
+    memory.heap-headroom-per-node=${ENV:TRINO_MEMORY_HEAP_HEADROOM_PER_NODE}
     {{- range .Values.trino.additionalWorkerProperties }}
     {{ . }}
     {{- end }}
   # The image's own node.properties sets node.data-dir too, and this file replaces it whole.
   # Without the line the launcher falls back to /usr/lib/trino for its pid file and its
   # `etc` symlink, which only uid 1000 can write -- so under an arbitrary uid, OpenShift's,
-  # Trino never starts. Both Deployments mount a writable volume there.
+  # Trino never starts.
   node.properties: |
     node.environment={{ .Values.trino.environment }}
     node.data-dir=/data/trino
+  # No heap flag and no tuning: the JVM reads this file after JDK_JAVA_OPTIONS and the last
+  # flag wins, so a flag here would silently override the chart's sizing (measured on
+  # Trino 483). Only what Trino or the mounts require.
   jvm.config: |
-    -server
-    -Xmx{{ .Values.trino.jvm.maxHeapSize }}
-    -XX:+UseG1GC
-    -XX:+ExitOnOutOfMemoryError
-    -XX:-OmitStackTraceInFastThrow
     -Djdk.attach.allowAttachSelf=true
     {{- if include "apchi.hasTruststore" . }}
     -Djavax.net.ssl.trustStore=/etc/pki/java/truststore/cacerts
     {{- end }}
-    {{- range .Values.trino.jvm.extraArgs }}
-    {{ . }}
-    {{- end }}
-  # Read as etc/catalog-store.properties, relative to the launcher's working directory
-  # /data/trino, whose `etc` symlinks to /etc/trino. The image's WorkingDir metadata says
-  # `/`, which is the wrong answer -- this was established on a running cluster. The file
-  # takes only catalog.config-dir and catalog.read-only.
-  catalog-store.properties: |
-    catalog.config-dir={{ .Values.trino.catalogStoreDir }}
-  # access-control.name belongs only here. In config.properties it is rejected with
-  # "Did you mean to use 'access-control.config-files'?"
-  #
-  # security.refresh-period is what makes Apchi's whole-volume mount worth anything:
-  # without it Trino reads the rules once at startup and a Secret the kubelet faithfully
-  # keeps current is never re-read. Apchi refuses to Apply without it.
-  access-control.properties: |
-    access-control.name=file
-    security.config-file=/etc/trino/access-control/rules.json
-    security.refresh-period={{ .Values.trino.securityRefreshPeriod }}

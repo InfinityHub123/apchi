@@ -26,6 +26,47 @@ Nothing yet.
 
 ### Breaking
 
+- **Apchi renders the coordinator's own files** (ADR-0010): `config.properties`, `jvm.config`,
+  `node.properties`, `log.properties`, `catalog-store.properties` and
+  `access-control.properties`, into the Secret `trino-server-config-coordinator`, which the
+  chart now mounts instead of its ConfigMap. The chart values move with it:
+  - `trino.jvm` is gone. The heap and JVM flags are per role, under `trino.coordinator.jvm` and
+    `trino.worker.jvm`, and query memory under `trino.<role>.memory`. They reach Trino on the
+    pod, as `JDK_JAVA_OPTIONS` and `${ENV:...}` references, and the render fails when they do
+    not fit the memory limit or each other.
+  - `trino.additionalCoordinatorProperties` is gone. Set those properties with
+    `PUT /api/v1/admin/server-configuration` -- before upgrading, or the first Apply after it
+    drops them. Setting the value fails the render and says so.
+- **A Raw File may no longer be at any of those six paths.** Writing one is a `422` naming the
+  Server Configuration, an Admin import carrying one is refused, and a Raw File already stored
+  at one stops every Apply until it is moved and deleted. A Raw File at a path the deployment
+  already mounts is refused too.
+- **A ninth precondition**: nothing under `/etc/trino` may be mounted from a volume Apchi does
+  not write.
+
+### Added
+
+- `GET`/`PUT /api/v1/admin/server-configuration`: the Admin's properties for the coordinator's
+  `config.properties`, `node.properties` and `log.properties`, with no schema over them. Wiring
+  and sizing are refused, naming the chart value that owns each; so is any key or value Trino
+  would read differently from how it is written. `GET /api/v1/admin/server-configuration/files`
+  shows the files as the next Apply writes them, wiring included.
+- Apchi writes the coordinator's files on its first start when they do not exist, retrying
+  until MongoDB and the API server answer. It never rewrites them at startup.
+
+### Fixed
+
+- An Admin change is validated on the probe even when no Section has anything to probe.
+  Before, an Admin Apply on such a Cluster delivered raw files to the coordinator unvalidated.
+- An Admin Apply's rollback restarts the coordinator when it puts the Admin's files back.
+  Before, the files were rewritten after the restart, so a restored raw file reached the
+  coordinator only if a Section happened to restart it.
+- An Admin Apply's rollback restores the Admin values the last successful Apply delivered.
+  Before, it restored the document as it was one write back, so of two Admin changes made
+  between Applies, only the second was undone.
+- Review reports the coordinator restart that a staged Server Configuration or Raw File will
+  cause at the next Apply, whoever starts it.
+
 - **Adoption is removed** (ADR-0009). Every `/api/v1/admin/adoption/*` endpoint is gone: the
   discovery, the seed and the adopt step. To bring an existing Cluster's configuration under
   Apchi, import it with `PUT /api/v1/admin/configuration`, which carries the six Sections and

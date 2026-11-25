@@ -12,6 +12,7 @@ from typing import Any
 
 from pymongo import ReturnDocument
 from pymongo.asynchronous.database import AsyncDatabase
+from pymongo.errors import PyMongoError
 
 from app.audit.actor import actor
 from app.audit.events import AuditStore, Entry
@@ -21,8 +22,14 @@ logger = logging.getLogger(__name__)
 
 _DOCUMENT_ID = "admin"
 
-#: The document `save` replaced, kept so a rollback has something to restore (§14).
+#: The document `save` replaced. What a rollback restores only until an Apply has succeeded
+#: since this was introduced -- see `_APPLIED_ID`.
 _PREVIOUS_ID = "admin_previous"
+
+#: The Admin values the last successful Apply delivered: what the Cluster has. A rollback
+#: restores this, because "one write back" is not "what the Cluster had" -- an Admin who wrote
+#: a raw file and then a property between two Applies would have had only the property undone.
+_APPLIED_ID = "admin_applied"
 
 
 #: The one Admin value whose *content* reaches the audit. It is a policy switch rather than
@@ -94,8 +101,28 @@ class AdminStore:
             upsert=True,
         )
 
+    async def record_applied(self, values: AdminValues) -> None:
+        """Remember the values an Apply just delivered and verified, as what the Cluster has.
+
+        Never raised: the Cluster is already running these, and an Apply must not be reported
+        failed for a bookkeeping write. The cost of losing one is a later rollback reaching
+        back further than it should, which is logged here where it happens.
+        """
+        try:
+            await self._collection.replace_one(
+                {"_id": _APPLIED_ID},
+                {"_id": _APPLIED_ID, **values.model_dump(mode="json")},
+                upsert=True,
+            )
+        except PyMongoError:
+            logger.error(
+                "could not record the admin values this apply delivered; a later admin "
+                "rollback restores an older copy",
+                exc_info=True,
+            )
+
     async def restore_previous(self) -> AdminValues:
-        """Put the document back to what it was before the last write, and return it.
+        """Put the document back to what the Cluster has, and return it.
 
         **Without rotating the pre-image.** A rollback is not a new write: rotating here
         would make the bad values the thing a second rollback restores, which is the opposite
@@ -115,11 +142,17 @@ class AdminStore:
         return previous
 
     async def previous(self) -> AdminValues:
-        """What the Admin document held before the last write.
+        """What a rollback restores: the values the last successful Apply delivered.
 
-        The defaults when nothing has been replaced yet, which is the honest answer: a Cluster
-        whose Admin values have never been written has none to go back to.
+        Until an Apply has succeeded since that record was introduced, the document the last
+        write replaced -- an install upgrading from before it has no record of what it
+        delivered, and falling back to the defaults would wipe its Admin values on the first
+        failed Apply. The defaults when neither exists, which is the honest answer for a
+        Cluster whose Admin values have never been written.
         """
+        applied = await self._collection.find_one({"_id": _APPLIED_ID})
+        if applied is not None:
+            return _as_values(applied)
         return _as_values(await self._collection.find_one({"_id": _PREVIOUS_ID}))
 
     async def _record(self, before: dict[str, Any], after: dict[str, Any]) -> None:
