@@ -48,6 +48,20 @@ TRUST_VALUES = VALUES + (
     "--set",
     "javaTruststore.existingSecret=truststore",
 )
+#: Trino serving HTTPS itself and exposed by passthrough: a second port, an initContainer and
+#: two more volumes on the coordinator, and a config.properties the eighth precondition reads.
+HTTPS_VALUES = VALUES + (
+    "--set",
+    "trino.https.enabled=true",
+    "--set",
+    "trino.https.existingSecret=trino-server-tls",
+    "--set",
+    "expose.kind=route",
+    "--set",
+    "expose.trino.host=trino.example.com",
+    "--set",
+    "expose.trino.termination=passthrough",
+)
 RELEASE = "check"
 
 
@@ -91,9 +105,9 @@ def _rendered(chart: Path, *values: str) -> list[dict[str, Any]]:
 
 
 #: Volumes holding what the operator names in values rather than what the chart creates: what
-#: every pod trusts. Their Secrets are the operator's, so they are not expected among the
-#: chart's own.
-OPERATORS_OWN = ("ca-bundle", "java-truststore")
+#: every pod trusts, and the certificate Trino serves HTTPS with. Their Secrets are the
+#: operator's, so they are not expected among the chart's own.
+OPERATORS_OWN = ("ca-bundle", "java-truststore", "https-source")
 
 
 def _name_disagreements(documents: list[dict[str, Any]]) -> list[str]:
@@ -218,7 +232,7 @@ def _apchi_settings(documents: list[dict[str, Any]]) -> Settings:
 
 
 def main() -> int:
-    for values in (VALUES, TRUST_VALUES):
+    for values in (VALUES, TRUST_VALUES, HTTPS_VALUES):
         if failed := _check(values):
             return failed
     return 0
