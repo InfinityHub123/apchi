@@ -111,6 +111,16 @@ _LOG_SCAN_LINES = 10_000
 
 LABELS = {ROLE_LABEL: VALIDATION_ROLE, "app.kubernetes.io/managed-by": "apchi"}
 
+#: The trinodb/trino image's `trino` user, the one its files belong to.
+TRINO_USER = 1000
+
+_CONTAINER_SECURITY: dict[str, Any] = {
+    "allowPrivilegeEscalation": False,
+    "capabilities": {"drop": ["ALL"]},
+    "runAsNonRoot": True,
+    "seccompProfile": {"type": "RuntimeDefault"},
+}
+
 
 class ValidationFailed(Exception):
     """Raised with every failure found, not just the first.
@@ -160,6 +170,18 @@ def validation_manifest(
     container: dict[str, Any] = {
         "name": "trino",
         "image": image,
+        # What Kubernetes' "restricted" Pod Security level demands of every container, and what
+        # OpenShift's restricted-v2 sets anyway: without it a namespace that enforces the level
+        # refuses the probe, and every Validation fails before Trino has run. The image already
+        # runs as its non-root `trino` user, so nothing about what runs changes.
+        # Plus the image's uid where Apchi may set one: the image names its user `trino` rather
+        # than numbering it, and with runAsNonRoot the kubelet refuses a name it cannot verify
+        # (measured on kind). Not under restricted-v2, which assigns the uid itself.
+        "securityContext": (
+            dict(_CONTAINER_SECURITY)
+            if restricted
+            else {**_CONTAINER_SECURITY, "runAsUser": TRINO_USER}
+        ),
         "env": [{"name": _CATALOG_MANAGEMENT_ENV, "value": "dynamic"}],
         "ports": [{"containerPort": 8080, "name": "http"}],
         "volumeMounts": [

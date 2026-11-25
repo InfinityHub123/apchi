@@ -59,6 +59,12 @@ Nothing yet.
 
 ### Added
 
+- **Startup and liveness probes on both Trino roles**, Trino's own `health-check`. Liveness is
+  loose -- two minutes of no answer -- because restarting the coordinator ends every query.
+- **Every container meets the `restricted` Pod Security level**: Apchi, both Trino roles, their
+  initContainers, and the Validation pod Apchi creates. A namespace enforcing that level
+  refused all of them before, the Validation pod included, which no chart value could fix.
+
 - **A disruption budget for the workers**, on by default (`trino.worker.podDisruptionBudget`,
   `maxUnavailable: 1`): a node drain takes one worker at a time, and each drains its tasks.
 - **A NetworkPolicy for Trino**, off by default (`networkPolicy.enabled`). On, only Trino's own
@@ -81,6 +87,15 @@ Nothing yet.
   until MongoDB and the API server answer. It never rewrites them at startup.
 
 ### Fixed
+
+- An Admin Apply interrupted by an Apchi restart is rolled back as an Admin Apply: its Admin
+  values go back to what the Cluster last had. It used to be recovered the Operator's way, which
+  keeps them. Apply records now say which kind ran (`kind`: `apply` or `admin_apply`).
+- A Snapshot number is never reused. Deleting the latest Snapshot from MongoDB by hand used to
+  hand its number to the next commit, under a different configuration.
+- A Candidate derived from a Snapshot that has been deleted is refused by Review (409) and
+  Apply, naming it, instead of being compared with nothing. `POST /candidate/reset` re-derives
+  it from the latest remaining Snapshot.
 
 - An Admin change is validated on the probe even when no Section has anything to probe.
   Before, an Admin Apply on such a Cluster delivered raw files to the coordinator unvalidated.

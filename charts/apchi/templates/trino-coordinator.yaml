@@ -42,6 +42,7 @@ spec:
         - name: seed-catalogs
           image: {{ include "trino.image" . | quote }}
           imagePullPolicy: {{ .Values.trino.image.pullPolicy }}
+          {{- include "trino.containerSecurity" . | nindent 10 }}
           command: ["sh", "-c"]
           args:
             - mkdir -p {{ .Values.trino.catalogStoreDir }} &&
@@ -60,6 +61,7 @@ spec:
         - name: join-https-keystore
           image: {{ include "trino.image" . | quote }}
           imagePullPolicy: {{ .Values.trino.image.pullPolicy }}
+          {{- include "trino.containerSecurity" . | nindent 10 }}
           command: ["sh", "-c"]
           args:
             - umask 077 &&
@@ -86,6 +88,8 @@ spec:
             - containerPort: {{ .Values.trino.https.port }}
               name: https
             {{- end }}
+          {{- include "trino.probes" (dict "root" . "role" "coordinator") | nindent 10 }}
+          {{- include "trino.containerSecurity" . | nindent 10 }}
           readinessProbe:
             # Trino's own script. A Rollout's "complete" means every replica passed this,
             # which is what makes Apchi's Verification talk to a coordinator that answers.

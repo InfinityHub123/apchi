@@ -67,6 +67,8 @@ spec:
                     -H 'X-Trino-User: {{ .Values.trino.user }}'
                     http://localhost:{{ .Values.trino.httpPort }}/v1/info/state || exit 0;
                     while kill -0 1 2>/dev/null; do sleep 1; done
+          {{- include "trino.probes" (dict "root" . "role" "worker") | nindent 10 }}
+          {{- include "trino.containerSecurity" . | nindent 10 }}
           readinessProbe:
             # The worker count Apchi's Verification expects comes from this Deployment's
             # ready replicas, so the probe is what decides whether a worker counts.

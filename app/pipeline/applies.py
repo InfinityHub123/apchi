@@ -574,7 +574,10 @@ INTERRUPTED_REASON = "Apchi restarted while this Apply was in flight; it was not
 
 
 async def recover_interrupted(
-    store: ApplyStore, engine_factory: EngineFactory, audit: AuditStore | None = None
+    store: ApplyStore,
+    engine_factory: EngineFactory,
+    audit: AuditStore | None = None,
+    admin_engine_factory: EngineFactory | None = None,
 ) -> list[str]:
     """Resolve Applies left in flight by a restart.
 
@@ -618,7 +621,17 @@ async def recover_interrupted(
                 logger.exception("could not record a recovered apply in the audit history")
 
         if reached in ROLLED_BACK_FROM:
-            await _restore_after_interruption(store, engine_factory, record.id)
+            # The rollback an Apply of this kind would have made. An Operator's keeps the
+            # Admin values -- they survive an Operator's rollback (invariant 2) -- but an
+            # interrupted *Admin* Apply is one whose Admin values are what may have broken the
+            # Cluster, so they go back to what the Cluster last had, as they would have had
+            # the process not died. Recovering one with the Operator's engine left them in place.
+            factory = (
+                admin_engine_factory
+                if record.kind == "admin_apply" and admin_engine_factory is not None
+                else engine_factory
+            )
+            await _restore_after_interruption(store, factory, record.id)
     return recovered
 
 
