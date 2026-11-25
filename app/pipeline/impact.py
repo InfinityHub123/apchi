@@ -11,6 +11,7 @@ import logging
 
 from pydantic import BaseModel, Field
 
+from app.pipeline import raw_files, server_configuration
 from app.pipeline.files import would_change
 from app.sections import SectionName
 from app.sections.base import Cluster, Resources, SectionPlan
@@ -105,9 +106,13 @@ async def cost_of(
     """The Cluster is only asked how busy it is when the answer matters.
 
     A Candidate that needs no restart costs no queries, so there is nothing to count.
+
+    Every Apply delivers the Admin's files too, so a Server Configuration or Raw File not yet
+    applied -- or wiring the chart changed -- restarts the coordinator at the next Apply,
+    whoever starts it. An Operator is told before they commit to that, not after.
     """
     rollout = await sections_needing_rollout(plans, desired, cluster)
-    if not rollout:
+    if not rollout and not await _admin_files_move(cluster):
         return ApplyCost(restarts_coordinator=False)
 
     try:
@@ -126,3 +131,20 @@ async def cost_of(
         queries_at_risk=at_risk,
         warning=RESTART_WARNING,
     )
+
+
+async def _admin_files_move(cluster: Cluster) -> bool:
+    """Whether the next Apply would rewrite the Admin's files on the coordinator.
+
+    An unreadable Cluster answers no, as `sections_needing_rollout` does for a Section: Review
+    must still show what is staged when Kubernetes cannot be asked.
+    """
+    try:
+        return await server_configuration.changed(cluster) or await raw_files.changed(cluster)
+    except Exception:
+        logger.warning(
+            "could not read the Admin's files on the coordinator; the restart decision "
+            "leaves them out",
+            exc_info=True,
+        )
+        return False

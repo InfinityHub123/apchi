@@ -173,6 +173,34 @@ spec:
               value: "trino"
             - name: APCHI_CATALOG_STORE_DIR
               value: {{ .Values.trino.catalogStoreDir | quote }}
+            # Wiring: what Apchi renders into Trino's own files that names something this
+            # chart creates. Passed from the same values that create the ports, Service and
+            # mounts, so the files and the objects cannot disagree (ADR-0010).
+            - name: APCHI_SERVER_CONFIGURATION_SECRET_NAME
+              value: {{ .Values.secrets.serverConfiguration | quote }}
+            - name: APCHI_TRINO_HTTP_PORT
+              value: {{ .Values.trino.httpPort | int64 | quote }}
+            - name: APCHI_TRINO_DISCOVERY_URI
+              value: {{ include "trino.discoveryUri" . | quote }}
+            {{- if .Values.trino.https.enabled }}
+            - name: APCHI_TRINO_HTTPS_PORT
+              value: {{ .Values.trino.https.port | int64 | quote }}
+            - name: APCHI_TRINO_HTTPS_KEYSTORE_PATH
+              value: {{ include "trino.httpsKeystore" . | quote }}
+            {{- end }}
+            - name: APCHI_TRINO_PROCESS_FORWARDED
+              value: {{ include "trino.behindTlsProxy" . | empty | not | quote }}
+            - name: APCHI_TRINO_AUTHENTICATION_TYPE
+              # The helper refuses a type Trino has no user-mapping property for.
+              value: {{ $_ := include "trino.userMappingProperty" . }}{{ .Values.trino.authentication.type | quote }}
+            - name: APCHI_TRINO_ENVIRONMENT
+              value: {{ .Values.trino.environment | quote }}
+            - name: APCHI_TRINO_SECURITY_REFRESH_PERIOD
+              value: {{ required "trino.securityRefreshPeriod is required" .Values.trino.securityRefreshPeriod | quote }}
+            {{- if include "apchi.hasTruststore" . }}
+            - name: APCHI_TRINO_JAVA_TRUSTSTORE_PATH
+              value: "/etc/pki/java/truststore/cacerts"
+            {{- end }}
             - name: APCHI_VERIFICATION_CATALOG
               value: {{ .Values.trino.verificationCatalog | quote }}
             - name: APCHI_CATALOG_SECRET_NAME

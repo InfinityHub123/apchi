@@ -21,11 +21,13 @@ from app.adapters.kubernetes import CREDENTIAL_FILE_MODE, PodState, RolloutState
 from app.adapters.trino import Trino
 from app.config import Settings
 from app.main import create_app
+from app.sections.admin import AdminValues
 from app.sections.certificate_mapping.generator import FILE_KEY as MAPPING_KEY
 from app.sections.certificate_mapping.generator import MOUNT_DIR as MAPPING_DIR
 from app.sections.certificate_mapping.generator import render_rules
 from app.sections.permissions.generator import RULES_KEY
 from app.sections.permissions.generator import render_rules as render_access_control
+from app.sections.server_configuration import coordinator_secret
 
 # Pinned to match deploy/trino-dev and the supported range in section 8, so a
 # Trino upgrade breaks CI rather than production.
@@ -92,6 +94,17 @@ def _trino_container() -> DockerContainer:
 _SETTINGS = Settings()
 MAPPING_SECRET = _SETTINGS.certificate_mapping_secret_name
 RULES_SECRET = _SETTINGS.access_control_secret_name
+SERVER_CONFIG_SECRET = _SETTINGS.server_configuration_secret_name
+
+#: The coordinator's own files, mounted from Apchi's Secret the way the chart mounts them.
+SERVER_CONFIG_FILES = (
+    "config.properties",
+    "node.properties",
+    "jvm.config",
+    "log.properties",
+    "catalog-store.properties",
+    "access-control.properties",
+)
 
 
 def bootstrap_secrets() -> dict[str, dict[str, str]]:
@@ -106,6 +119,9 @@ def bootstrap_secrets() -> dict[str, dict[str, str]]:
     return {
         MAPPING_SECRET: {MAPPING_KEY: render_rules({}, _SETTINGS.trino_user)},
         RULES_SECRET: {RULES_KEY: render_access_control(_SETTINGS.trino_user)},
+        # Trino's own files, as Apchi writes them on its first start with no Admin values --
+        # which is what a Cluster that has run Apchi once holds (ADR-0010).
+        SERVER_CONFIG_SECRET: coordinator_secret(AdminValues().server_configuration, _SETTINGS),
     }
 
 
@@ -144,16 +160,14 @@ def healthy_pod_spec() -> dict[str, Any]:
             {
                 "name": "trino",
                 "volumeMounts": [
-                    {
-                        "name": "config",
-                        "mountPath": "/etc/trino/config.properties",
-                        "subPath": "coordinator-config.properties",
-                    },
-                    {
-                        "name": "config",
-                        "mountPath": "/etc/trino/access-control.properties",
-                        "subPath": "access-control.properties",
-                    },
+                    *(
+                        {
+                            "name": "server-config",
+                            "mountPath": f"/etc/trino/{file}",
+                            "subPath": file,
+                        }
+                        for file in SERVER_CONFIG_FILES
+                    ),
                     {"name": "access-control", "mountPath": "/etc/trino/access-control"},
                     {"name": "apchi-user-mapping", "mountPath": MAPPING_DIR},
                     {"name": "catalog-store", "mountPath": "/data/trino/catalogs"},
@@ -161,7 +175,13 @@ def healthy_pod_spec() -> dict[str, Any]:
             }
         ],
         "volumes": [
-            {"name": "config", "configMap": {"name": "trino-config"}},
+            {
+                "name": "server-config",
+                "secret": {
+                    "secretName": SERVER_CONFIG_SECRET,
+                    "defaultMode": CREDENTIAL_FILE_MODE,
+                },
+            },
             {"name": "access-control", "secret": {"secretName": "trino-access-control"}},
             {"name": "apchi-user-mapping", "secret": {"secretName": MAPPING_SECRET}},
             # With the mode, as deploy/trino-dev has it: the seed carries every

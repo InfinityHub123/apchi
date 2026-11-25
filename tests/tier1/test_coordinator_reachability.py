@@ -15,7 +15,7 @@ import pytest
 
 from app.config import Settings
 from app.pipeline.preconditions import PreconditionFailed, check, pod_spec
-from tests.conftest import FakeKubernetes, healthy_pod_spec
+from tests.conftest import SERVER_CONFIG_SECRET, FakeKubernetes, healthy_pod_spec
 
 #: What a coordinator that authenticates its callers by certificate has in
 #: `config.properties`. `allow-insecure-over-http` is absent, which is its default and the
@@ -28,7 +28,7 @@ CERTIFICATE_AUTH = (
 
 
 def _config(fake_kubernetes: FakeKubernetes, content: str) -> None:
-    fake_kubernetes.config_maps["trino-config"]["coordinator-config.properties"] = content
+    fake_kubernetes.secrets[SERVER_CONFIG_SECRET]["config.properties"] = content
 
 
 async def test_plaintext_against_an_authenticating_coordinator_is_refused(
@@ -144,8 +144,8 @@ async def test_a_config_properties_apchi_cannot_read_yields_no_opinion(
 ) -> None:
     """The one precondition that can hold having missed something, and deliberately: a
     deployment keeping its configuration somewhere Apchi cannot see gets no guess."""
-    # Already the default: the shared fixture mounts config.properties but puts no content
-    # behind it, which is the same position as a ConfigMap Apchi's Role cannot read.
-    assert "coordinator-config.properties" not in fake_kubernetes.config_maps["trino-config"]
+    # The file is mounted but nothing is behind it, which is the same position as a Secret
+    # Apchi's Role cannot read.
+    del fake_kubernetes.secrets[SERVER_CONFIG_SECRET]["config.properties"]
 
     await check(fake_kubernetes, pod_spec(healthy_pod_spec()), settings)

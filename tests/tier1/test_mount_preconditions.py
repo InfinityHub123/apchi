@@ -86,11 +86,16 @@ async def test_the_refusal_names_every_file_apchi_would_mount_there(
 async def test_one_refusal_per_offending_mount_not_per_file(
     settings: Settings, fake_kubernetes: FakeKubernetes
 ) -> None:
-    """Four files behind one mount is one thing to fix, so it reads as one problem."""
+    """Four files behind one mount is one thing to fix, so each check that refuses it says so
+    once: the sixth, because Apchi's single files have nothing to bind onto, and the ninth,
+    because the mount is not Apchi's at all."""
     with pytest.raises(PreconditionFailed) as raised:
         await check(fake_kubernetes, pod_spec(_whole_config_directory()), settings)
 
-    assert len(raised.value.problems) == 1, raised.value.problems
+    problems = raised.value.problems
+    assert len(problems) == 2, problems
+    assert sum("not a directory" in problem for problem in problems) == 1
+    assert sum("renders every file under /etc/trino" in problem for problem in problems) == 1
 
 
 async def test_a_mount_above_the_config_directory_is_refused(
@@ -103,19 +108,31 @@ async def test_a_mount_above_the_config_directory_is_refused(
     assert "not a directory" in str(raised.value)
 
 
-async def test_a_nested_directory_mount_below_the_config_directory_is_accepted(
+async def test_a_nested_directory_mount_below_the_config_directory_is_not_the_sixths_problem(
     settings: Settings, fake_kubernetes: FakeKubernetes
 ) -> None:
     """A directory inside a directory mount layers correctly -- verified with a two-volume
     pod, and relied on by the official chart's own /etc/trino/catalog. Apchi's two
-    CoordinatorDirectory Sections are this shape, so refusing it would refuse Apchi."""
+    CoordinatorDirectory Sections are this shape, so the sixth precondition must not refuse it.
+
+    The ninth does, when the directory is not Apchi's: nothing but Apchi's Secrets may be
+    mounted under /etc/trino (ADR-0010). Which one refuses it is the point -- the remedy for
+    each is different."""
     spec = _with_mount(
         healthy_pod_spec(),
         {"name": "catalogs", "mountPath": "/etc/trino/catalog"},
         {"name": "catalogs", "configMap": {"name": "trino-catalogs"}},
     )
 
-    await check(fake_kubernetes, pod_spec(spec), settings)
+    with pytest.raises(PreconditionFailed) as raised:
+        await check(fake_kubernetes, pod_spec(spec), settings)
+
+    assert raised.value.problems == [
+        "Container 'trino' mounts 'catalogs' (ConfigMap 'trino-catalogs') at "
+        "/etc/trino/catalog. Apchi renders every file under /etc/trino, so nothing else may "
+        "be mounted there: set the properties through the Server Configuration, or write the "
+        "file as a Raw File, and remove this mount."
+    ]
 
 
 async def test_apchis_own_single_file_mount_does_not_trip_it(
@@ -144,17 +161,26 @@ async def test_apchis_own_single_file_mount_does_not_trip_it(
     await check(fake_kubernetes, pod_spec(spec), settings)
 
 
-async def test_a_writable_directory_over_the_config_directory_is_accepted(
+async def test_a_writable_directory_over_the_config_directory_is_not_the_sixths_problem(
     settings: Settings, fake_kubernetes: FakeKubernetes
 ) -> None:
-    """Scoped deliberately to read-only volumes, which is the case the "not a directory"
-    failure was reproduced for. Whether the kubelet can create a bind target inside a
-    writable emptyDir is unverified, and refusing a deployment that may work is the
-    opposite of what the preconditions are for."""
+    """The sixth is scoped deliberately to read-only volumes, which is the case the "not a
+    directory" failure was reproduced for. Whether the kubelet can create a bind target
+    inside a writable emptyDir is unverified, so the sixth stays out of it.
+
+    The ninth does not: an emptyDir over /etc/trino is a directory nobody renders, holding
+    whatever the image or a sidecar put there, which is a second owner of Trino's files."""
     spec = _with_mount(
         healthy_pod_spec(),
         {"name": "scratch", "mountPath": "/etc/trino"},
         {"name": "scratch", "emptyDir": {}},
     )
 
-    await check(fake_kubernetes, pod_spec(spec), settings)
+    with pytest.raises(PreconditionFailed) as raised:
+        await check(fake_kubernetes, pod_spec(spec), settings)
+
+    assert not any("not a directory" in problem for problem in raised.value.problems)
+    assert [problem.split(" (")[0] for problem in raised.value.problems] == [
+        "Container 'trino' mounts 'scratch'"
+    ]
+    assert "neither a Secret nor a ConfigMap" in raised.value.problems[0]

@@ -294,3 +294,42 @@ async def test_an_admin_apply_says_it_is_one(as_admin: AsyncClient) -> None:
     assert record["kind"] == "admin_apply"
     assert record["started_by"] == "root"
     assert record["started_via"] == "password"
+
+
+async def test_content_nothing_mounts_needs_no_rollout(
+    as_admin: AsyncClient, fake_kubernetes: FakeKubernetes
+) -> None:
+    """A key nothing mounts is a file Trino never sees. Content left in the Secret after its
+    mount went -- by hand, or by a reset that took the mount off -- once restarted the
+    coordinator at the next Apply, found by tier 2 when a raw-file test ran before one that
+    asserts no restart."""
+    from app.pipeline import raw_files
+    from app.sections.base import Cluster
+
+    state = _cluster_of(as_admin)
+    await fake_kubernetes.write_secret(
+        state.settings.raw_files_secret_name, {secret_key(EXTRA): "left behind\n"}
+    )
+
+    def cluster(admin: object) -> Cluster:
+        return Cluster(
+            trino=state.trino,
+            kubernetes=state.kubernetes,
+            settings=state.settings,
+            admin=admin,  # type: ignore[arg-type]
+        )
+
+    assert await raw_files.changed(cluster(await state.admin_store.load())) is False
+
+    # And with a file that is mounted, a stale key beside it changes nothing either.
+    await _write(as_admin, "/etc/trino/other.properties", "kept\n")
+    await _deliver(as_admin)
+    await fake_kubernetes.write_secret(
+        state.settings.raw_files_secret_name,
+        {
+            **await fake_kubernetes.read_secret(state.settings.raw_files_secret_name),
+            secret_key(EXTRA): "left behind\n",
+        },
+    )
+
+    assert await raw_files.changed(cluster(await state.admin_store.load())) is False

@@ -33,6 +33,8 @@ import yaml
 from app.adapters.kubernetes import FORBIDDEN_CREDENTIAL_BITS, TRINO_GROUP
 from app.config import Settings
 from app.pipeline.preconditions import PodSpec, PreconditionFailed, check
+from app.sections.admin import AdminValues
+from app.sections.server_configuration import coordinator_secret
 
 ROOT = Path(__file__).resolve().parents[1]
 CHART = ROOT / "charts" / "apchi"
@@ -117,6 +119,10 @@ def _name_disagreements(documents: list[dict[str, Any]]) -> list[str]:
     that is overridden in a template is the kind of disagreement reading values would miss.
     """
     written = {d["metadata"]["name"] for d in documents if d["kind"] == "Secret"}
+    # Apchi writes this one itself, on its first start: its content is rendered from the Admin
+    # values in MongoDB, which no chart can read (ADR-0010). It must still be the Secret the
+    # Apchi this chart renders is told to write, or the coordinator waits for it forever.
+    written.add(_apchi_settings(documents).server_configuration_secret_name)
     coordinator = _coordinator(documents)
     spec = PodSpec.model_validate(coordinator["spec"]["template"]["spec"])
     mounted = {
@@ -141,7 +147,7 @@ def _name_disagreements(documents: list[dict[str, Any]]) -> list[str]:
 #: catalog's `connection-password`; the certificate volume holds private keys. Named here
 #: rather than inferred, because "does this volume carry a secret worth protecting" is a
 #: judgement about content and not something a renderer can answer.
-CREDENTIAL_VOLUMES = ("catalog-seed", "client-certificates")
+CREDENTIAL_VOLUMES = ("catalog-seed", "client-certificates", "server-config")
 
 
 def _permission_problems(documents: list[dict[str, Any]]) -> list[str]:
@@ -265,6 +271,7 @@ def _check(values: tuple[str, ...]) -> int:
             print(f"  - {problem}", file=sys.stderr)
         return 1
 
+    settings = _apchi_settings(documents)
     cluster = _Cluster(
         {
             d["metadata"]["name"]: (d.get("data") or {})
@@ -275,6 +282,14 @@ def _check(values: tuple[str, ...]) -> int:
             d["metadata"]["name"]: (d.get("stringData") or {})
             for d in documents
             if d["kind"] == "Secret"
+        }
+        # And the one Apchi writes itself, as the Apchi this chart configures would write it
+        # on its first start: the files the preconditions read, config.properties and
+        # access-control.properties among them, are in it.
+        | {
+            settings.server_configuration_secret_name: coordinator_secret(
+                AdminValues().server_configuration, settings
+            )
         },
         {
             d["metadata"]["name"]: d["spec"]["template"]["spec"]
@@ -283,7 +298,7 @@ def _check(values: tuple[str, ...]) -> int:
         },
     )
     try:
-        asyncio.run(check(cluster, spec, _apchi_settings(documents)))  # type: ignore[arg-type]
+        asyncio.run(check(cluster, spec, settings))  # type: ignore[arg-type]
     except PreconditionFailed as exc:
         print("Apchi would refuse the Trino this chart renders:", file=sys.stderr)
         for problem in exc.problems:

@@ -23,7 +23,7 @@ from app.api.deps import (
     MaintenanceStoreDep,
     MutationsEnabled,
 )
-from app.api.errors import Conflict, NotFound
+from app.api.errors import Conflict, NotFound, UnprocessablePayload
 from app.pipeline.applies import ApplyRecord, ApplyRunner
 from app.pipeline.configuration import (
     AdminImport,
@@ -38,6 +38,11 @@ from app.sections.admin import MAX_PRESERVED_MAPPINGS, AdminValues
 from app.sections.certificate_mapping.model import CertificateMappingWrite
 from app.sections.certificate_mapping.section import validate_patterns
 from app.sections.raw_files import RawFile, RawFileWrite, normalised
+from app.sections.server_configuration import (
+    RENDERED_PATHS,
+    ServerConfiguration,
+    render_coordinator,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +186,81 @@ async def set_enforcement(
     return PermissionEnforcement(enforced=saved.enforce_permissions)
 
 
+# --- Trino's own files: the Admin's properties, rendered with the chart's wiring (§14) ---------
+
+
+class RenderedFiles(BaseModel):
+    """The files Apchi would write for the coordinator, as the next Apply would write them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    coordinator: dict[str, str] = Field(
+        description=(
+            "Each file Apchi renders under /etc/trino, by path: wiring first, then the "
+            "Admin's properties. Holds whatever credentials those properties hold."
+        )
+    )
+
+
+@router.get(
+    "/server-configuration",
+    response_model=ServerConfiguration,
+    summary="The Admin's properties for Trino's own files",
+)
+async def get_server_configuration(admin: AdminStoreDep) -> ServerConfiguration:
+    """Returned with their values, unlike a Raw File's content: these are named properties an
+    Admin edits one at a time, and this surface is the Admin's alone. They can still be
+    credentials, which is why they are never logged."""
+    return (await admin.load()).server_configuration
+
+
+@router.put(
+    "/server-configuration",
+    response_model=ServerConfiguration,
+    summary="Replace the Admin's properties for Trino's own files",
+    dependencies=[MutationsEnabled],
+)
+async def set_server_configuration(
+    configuration: ServerConfiguration, admin: AdminStoreDep
+) -> ServerConfiguration:
+    """Replaces every property of every file, as a PUT does.
+
+    Refused here, before anything is stored: wiring and sizing, which are the chart's, and
+    any key or value Trino would read differently from how it is written -- a line break adds
+    a hidden line, a trailing backslash joins the next one. Everything else Trino judges: on
+    the validation probe at the next Apply, and on the Cluster after it, where Auto Rollback
+    puts the previous properties back if the coordinator does not come up.
+
+    Nothing reaches the Cluster until an Apply, and that Apply restarts the coordinator,
+    because Trino reads each of these files once at start.
+    """
+    values = await admin.load()
+    saved = await admin.save(values.model_copy(update={"server_configuration": configuration}))
+    # Which files and how many properties, never a value: any of them may be a credential.
+    logger.warning(
+        "admin replaced the server configuration",
+        extra={
+            file: len(properties)
+            for file, properties in saved.server_configuration.coordinator.by_file().items()
+        },
+    )
+    return saved.server_configuration
+
+
+@router.get(
+    "/server-configuration/files",
+    response_model=RenderedFiles,
+    summary="The files Apchi renders for the coordinator",
+)
+async def get_rendered_files(admin: AdminStoreDep, request: Request) -> RenderedFiles:
+    """What the next Apply writes, wiring included -- the only place the wiring can be read
+    whole, because it comes from the chart's settings rather than from anything stored."""
+    values = await admin.load()
+    return RenderedFiles(
+        coordinator=render_coordinator(values.server_configuration, request.app.state.settings)
+    )
+
+
 @router.post(
     "/applies",
     response_model=ApplyRecord,
@@ -282,6 +362,20 @@ async def import_configuration(
     # value reaching the same file.
     sections = accepted(document)
     validate_patterns(document.admin.preserved_certificate_mappings)
+    # A raw file at a path Apchi renders would replace that file whole. Refused here the way
+    # writing one through /admin/files is, so an import cannot store what no Apply would run.
+    if rendered := sorted(
+        path for path in document.admin.raw_files if normalised(path) in RENDERED_PATHS
+    ):
+        raise UnprocessablePayload(
+            f"The document carries raw files at {', '.join(rendered)}, which Apchi renders "
+            "itself from the Server Configuration and the chart's wiring. Move their "
+            "properties into admin.server_configuration.",
+            details=[
+                {"property": f"admin.raw_files.{path}", "problem": "rendered by Apchi"}
+                for path in rendered
+            ],
+        )
 
     # Sections first, deliberately. These are two documents and there is no transaction
     # across them, so one of them can land alone. Sections landing alone leaves an imported

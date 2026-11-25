@@ -233,6 +233,62 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/server-configuration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The Admin's properties for Trino's own files
+         * @description Returned with their values, unlike a Raw File's content: these are named properties an
+         *     Admin edits one at a time, and this surface is the Admin's alone. They can still be
+         *     credentials, which is why they are never logged.
+         */
+        get: operations["get_server_configuration_api_v1_admin_server_configuration_get"];
+        /**
+         * Replace the Admin's properties for Trino's own files
+         * @description Replaces every property of every file, as a PUT does.
+         *
+         *     Refused here, before anything is stored: wiring and sizing, which are the chart's, and
+         *     any key or value Trino would read differently from how it is written -- a line break adds
+         *     a hidden line, a trailing backslash joins the next one. Everything else Trino judges: on
+         *     the validation probe at the next Apply, and on the Cluster after it, where Auto Rollback
+         *     puts the previous properties back if the coordinator does not come up.
+         *
+         *     Nothing reaches the Cluster until an Apply, and that Apply restarts the coordinator,
+         *     because Trino reads each of these files once at start.
+         */
+        put: operations["set_server_configuration_api_v1_admin_server_configuration_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/server-configuration/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The files Apchi renders for the coordinator
+         * @description What the next Apply writes, wiring included -- the only place the wiring can be read
+         *     whole, because it comes from the chart's settings rather than from anything stored.
+         */
+        get: operations["get_rendered_files_api_v1_admin_server_configuration_files_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/applies": {
         parameters: {
             query?: never;
@@ -1534,6 +1590,8 @@ export interface components {
             raw_files?: {
                 [key: string]: string;
             };
+            /** @description The Admin's properties for Trino's own files, by role and file. Apchi renders each file as wiring first, then these. Wiring and sizing come from the chart and are refused here. */
+            server_configuration?: components["schemas"]["ServerConfiguration"];
         };
         /** ApiError */
         ApiError: {
@@ -2056,6 +2114,33 @@ export interface components {
                 };
             };
         };
+        /**
+         * CoordinatorFiles
+         * @description The Admin's properties for the coordinator, one map per file Trino reads.
+         */
+        CoordinatorFiles: {
+            /**
+             * Config.Properties
+             * @description Properties for the coordinator's config.properties. Wiring and sizing are refused: they belong to the chart.
+             */
+            "config.properties"?: {
+                [key: string]: string;
+            };
+            /**
+             * Log.Properties
+             * @description Log levels, by logger name: {"io.trino.plugin.postgresql": "DEBUG"}.
+             */
+            "log.properties"?: {
+                [key: string]: string;
+            };
+            /**
+             * Node.Properties
+             * @description Extra node.properties.
+             */
+            "node.properties"?: {
+                [key: string]: string;
+            };
+        };
         /** Credentials */
         Credentials: {
             /** Password */
@@ -2542,6 +2627,19 @@ export interface components {
              */
             content: string;
         };
+        /**
+         * RenderedFiles
+         * @description The files Apchi would write for the coordinator, as the next Apply would write them.
+         */
+        RenderedFiles: {
+            /**
+             * Coordinator
+             * @description Each file Apchi renders under /etc/trino, by path: wiring first, then the Admin's properties. Holds whatever credentials those properties hold.
+             */
+            coordinator: {
+                [key: string]: string;
+            };
+        };
         /** ResourceChange */
         ResourceChange: {
             /** After */
@@ -2945,6 +3043,13 @@ export interface components {
              * @description Evaluated top to bottom.
              */
             selectors?: components["schemas"]["Selector"][];
+        };
+        /**
+         * ServerConfiguration
+         * @description The Admin's half of Trino's own files. Workers arrive in the next stage.
+         */
+        ServerConfiguration: {
+            coordinator?: components["schemas"]["CoordinatorFiles"];
         };
         /**
          * SignIn
@@ -3649,6 +3754,133 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_server_configuration_api_v1_admin_server_configuration_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServerConfiguration"];
+                };
+            };
+            /** @description No usable credential. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated, but not an Admin. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    set_server_configuration_api_v1_admin_server_configuration_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServerConfiguration"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServerConfiguration"];
+                };
+            };
+            /** @description No usable credential. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated, but not an Admin. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_rendered_files_api_v1_admin_server_configuration_files_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenderedFiles"];
+                };
+            };
+            /** @description No usable credential. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated, but not an Admin. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
                 };
             };
         };

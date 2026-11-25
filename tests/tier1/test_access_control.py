@@ -18,7 +18,7 @@ from app.pipeline.applies import TERMINAL
 from app.pipeline.preconditions import PreconditionFailed, check, pod_spec
 from app.sections.permissions.generator import MOUNT_PATH, RULES_KEY, render_rules
 from app.sections.resource_groups.generator import RULES_PATH
-from tests.conftest import FakeKubernetes, healthy_pod_spec
+from tests.conftest import SERVER_CONFIG_SECRET, FakeKubernetes, healthy_pod_spec
 
 ACCESS_CONTROL_SECRET = "trino-access-control"
 MEMORY = {"name": "scratch", "connector": "memory", "properties": {}}
@@ -330,7 +330,7 @@ async def test_a_cluster_that_never_rereads_the_rules_is_refused(
     again, so Apchi would write a permission change, report success, and the Cluster would
     never see it. The one precondition that reads the Admin's configuration rather than
     their pod template."""
-    fake_kubernetes.config_maps["trino-config"]["access-control.properties"] = (
+    fake_kubernetes.secrets[SERVER_CONFIG_SECRET]["access-control.properties"] = (
         "access-control.name=file\nsecurity.config-file=/etc/trino/access-control/rules.json\n"
     )
 
@@ -363,7 +363,7 @@ async def test_properties_apchi_cannot_read_are_reported_rather_than_assumed(
 ) -> None:
     """A mount Apchi cannot follow is not the same as a missing property, and saying "no
     refresh period" would send an Admin looking for the wrong thing."""
-    fake_kubernetes.config_maps.pop("trino-config")
+    fake_kubernetes.secrets.pop(SERVER_CONFIG_SECRET)
 
     with pytest.raises(PreconditionFailed) as raised:
         await check(fake_kubernetes, pod_spec(healthy_pod_spec()), settings)
@@ -376,7 +376,7 @@ async def test_an_apply_is_refused_when_the_rules_would_never_be_reread(
 ) -> None:
     """Checked before every Apply, so a chart change that drops the refresh period stops
     Apchi rather than making it lie about what it applied."""
-    fake_kubernetes.config_maps["trino-config"]["access-control.properties"] = (
+    fake_kubernetes.secrets[SERVER_CONFIG_SECRET]["access-control.properties"] = (
         "access-control.name=file\n"
     )
 
@@ -405,6 +405,7 @@ async def test_the_whole_configuration_directory_counts_as_mounting_the_properti
         if mount["mountPath"] != "/etc/trino/access-control.properties"
     ]
     spec["containers"][0]["volumeMounts"].append({"name": "config", "mountPath": "/etc/trino"})
+    spec["volumes"].append({"name": "config", "configMap": {"name": "trino-config"}})
 
     with pytest.raises(PreconditionFailed) as raised:
         await check(fake_kubernetes, pod_spec(spec), settings)
@@ -427,6 +428,7 @@ async def test_a_directory_mount_without_the_refresh_period_is_still_refused(
         if mount["mountPath"] != "/etc/trino/access-control.properties"
     ]
     spec["containers"][0]["volumeMounts"].append({"name": "config", "mountPath": "/etc/trino"})
+    spec["volumes"].append({"name": "config", "configMap": {"name": "trino-config"}})
 
     with pytest.raises(PreconditionFailed) as raised:
         await check(fake_kubernetes, pod_spec(spec), settings)
@@ -453,6 +455,7 @@ async def test_a_file_mount_overrides_the_directory_it_sits_in(
         {"name": "config", "mountPath": "/etc/trino"},
         {"name": "overlay", "mountPath": "/etc/trino/access-control.properties"},
     ]
+    spec["volumes"].append({"name": "config", "configMap": {"name": "trino-config"}})
     spec["volumes"].append({"name": "overlay", "configMap": {"name": "trino-overlay"}})
 
     with pytest.raises(PreconditionFailed) as raised:

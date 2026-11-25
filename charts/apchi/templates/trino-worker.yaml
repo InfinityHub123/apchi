@@ -33,9 +33,8 @@ spec:
         - name: trino
           image: {{ include "trino.image" . | quote }}
           imagePullPolicy: {{ .Values.trino.image.pullPolicy }}
-          {{- if and (include "apchi.hasTruststore" .) .Values.javaTruststore.password.existingSecret }}
-          env: {{- include "apchi.truststorePasswordEnv" . | trim | nindent 12 }}
-          {{- end }}
+          # Sizing, on the pod beside the memory limit it has to fit. See the coordinator.
+          env: {{- include "trino.jvmEnv" (dict "root" . "role" "worker") | trim | nindent 12 }}
           ports:
             - containerPort: {{ .Values.trino.httpPort }}
               name: http
