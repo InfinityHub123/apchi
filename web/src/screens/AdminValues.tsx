@@ -2,7 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api, unwrap } from "../api/client";
 import { useCluster } from "../api/queries";
-import { useAdminApply, useEnforcement, useRawFiles } from "../admin/requests";
+import { FILES, filled, useAdminApply, useEnforcement, useRawFiles, useServerConfiguration } from "../admin/requests";
 import { useQuery } from "@tanstack/react-query";
 import { Pill } from "../ui/Pill";
 import { ErrorNote, PageHead } from "../ui/States";
@@ -13,6 +13,11 @@ export function AdminValuesScreen() {
   const live = useCluster().data?.snapshot ?? null;
   const enforcement = useEnforcement();
   const files = useRawFiles();
+  const server = useServerConfiguration();
+  const set = (["coordinator", "worker"] as const).map((role) => ({
+    role,
+    count: FILES.reduce((n, f) => n + Object.keys(filled(server.data)[role][f]).length, 0),
+  }));
   const preserved = useQuery({ queryKey: ["admin", "preserved-mappings"], queryFn: () => api.GET("/api/v1/admin/certificate-mapping/preserved").then(unwrap) });
   const apply = useAdminApply();
   const exporting = useMutation({ mutationFn: () => download("/api/v1/admin/configuration/export", "apchi-configuration-with-admin-values.json") });
@@ -109,6 +114,21 @@ export function AdminValuesScreen() {
           </div>
         )}
         <ErrorNote error={rules.error} flush={false} />
+      </section>
+      <section className="card">
+        <div className="chd">
+          <span className="ct">Server configuration</span>
+          <span className="sm muted">Trino's own files, rendered by Apchi; wiring and sizing are the chart's</span>
+        </div>
+        <div className="cr" style={{ gridTemplateColumns: "220px minmax(0,1fr) auto" }}>
+          <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <b>Properties</b> <Pill tone="x">{server.data === undefined ? "…" : set.reduce((n, r) => n + r.count, 0)}</Pill>
+          </span>
+          <span className="muted">
+            {server.data === undefined ? "…" : set.map((r) => `${r.role === "worker" ? "workers" : r.role}: ${r.count}`).join(" · ")}
+          </span>
+          <Link to="/admin/server-configuration">Manage →</Link>
+        </div>
       </section>
       <section className="card">
         <div className="chd">

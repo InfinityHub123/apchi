@@ -213,6 +213,32 @@ export const LISTENERS = [
   { name: "audit_sink", type: "http", supported: false, properties: { "http-event-listener.connect-ingest-uri": "https://audit" } },
 ];
 
+const NO_PROPERTIES = { "config.properties": {}, "node.properties": {}, "log.properties": {} };
+
+/** As the API returns it: both roles, every file, values in full. */
+export const SERVER_CONFIGURATION = {
+  coordinator: {
+    ...NO_PROPERTIES,
+    "config.properties": {
+      "query.max-execution-time": "2h",
+      "internal-communication.shared-secret": "s3cret-shared",
+    },
+  },
+  worker: { ...NO_PROPERTIES, "config.properties": { "task.concurrency": "16" } },
+};
+
+/** As the next Apply would write them: wiring first, then the Admin's. */
+export const RENDERED_FILES = {
+  coordinator: {
+    "/etc/trino/config.properties":
+      "coordinator=true\nhttp-server.http.port=8080\ninternal-communication.shared-secret=s3cret-shared\nquery.max-execution-time=2h\n",
+    "/etc/trino/log.properties": "",
+  },
+  worker: {
+    "/etc/trino/config.properties": "coordinator=false\nshutdown.grace-period=120s\ntask.concurrency=16\n",
+  },
+};
+
 export const DRIFT = {
   at: NOW,
   snapshot: 13,
@@ -278,6 +304,8 @@ export const DEFAULTS: Stubs = {
   "GET /api/v1/event-listeners/*": (_route: Route, url: URL) => LISTENERS.find((l) => url.pathname.endsWith(`/${l.name}`)) ?? new Reply(404, { message: "no" }),
   "GET /api/v1/certificate-mapping": new Reply(404, { code: "not_found", message: "No pattern.", request_id: "r" }),
   "GET /api/v1/admin/certificate-mapping/preserved": { patterns: [] },
+  "GET /api/v1/admin/server-configuration": SERVER_CONFIGURATION,
+  "GET /api/v1/admin/server-configuration/files": RENDERED_FILES,
   "GET /api/v1/catalogs/*": (_route: Route, url: URL) =>
     CATALOGS.find((c) => url.pathname.endsWith(`/${c.name}`)) ?? new Reply(404, { code: "not_found", message: "No such catalog.", request_id: "r" }),
 };

@@ -134,9 +134,11 @@ export function RawFilesScreen() {
             {write.isSuccess && <div className="note note--blue note--flush">Written. Nothing changes on the cluster until the next Apply.</div>}
             <ErrorNote error={write.error} />
             <div className="sm muted">
-              <b>Refused when written:</b> a path Apchi generates (replacing it could silently open the cluster), and any path on a
-              whole-directory deployment, where Kubernetes cannot place a single file. <span className="mono">config.properties</span> is allowed
-              but not validated — it is proved on the cluster, with Auto Rollback as the safety net.
+              <b>Refused when written:</b> a path Apchi generates (replacing it could silently open the cluster) — Trino's own{" "}
+              <span className="mono">config.properties</span>, <span className="mono">jvm.config</span>, <span className="mono">node.properties</span>,{" "}
+              <span className="mono">log.properties</span> and the access-control and catalog-store files among them, whose properties belong in{" "}
+              <Link to="/admin/server-configuration">Server configuration</Link> — a path the deployment already mounts, and any path on a
+              whole-directory deployment, where Kubernetes cannot place a single file.
             </div>
           </div>
         </form>

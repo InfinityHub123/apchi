@@ -43,6 +43,10 @@ export const routes: RouteObject[] = [
   { path: "admin", ...screen(() => import("./screens/AdminValues"), "AdminValuesScreen") },
   { path: "admin/enforcement", ...screen(() => import("./screens/Enforcement"), "EnforcementScreen") },
   { path: "admin/raw-files", ...screen(() => import("./screens/RawFiles"), "RawFilesScreen") },
+  {
+    path: "admin/server-configuration",
+    ...screen(() => import("./screens/ServerConfiguration"), "ServerConfigurationScreen"),
+  },
   { path: "maintenance", ...screen(() => import("./screens/Maintenance"), "MaintenanceScreen") },
   { path: "tokens", ...screen(() => import("./screens/Tokens"), "TokensScreen") },
   { path: "*", ...screen(() => import("./screens/NotFound"), "NotFound") },

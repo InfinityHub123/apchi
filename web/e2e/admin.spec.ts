@@ -104,3 +104,109 @@ test("an unknown path says so", async ({ page }) => {
   await page.goto("/no-such-screen");
   await expect(page.getByRole("heading", { name: "Not found" })).toBeVisible();
 });
+
+// --- Server configuration ------------------------------------------------------------------
+
+test("server configuration shows each role's properties, masking what looks like a credential", async ({ page }) => {
+  await stubApi(page, ADMIN_STUBS);
+  await page.goto("/admin/server-configuration");
+
+  const config = page.getByRole("region", { name: "config.properties" });
+  await expect(config.getByRole("row", { name: /query.max-execution-time/ })).toContainText("2h");
+  const secret = config.getByRole("row", { name: /internal-communication.shared-secret/ });
+  await expect(secret).toContainText("••••••••");
+  await expect(secret).not.toContainText("s3cret-shared");
+  await secret.getByRole("button", { name: "Show" }).click();
+  await expect(secret).toContainText("s3cret-shared");
+  await expect(page.getByText("ends every running query")).toBeVisible();
+
+  await page.getByRole("tab", { name: "Workers" }).click();
+  await expect(config.getByRole("row", { name: /task.concurrency/ })).toContainText("16");
+  await expect(page.getByText("no query is lost")).toBeVisible();
+});
+
+test("saving sends both roles whole, and a refusal says why in Apchi's words", async ({ page }) => {
+  let sent: unknown = null;
+  await stubApi(page, {
+    ...ADMIN_STUBS,
+    "PUT /api/v1/admin/server-configuration": (route: Route) => {
+      sent = route.request().postDataJSON();
+      return route.fulfill({
+        status: 422,
+        contentType: "application/json",
+        body: JSON.stringify({
+          code: "unprocessable_payload",
+          message: "config.properties: discovery.uri is wiring and cannot be set here; it comes from the coordinator Service",
+          request_id: "r",
+        }),
+      });
+    },
+  });
+  await page.goto("/admin/server-configuration");
+  await expect(page.getByRole("button", { name: "Save both roles" })).toBeDisabled();
+
+  await page.getByRole("tab", { name: "Workers" }).click();
+  await page.getByLabel("log.properties property").fill("io.trino.execution");
+  await page.getByLabel("log.properties value").fill("DEBUG");
+  await page.getByRole("region", { name: "log.properties" }).getByRole("button", { name: "Add" }).click();
+  await page.getByRole("button", { name: "Save both roles" }).click();
+
+  await expect.poll(() => sent).toEqual({
+    coordinator: {
+      "config.properties": { "query.max-execution-time": "2h", "internal-communication.shared-secret": "s3cret-shared" },
+      "node.properties": {},
+      "log.properties": {},
+    },
+    worker: {
+      "config.properties": { "task.concurrency": "16" },
+      "node.properties": {},
+      "log.properties": { "io.trino.execution": "DEBUG" },
+    },
+  });
+  await expect(page.getByText("discovery.uri is wiring and cannot be set here")).toBeVisible();
+});
+
+test("a credential-looking value is typed into a password field", async ({ page }) => {
+  await stubApi(page, ADMIN_STUBS);
+  await page.goto("/admin/server-configuration");
+  await page.getByLabel("config.properties property").fill("http-server.authentication.oauth2.client-secret");
+
+  await expect(page.getByLabel("config.properties value")).toHaveAttribute("type", "password");
+});
+
+test("removing a property and discarding puts it back", async ({ page }) => {
+  await stubApi(page, ADMIN_STUBS);
+  await page.goto("/admin/server-configuration");
+  const config = page.getByRole("region", { name: "config.properties" });
+  await config.getByRole("button", { name: "Remove query.max-execution-time" }).click();
+  await expect(config.getByRole("row", { name: /query.max-execution-time/ })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Discard changes" }).click();
+
+  await expect(config.getByRole("row", { name: /query.max-execution-time/ })).toContainText("2h");
+  await expect(page.getByRole("button", { name: "Save both roles" })).toBeDisabled();
+});
+
+test("the rendered files show the wiring above the Admin's lines, credentials masked", async ({ page }) => {
+  await stubApi(page, ADMIN_STUBS);
+  await page.goto("/admin/server-configuration");
+  const rendered = page.getByRole("region", { name: "Rendered files" });
+
+  await expect(rendered).toContainText("coordinator=true");
+  await expect(rendered).toContainText("internal-communication.shared-secret=••••••••");
+  await expect(rendered).not.toContainText("s3cret-shared");
+  await rendered.getByRole("button", { name: "Show values" }).click();
+  await expect(rendered).toContainText("s3cret-shared");
+
+  await page.getByRole("tab", { name: "Workers" }).click();
+  await expect(rendered).toContainText("shutdown.grace-period=120s");
+});
+
+test("admin values counts the properties set on each role and links to them", async ({ page }) => {
+  await stubApi(page, ADMIN_STUBS);
+  await page.goto("/admin");
+
+  await expect(page.getByText("coordinator: 2 · workers: 1")).toBeVisible();
+  await page.locator('a[href="/admin/server-configuration"]').filter({ hasText: "Manage" }).click();
+  await expect(page).toHaveURL(/\/admin\/server-configuration$/);
+});
