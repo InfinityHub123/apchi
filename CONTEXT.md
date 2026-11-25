@@ -14,8 +14,8 @@ user; owns every Section of the configuration.
 
 **Admin**:
 A member of the team that provides and operates the underlying platform. Can do everything an
-Operator can. Owns infrastructure, Raw Files, Maintenance Mode, and the freeze on Operator
-mutation.
+Operator can. Owns infrastructure, the Server Configuration, Raw Files, Maintenance Mode, and
+the freeze on Operator mutation.
 
 **End User**:
 A person or application issuing queries to Trino. Never an Apchi user; only ever the
@@ -64,6 +64,15 @@ mapping, permissions, resource groups, event listeners. The unit of Section Reve
 A path under Trino's configuration directory and the content to put there, written by an Admin
 and delivered without Apchi forming any opinion about it. Not a Section: raw values never
 enter a Snapshot, so they survive a rollback and leave only when an Admin removes them.
+
+**Server Configuration**:
+Trino's own files for each role (`config.properties`, `jvm.config`, `node.properties`,
+`log.properties`), written by an Admin as properties and rendered by Apchi. Like a Raw File it
+never enters a Snapshot; unlike one, Apchi knows the file and renders it.
+
+**Wiring**:
+The properties in Trino's files that name something the deployment creates: a port, a path, a
+Service. Set by the deployment, rendered by Apchi, and never edited by anyone.
 
 **Review**:
 The diff between the Configuration Candidate and the latest Snapshot. What an Operator sees
