@@ -107,3 +107,28 @@ spec:
         # Private keys, so not world-readable. 0640 with the fsGroup above. §13.2.
         - {name: client-certificates, secret: {secretName: trino-client-certificates, defaultMode: 0640}}
         - {name: data, emptyDir: {}}
+---
+# How many workers a voluntary disruption -- a node drain, a cluster upgrade -- may take at
+# once. Each worker evicted drains first (its preStop hook), so a budget turns a node drain
+# into workers finishing their tasks one at a time, rather than every worker on the node
+# ending its tasks together.
+#
+# Workers only. The coordinator is one pod that cannot drain (ADR-0003): a budget there would
+# either allow its eviction, which protects nothing, or forbid it, which blocks every node drain
+# until somebody deletes the budget.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: trino-worker
+  labels:
+    app.kubernetes.io/name: trino
+    app.kubernetes.io/instance: trino
+    app.kubernetes.io/version: "483"
+    app.kubernetes.io/component: worker
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trino
+      app.kubernetes.io/instance: trino
+      app.kubernetes.io/component: worker
+  maxUnavailable: 1

@@ -14,6 +14,7 @@ reads what Apchi renders, and refuses what it should:
 
 import asyncio
 import json
+import subprocess
 from typing import Any
 
 import pytest
@@ -26,6 +27,7 @@ from app.sections.server_configuration import coordinator_secret
 from tests.tier2.conftest import (
     COORDINATOR,
     SERVER_CONFIG_SECRET,
+    WORKER,
     ForwardedKubernetes,
     PortForward,
     _live_secret,
@@ -389,3 +391,81 @@ async def test_a_workers_value_the_coordinator_does_not_share_is_proved_on_its_o
     assert record["stage"] == "failed", record
     assert "The workers' properties" in (record["failure_reason"] or ""), record
     assert _worker_pod() == worker
+
+
+# --- the workers' disruption budget ------------------------------------------------------------
+
+
+def _evict(pod: str) -> subprocess.CompletedProcess[str]:
+    """Ask the Eviction API for the pod, as a node drain does -- the call a budget governs.
+    Deleting the pod directly would bypass the budget and prove nothing."""
+    eviction = json.dumps(
+        {
+            "apiVersion": "policy/v1",
+            "kind": "Eviction",
+            "metadata": {"name": pod, "namespace": "default"},
+        }
+    )
+    return subprocess.run(
+        [
+            "kubectl",
+            "create",
+            "--raw",
+            f"/api/v1/namespaces/default/pods/{pod}/eviction",
+            "-f",
+            "-",
+        ],
+        input=eviction,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _serving_workers() -> list[str]:
+    pods = json.loads(
+        kubectl("get", "pods", "-l", "app.kubernetes.io/component=worker", "-o", "json")
+    )["items"]
+    return sorted(str(pod["metadata"]["name"]) for pod in _serving(pods))
+
+
+async def test_a_node_drain_takes_one_worker_at_a_time_and_each_drains(
+    e2e_client: AsyncClient,
+) -> None:
+    """With two workers and the default budget, one may be evicted -- and it drains, read from
+    its own log -- and the second is refused until the first is replaced. One worker cannot
+    show the refusal: Kubernetes lets an eviction through when nothing healthy is left to
+    protect."""
+    budget = json.loads(kubectl("get", "pdb", "trino-worker", "-o", "json"))
+    assert budget["status"]["expectedPods"] == 1, budget["status"]
+
+    kubectl("scale", WORKER, "--replicas=2")
+    try:
+        kubectl("rollout", "status", WORKER, "--timeout=600s")
+        for _ in range(60):
+            budget = json.loads(kubectl("get", "pdb", "trino-worker", "-o", "json"))
+            if budget["status"].get("currentHealthy") == 2:
+                break
+            await asyncio.sleep(2)
+        assert budget["status"]["disruptionsAllowed"] == 1, budget["status"]
+        first, second = _serving_workers()
+        captured = subprocess.Popen(
+            ["kubectl", "logs", "-f", f"pod/{first}", "-c", "trino", "--tail=0"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+
+        allowed = _evict(first)
+        refused = _evict(second)
+        kubectl("wait", "--for=delete", f"pod/{first}", "--timeout=120s")
+        captured.terminate()
+        drained = captured.communicate(timeout=30)[0]
+
+        assert allowed.returncode == 0, allowed.stderr
+        assert refused.returncode != 0, "the budget let a second worker go at once"
+        assert "disruption budget" in refused.stderr, refused.stderr
+        assert "Shutdown requested" in drained, drained[-2000:]
+        assert second in _serving_workers(), "the refused worker was taken anyway"
+    finally:
+        kubectl("scale", WORKER, "--replicas=1")
+        kubectl("rollout", "status", WORKER, "--timeout=600s")
