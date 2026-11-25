@@ -53,13 +53,15 @@ checked at all.
   or value Trino would read differently from how it is written. Everything else is judged by
   Trino on the probe, then by Verification and Auto Rollback. `security.refresh-period` turned
   out to be wiring, from the chart, and `http-server.authentication.type` the Admin's (§14).
-- Apply restarts workers when their files change, so worker graceful shutdown becomes part of
-  Apply.
+- Apply restarts the workers when their files change, and only then; they drain first. The
+  drain needs a rule granting Apchi's identity `system_information` write *on the worker*,
+  which checks it against its own access control: Apchi renders that rule, apart from the
+  Operator's Permissions (measured: without it, every identity gets 403).
 - **Raw Files** may no longer take the six paths Apchi renders. Anywhere else they work as
   before, and survive a re-apply of the manifests (measured).
 - **A ninth precondition:** nothing under `/etc/trino` may be mounted from a volume Apchi does
   not write.
-- The chart loses `trino.additionalCoordinatorProperties` and `trino.jvm.*`, and in stage 2
-  `trino.additionalWorkerProperties`. Sizing moves to per-role values.
+- The chart loses `trino.additionalCoordinatorProperties`, `trino.jvm.*`,
+  `trino.additionalWorkerProperties` and its Trino ConfigMap. Sizing moves to per-role values.
 
 Design, with every measurement: §14, *Trino's server configuration*.

@@ -3,8 +3,9 @@
 Apchi renders every file under `/etc/trino`, and the chart renders none (ADR-0010, §14). The
 Sections cover catalogs, rules, mapping, resource groups and event listeners. This is the rest:
 `config.properties`, `jvm.config`, `node.properties`, `log.properties`,
-`catalog-store.properties` and `access-control.properties` -- the coordinator's in this stage,
-the workers' in the next.
+`catalog-store.properties` and `access-control.properties` for the coordinator, and the
+workers' `config.properties`, `jvm.config`, `node.properties`, `log.properties` and the
+access control that lets Apchi's identity drain them.
 
 Three owners meet in these files, and a line always has exactly one of them:
 
@@ -24,8 +25,9 @@ hidden line, a key a properties parser would read as two, and a wiring key. Each
 failure no rollback would ever see, or one that crosses into the chart's territory.
 """
 
+import json
 import re
-from typing import Final
+from typing import ClassVar, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -46,16 +48,35 @@ NODE_PROPERTIES: Final = f"{CONFIG_DIR}/node.properties"
 LOG_PROPERTIES: Final = f"{CONFIG_DIR}/log.properties"
 CATALOG_STORE_PROPERTIES: Final = f"{CONFIG_DIR}/catalog-store.properties"
 
-#: Every file this module renders, by the path Trino reads it at. A Raw File at any of these is
-#: refused, and nothing but Apchi's Secrets may be mounted under the directory (§16).
-RENDERED_PATHS: Final = (
-    CONFIG_PROPERTIES,
-    JVM_CONFIG,
-    NODE_PROPERTIES,
-    LOG_PROPERTIES,
-    CATALOG_STORE_PROPERTIES,
-    ACCESS_CONTROL_PATH,
-)
+#: The workers' access-control rules. Theirs alone: the coordinator's are the Operator's
+#: Permissions, which workers never read -- authorization happens on the coordinator.
+WORKER_RULES_PATH: Final = f"{CONFIG_DIR}/worker-rules.json"
+
+Role = Literal["coordinator", "worker"]
+
+#: Every file this module renders for each role, by the path Trino reads it at.
+ROLE_PATHS: Final[dict[Role, tuple[str, ...]]] = {
+    "coordinator": (
+        CONFIG_PROPERTIES,
+        JVM_CONFIG,
+        NODE_PROPERTIES,
+        LOG_PROPERTIES,
+        CATALOG_STORE_PROPERTIES,
+        ACCESS_CONTROL_PATH,
+    ),
+    "worker": (
+        CONFIG_PROPERTIES,
+        JVM_CONFIG,
+        NODE_PROPERTIES,
+        LOG_PROPERTIES,
+        ACCESS_CONTROL_PATH,
+        WORKER_RULES_PATH,
+    ),
+}
+
+#: Every path this module renders on either role. A Raw File at any of these is refused, and
+#: nothing but Apchi's Secrets may be mounted under the directory (§16).
+RENDERED_PATHS: Final = tuple(dict.fromkeys(ROLE_PATHS["coordinator"] + ROLE_PATHS["worker"]))
 
 #: The pod variables sizing reaches Trino through. Fixed names: the chart sets them and these
 #: files refer to them, and a renamed one is a coordinator that refuses to start with
@@ -64,9 +85,14 @@ QUERY_MAX_MEMORY_ENV: Final = "TRINO_QUERY_MAX_MEMORY"
 QUERY_MAX_MEMORY_PER_NODE_ENV: Final = "TRINO_QUERY_MAX_MEMORY_PER_NODE"
 HEAP_HEADROOM_PER_NODE_ENV: Final = "TRINO_MEMORY_HEAP_HEADROOM_PER_NODE"
 
-#: What owns each property an Admin may not set, as the message refusing it names it. Per file,
-#: because a key means something only in the file Trino reads it from.
-_SIZING = "sizing, which the chart sets beside the memory limit (trino.coordinator.memory)"
+#: What owns each property an Admin may not set, as the message refusing it names it. Per role
+#: and file, because a key means something only in the file Trino reads it from.
+_SIZING = "sizing, which the chart sets beside the memory limit (trino.{role}.memory)"
+_NODE_WIRING = {
+    "node.environment": "trino.environment",
+    "node.data-dir": "the data volume the chart mounts",
+    "node.id": "the pod: the image sets it from the hostname",
+}
 WIRING: Final[dict[str, dict[str, str]]] = {
     "config.properties": {
         "coordinator": "the role this file is rendered for",
@@ -80,16 +106,33 @@ WIRING: Final[dict[str, dict[str, str]]] = {
         "http-server.https.enabled": "trino.https",
         "http-server.https.port": "trino.https.port",
         "http-server.https.keystore.path": "trino.https",
-        "query.max-memory": _SIZING,
-        "query.max-memory-per-node": _SIZING,
-        "memory.heap-headroom-per-node": _SIZING,
+        "query.max-memory": _SIZING.format(role="coordinator"),
+        "query.max-memory-per-node": _SIZING.format(role="coordinator"),
+        "memory.heap-headroom-per-node": _SIZING.format(role="coordinator"),
     },
-    "node.properties": {
-        "node.environment": "trino.environment",
-        "node.data-dir": "the data volume the chart mounts",
-        "node.id": "the pod: the image sets it from the hostname",
-    },
+    "node.properties": _NODE_WIRING,
     "log.properties": {},
+}
+WORKER_WIRING: Final[dict[str, dict[str, str]]] = {
+    "config.properties": {
+        "coordinator": "the role this file is rendered for",
+        "http-server.http.port": "trino.httpPort",
+        "discovery.uri": "the coordinator Service (trino.name, trino.service.port)",
+        "catalog.management": "Apchi: catalogs are applied by DDL (§7.1)",
+        "catalog.store": "Apchi: catalogs are applied by DDL (§7.1)",
+        "query.max-memory": "the coordinator's sizing (trino.coordinator.memory)",
+        "query.max-memory-per-node": _SIZING.format(role="worker"),
+        "memory.heap-headroom-per-node": _SIZING.format(role="worker"),
+        # Has to fit the termination grace period Kubernetes gives the pod, which is the
+        # chart's: a drain longer than that is a worker killed mid-task.
+        "shutdown.grace-period": "trino.worker.gracefulShutdown.gracePeriodSeconds",
+    },
+    "node.properties": _NODE_WIRING,
+    "log.properties": {},
+}
+WIRING_BY_ROLE: Final[dict[Role, dict[str, dict[str, str]]]] = {
+    "coordinator": WIRING,
+    "worker": WORKER_WIRING,
 }
 
 #: An Admin's value of these is the default unless they set it. Only properties whose default
@@ -99,6 +142,15 @@ DEFAULTS: Final[dict[str, dict[str, str]]] = {
     "config.properties": {"node-scheduler.include-coordinator": "false"},
     "node.properties": {},
     "log.properties": {},
+}
+_NO_DEFAULTS: Final[dict[str, dict[str, str]]] = {
+    "config.properties": {},
+    "node.properties": {},
+    "log.properties": {},
+}
+DEFAULTS_BY_ROLE: Final[dict[Role, dict[str, dict[str, str]]]] = {
+    "coordinator": DEFAULTS,
+    "worker": _NO_DEFAULTS,
 }
 
 #: Flags Trino or the chart's shape require, and nothing else. Every JVM *tuning* flag is the
@@ -142,19 +194,21 @@ def _check_value(key: str, value: str) -> str | None:
     return None
 
 
-class CoordinatorFiles(BaseModel):
-    """The Admin's properties for the coordinator, one map per file Trino reads."""
+class _RoleFiles(BaseModel):
+    """The Admin's properties for one role, one map per file Trino reads."""
 
     model_config = ConfigDict(
         extra="forbid", validate_by_name=True, validate_by_alias=True, serialize_by_alias=True
     )
 
+    role: ClassVar[Role]
+
     config_properties: dict[str, str] = Field(
         default_factory=dict,
         alias="config.properties",
         description=(
-            "Properties for the coordinator's config.properties. Wiring and sizing are "
-            "refused: they belong to the chart."
+            "Properties for this role's config.properties. Wiring and sizing are refused: "
+            "they belong to the chart."
         ),
     )
     node_properties: dict[str, str] = Field(
@@ -174,7 +228,7 @@ class CoordinatorFiles(BaseModel):
         }
 
     @model_validator(mode="after")
-    def _refuse_what_trino_would_misread_or_the_chart_owns(self) -> "CoordinatorFiles":
+    def _refuse_what_trino_would_misread_or_the_chart_owns(self) -> "_RoleFiles":
         problems: list[str] = []
         for file, properties in self.by_file().items():
             if len(properties) > MAX_PROPERTIES_PER_FILE:
@@ -183,7 +237,7 @@ class CoordinatorFiles(BaseModel):
                 for problem in (_check_key(key), _check_value(key, value)):
                     if problem:
                         problems.append(f"{file}: {problem}")
-                if (owner := WIRING[file].get(key)) is not None:
+                if (owner := WIRING_BY_ROLE[self.role][file].get(key)) is not None:
                     problems.append(
                         f"{file}: {key} is wiring and cannot be set here; it comes from {owner}"
                     )
@@ -192,12 +246,29 @@ class CoordinatorFiles(BaseModel):
         return self
 
 
+class CoordinatorFiles(_RoleFiles):
+    """The Admin's properties for the coordinator."""
+
+    role: ClassVar[Role] = "coordinator"
+
+
+class WorkerFiles(_RoleFiles):
+    """The Admin's properties for every worker: one set, because the workers are one
+    Deployment and Trino expects them alike."""
+
+    role: ClassVar[Role] = "worker"
+
+
 class ServerConfiguration(BaseModel):
-    """The Admin's half of Trino's own files. Workers arrive in the next stage."""
+    """The Admin's half of Trino's own files."""
 
     model_config = ConfigDict(extra="forbid")
 
     coordinator: CoordinatorFiles = Field(default_factory=CoordinatorFiles)
+    worker: WorkerFiles = Field(default_factory=WorkerFiles)
+
+    def of(self, role: Role) -> _RoleFiles:
+        return self.coordinator if role == "coordinator" else self.worker
 
 
 def _properties(lines: list[tuple[str, str]]) -> str:
@@ -205,11 +276,14 @@ def _properties(lines: list[tuple[str, str]]) -> str:
 
 
 def _with_admin(
-    file: str, wiring: list[tuple[str, str]], admin: dict[str, str]
+    file: str,
+    wiring: list[tuple[str, str]],
+    admin: dict[str, str],
+    defaults: dict[str, dict[str, str]] = DEFAULTS,
 ) -> list[tuple[str, str]]:
     """Wiring first, then the defaults the Admin did not override, then the Admin's keys --
     sorted, so a rendered file diffs stably in Review whatever order they were written in."""
-    merged = {**DEFAULTS[file], **admin}
+    merged = {**defaults[file], **admin}
     return [*wiring, *sorted(merged.items())]
 
 
@@ -244,28 +318,104 @@ def config_wiring(settings: Settings) -> list[tuple[str, str]]:
     return lines
 
 
-def render_coordinator(admin: ServerConfiguration, settings: Settings) -> dict[str, str]:
-    """Every file the coordinator reads from `/etc/trino` that no Section renders."""
-    files = admin.coordinator.by_file()
+def _jvm(settings: Settings) -> str:
     jvm = list(_JVM_REQUIRED)
     if settings.trino_java_truststore_path is not None:
         jvm.append(f"-Djavax.net.ssl.trustStore={settings.trino_java_truststore_path}")
+    return "".join(f"{flag}\n" for flag in jvm)
+
+
+def _node_wiring(settings: Settings) -> list[tuple[str, str]]:
+    return [
+        ("node.environment", settings.trino_environment),
+        ("node.data-dir", settings.trino_data_dir),
+    ]
+
+
+def worker_config_wiring(settings: Settings) -> list[tuple[str, str]]:
+    """A worker's config.properties lines that the deployment decides."""
+    return [
+        ("coordinator", "false"),
+        ("http-server.http.port", str(settings.trino_http_port)),
+        ("discovery.uri", settings.trino_discovery_uri),
+        ("catalog.management", "dynamic"),
+        ("query.max-memory-per-node", f"${{ENV:{QUERY_MAX_MEMORY_PER_NODE_ENV}}}"),
+        ("memory.heap-headroom-per-node", f"${{ENV:{HEAP_HEADROOM_PER_NODE_ENV}}}"),
+        ("shutdown.grace-period", settings.trino_worker_shutdown_grace_period),
+    ]
+
+
+def worker_rules(settings: Settings) -> str:
+    """The workers' own access control: Apchi's identity may drain one, and nothing else.
+
+    Needed at all because a worker with no access control configured still refuses the drain
+    request -- Trino's default denies writing system information (measured on 483: 403). Nothing
+    else is granted, and nothing else is needed: authorization happens on the coordinator, and a
+    worker with only this rule ran queries as before (measured). Anyone else is refused (403).
+    """
+    user = f"^{re.escape(settings.trino_user)}$"
+    return json.dumps({"system_information": [{"user": user, "allow": ["write"]}]}) + "\n"
+
+
+def render_worker(admin: ServerConfiguration, settings: Settings) -> dict[str, str]:
+    """Every file a worker reads from `/etc/trino`."""
+    files = admin.worker.by_file()
+    return {
+        CONFIG_PROPERTIES: _properties(
+            _with_admin(
+                "config.properties",
+                worker_config_wiring(settings),
+                files["config.properties"],
+                _NO_DEFAULTS,
+            )
+        ),
+        NODE_PROPERTIES: _properties(
+            _with_admin(
+                "node.properties", _node_wiring(settings), files["node.properties"], _NO_DEFAULTS
+            )
+        ),
+        LOG_PROPERTIES: _properties(
+            _with_admin("log.properties", [], files["log.properties"], _NO_DEFAULTS)
+        ),
+        JVM_CONFIG: _jvm(settings),
+        ACCESS_CONTROL_PATH: _properties(
+            [("access-control.name", "file"), ("security.config-file", WORKER_RULES_PATH)]
+        ),
+        WORKER_RULES_PATH: worker_rules(settings),
+    }
+
+
+def render(role: Role, admin: ServerConfiguration, settings: Settings) -> dict[str, str]:
+    return (
+        render_coordinator(admin, settings)
+        if role == "coordinator"
+        else render_worker(admin, settings)
+    )
+
+
+def secret_name(role: Role, settings: Settings) -> str:
+    if role == "coordinator":
+        return settings.server_configuration_secret_name
+    return settings.worker_server_configuration_secret_name
+
+
+def role_secret(role: Role, admin: ServerConfiguration, settings: Settings) -> dict[str, str]:
+    """One role's server-configuration Secret, exactly as Apchi writes it."""
+    return {secret_key(path): content for path, content in render(role, admin, settings).items()}
+
+
+def render_coordinator(admin: ServerConfiguration, settings: Settings) -> dict[str, str]:
+    """Every file the coordinator reads from `/etc/trino` that no Section renders."""
+    files = admin.coordinator.by_file()
     return {
         CONFIG_PROPERTIES: _properties(
             _with_admin("config.properties", config_wiring(settings), files["config.properties"])
         ),
         NODE_PROPERTIES: _properties(
-            _with_admin(
-                "node.properties",
-                [
-                    ("node.environment", settings.trino_environment),
-                    ("node.data-dir", settings.trino_data_dir),
-                ],
-                files["node.properties"],
-            )
+            _with_admin("node.properties", _node_wiring(settings), files["node.properties"])
         ),
         LOG_PROPERTIES: _properties(_with_admin("log.properties", [], files["log.properties"])),
-        JVM_CONFIG: "".join(f"{flag}\n" for flag in jvm),
+        JVM_CONFIG: _jvm(settings),
         # The store's directory is the chart's emptyDir, which the seed initContainer fills.
         CATALOG_STORE_PROPERTIES: f"catalog.config-dir={settings.catalog_store_dir}\n",
         ACCESS_CONTROL_PATH: _properties(
@@ -279,21 +429,22 @@ def render_coordinator(admin: ServerConfiguration, settings: Settings) -> dict[s
 
 
 def secret_key(path: str) -> str:
-    """The Secret key a file is stored under: its name, which is unique among these six."""
+    """The Secret key a file is stored under: its name, which is unique within a role."""
     return path.rsplit("/", 1)[-1]
 
 
 def coordinator_secret(admin: ServerConfiguration, settings: Settings) -> dict[str, str]:
     """The coordinator's server-configuration Secret, exactly as Apchi writes it."""
-    rendered = render_coordinator(admin, settings)
-    return {secret_key(path): content for path, content in rendered.items()}
+    return role_secret("coordinator", admin, settings)
 
 
-def probe_properties(admin: ServerConfiguration) -> dict[str, dict[str, str]]:
-    """What the validation probe is given of the Admin's properties, by file.
+def probe_properties(
+    admin: ServerConfiguration, role: Role = "coordinator"
+) -> dict[str, dict[str, str]]:
+    """What the validation probe is given of one role's Admin properties, by file.
 
     The Admin's keys, without wiring or sizing: the probe has wiring of its own, and has no
     sizing variables -- a reference to one would stop it with "Environment variable is not set",
     and its small heap would refuse any real memory setting. Those are proved on the Cluster.
     """
-    return {file: dict(properties) for file, properties in admin.coordinator.by_file().items()}
+    return {file: dict(properties) for file, properties in admin.of(role).by_file().items()}

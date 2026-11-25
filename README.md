@@ -235,9 +235,10 @@ Built, and covered end to end:
 - **An audit trail.** Who changed what, and when, recorded at the one chokepoint an edit
   cannot skip — so a shared Candidate is still attributable. Refusals are recorded too.
 - **Trino's own files.** Apchi renders `config.properties`, `node.properties`,
-  `log.properties` and the rest of the coordinator's files under `/etc/trino`: wiring and
+  `log.properties` and the rest of each role's files under `/etc/trino`: wiring and
   sizing from the chart, every other property from the Admin, validated by Trino on the probe
-  first (ADR-0010). The workers' files are next.
+  first (ADR-0010). The workers' files too, and a change to theirs alone restarts the
+  workers, which drain first, and not the coordinator.
 - **Admin raw files.** An Admin writes a path and its content and Apchi delivers it, with no
   schema over it.
 

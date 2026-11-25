@@ -5,7 +5,7 @@
 # that is not a manifest.
 #
 # Hand-written, and the only hand-written input to them: scripts/export_trino_dev.py turns
-# this plus the chart into 00-config.yaml, 10-coordinator.yaml and 20-worker.yaml, and CI
+# this plus the chart into 10-coordinator.yaml, 20-worker.yaml and 03-server-config.yaml, and CI
 # fails if the committed output differs. So this file is also the whole answer to "how does
 # the test fixture differ from a default install", which is worth being able to read.
 #
@@ -19,6 +19,11 @@ trino:
     # worker is another 2G JVM. One worker still proves what the two-worker case proves
     # about Apchi -- a Rollout of the coordinator leaves workers alone (#58).
     replicas: 1
+    # Five seconds, not the chart's two minutes: a drain takes twice this, and tier 2 restarts
+    # the workers whenever it proves their own files reach them.
+    gracefulShutdown:
+      gracePeriodSeconds: 5
+    terminationGracePeriodSeconds: 30
 
   # Lowercase alphanumerics and underscores only; Trino rejects the rest.
   environment: apchidev

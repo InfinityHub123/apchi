@@ -27,7 +27,7 @@ from app.sections.certificate_mapping.generator import MOUNT_DIR as MAPPING_DIR
 from app.sections.certificate_mapping.generator import render_rules
 from app.sections.permissions.generator import RULES_KEY
 from app.sections.permissions.generator import render_rules as render_access_control
-from app.sections.server_configuration import coordinator_secret
+from app.sections.server_configuration import coordinator_secret, role_secret
 
 # Pinned to match deploy/trino-dev and the supported range in section 8, so a
 # Trino upgrade breaks CI rather than production.
@@ -95,6 +95,7 @@ _SETTINGS = Settings()
 MAPPING_SECRET = _SETTINGS.certificate_mapping_secret_name
 RULES_SECRET = _SETTINGS.access_control_secret_name
 SERVER_CONFIG_SECRET = _SETTINGS.server_configuration_secret_name
+WORKER_CONFIG_SECRET = _SETTINGS.worker_server_configuration_secret_name
 
 #: The coordinator's own files, mounted from Apchi's Secret the way the chart mounts them.
 SERVER_CONFIG_FILES = (
@@ -104,6 +105,14 @@ SERVER_CONFIG_FILES = (
     "log.properties",
     "catalog-store.properties",
     "access-control.properties",
+)
+WORKER_CONFIG_FILES = (
+    "config.properties",
+    "node.properties",
+    "jvm.config",
+    "log.properties",
+    "access-control.properties",
+    "worker-rules.json",
 )
 
 
@@ -122,6 +131,7 @@ def bootstrap_secrets() -> dict[str, dict[str, str]]:
         # Trino's own files, as Apchi writes them on its first start with no Admin values --
         # which is what a Cluster that has run Apchi once holds (ADR-0010).
         SERVER_CONFIG_SECRET: coordinator_secret(AdminValues().server_configuration, _SETTINGS),
+        WORKER_CONFIG_SECRET: role_secret("worker", AdminValues().server_configuration, _SETTINGS),
     }
 
 
@@ -212,17 +222,26 @@ def healthy_worker_pod_spec() -> dict[str, Any]:
             {
                 "name": "trino",
                 "volumeMounts": [
-                    {
-                        "name": "config",
-                        "mountPath": "/etc/trino/config.properties",
-                        "subPath": "worker-config.properties",
-                    },
+                    *(
+                        {
+                            "name": "server-config",
+                            "mountPath": f"/etc/trino/{file}",
+                            "subPath": file,
+                        }
+                        for file in WORKER_CONFIG_FILES
+                    ),
                     {"name": "client-certificates", "mountPath": "/etc/trino/certs"},
                 ],
             }
         ],
         "volumes": [
-            {"name": "config", "configMap": {"name": "trino-config"}},
+            {
+                "name": "server-config",
+                "secret": {
+                    "secretName": WORKER_CONFIG_SECRET,
+                    "defaultMode": CREDENTIAL_FILE_MODE,
+                },
+            },
             {
                 "name": "client-certificates",
                 "secret": {
@@ -291,6 +310,9 @@ class FakeKubernetes:
         self.report_a_missing_worker_once = False
         #: Every Rollout Apchi asked for, with the reason it gave.
         self.restarts: list[str] = []
+        #: And which Deployment each was of, in the same order: a worker-only change must
+        #: restart the workers and leave the coordinator, and only this can show it.
+        self.restarted: list[str] = []
         #: Set by a test to make the container behind the Cluster genuinely restart.
         self.restarts_for_real = False
         #: Set by a test to make the rollout never finish, proving the hard timeout.
@@ -364,6 +386,7 @@ class FakeKubernetes:
         which no amount of recording proves.
         """
         self.restarts.append(reason)
+        self.restarted.append(deployment)
         if self.restarts_for_real and self._cluster is not None:
             self._cluster.get_wrapped_container().restart()
 
