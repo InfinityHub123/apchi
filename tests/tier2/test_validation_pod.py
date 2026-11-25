@@ -263,3 +263,119 @@ async def test_a_credential_file_in_the_probe_is_not_world_readable(
     # group-read only for a file owned by root, and Trino reads it through the group.
     assert ownership.startswith("root:"), ownership
     assert readable.strip() == "not-a-real-key"
+
+
+# --- a namespace enforcing the "restricted" Pod Security level --------------------------------
+
+
+def _restricted_namespace() -> str:
+    name = f"apchi-restricted-{uuid.uuid4().hex[:6]}"
+    kubectl("create", "namespace", name)
+    kubectl(
+        "label",
+        "namespace",
+        name,
+        "pod-security.kubernetes.io/enforce=restricted",
+        "pod-security.kubernetes.io/enforce-version=latest",
+    )
+    return name
+
+
+def _admitted(namespace: str, pod: dict) -> tuple[bool, str]:
+    """Whether the API server would create this Pod there. A server-side dry run goes through
+    admission -- Pod Security included -- and creates nothing."""
+    import json
+    import subprocess
+
+    finished = subprocess.run(
+        ["kubectl", "create", "--dry-run=server", "-n", namespace, "-f", "-"],
+        input=json.dumps(pod),
+        capture_output=True,
+        text=True,
+    )
+    return finished.returncode == 0, finished.stderr
+
+
+def _pods_the_chart_runs() -> list[dict]:
+    """Every pod template the chart renders, as a Pod -- because Pod Security is enforced on
+    Pods, not on the Deployments that make them -- but the bundled MongoDB's, which is for
+    trying Apchi out and runs as root. Without the service account, which this namespace has
+    not got and which Pod Security does not judge."""
+    import subprocess
+    from pathlib import Path
+
+    import yaml
+
+    chart = Path(__file__).resolve().parents[2] / "charts" / "apchi"
+    rendered = subprocess.run(
+        [
+            "helm",
+            "template",
+            "rel",
+            str(chart),
+            "--set",
+            "mongodb.uri=mongodb://mongodb:27017",
+            "--set",
+            "trino.https.enabled=true",
+            "--set",
+            "trino.https.existingSecret=tls",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    pods = []
+    for document in yaml.safe_load_all(rendered):
+        if not document or document["kind"] != "Deployment":
+            continue
+        spec = dict(document["spec"]["template"]["spec"])
+        spec.pop("serviceAccountName", None)
+        pods.append(
+            {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": document["metadata"]["name"]},
+                "spec": spec,
+            }
+        )
+    return pods
+
+
+async def test_a_namespace_enforcing_the_restricted_level_admits_every_pod_apchi_runs() -> None:
+    """The chart's coordinator, workers and Apchi itself, and the Validation pod Apchi creates
+    at every Apply -- against the real API server's Pod Security admission. Before the chart
+    and Apchi set a securityContext, such a namespace refused all of them, and the first sign
+    was a Deployment with no pods."""
+    namespace = _restricted_namespace()
+    try:
+        # The control: the same admission refuses a pod that asks for nothing, so a pass below
+        # is the level being met and not the level being absent.
+        bare, why = _admitted(
+            namespace,
+            {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": "bare"},
+                "spec": {"containers": [{"name": "c", "image": "trinodb/trino:483"}]},
+            },
+        )
+        assert not bare, "this namespace does not enforce the restricted level"
+        assert "restricted" in why, why
+
+        pods = _pods_the_chart_runs()
+        assert {pod["metadata"]["name"] for pod in pods} >= {
+            "rel-apchi",
+            "trino-coordinator",
+            "trino-worker",
+        }, [pod["metadata"]["name"] for pod in pods]
+        for pod in pods:
+            admitted, why = _admitted(namespace, pod)
+            assert admitted, f"{pod['metadata']['name']}: {why}"
+
+        probe = validation_manifest(
+            "apchi-validate-x", "trinodb/trino:483", 360, {"/etc/trino/x": "y"}
+        )
+        admitted, why = _admitted(namespace, probe)
+        assert admitted, f"the Validation pod: {why}"
+    finally:
+        kubectl("delete", "namespace", namespace, "--wait=false")

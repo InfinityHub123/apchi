@@ -71,6 +71,8 @@ does not create.
 | `trino.worker.replicas` | `2` | The coordinator is always one — Trino cannot drain one, so a restart destroys every running query (ADR-0003) |
 | `trino.coordinator.resources`, `trino.worker.resources`, `trino.coordinator.seedResources` | `{}` | Requests and limits for the two roles and for the catalog-seeding initContainer. Each renders nothing when empty |
 | `trino.coordinator.*`, `trino.worker.*` | | Also `nodeSelector`, `tolerations`, `affinity`, `podAnnotations` and `readinessProbe` |
+| `trino.<role>.startupProbe`, `trino.<role>.livenessProbe` | 5s x 60; on, 15s x 8 | Trino's own `health-check`, like readiness. Startup covers the boot, then liveness restarts a Trino that has stopped answering for two minutes -- loose on purpose, because restarting the coordinator ends every query. `livenessProbe.enabled: false` turns it off per role |
+| | | Every container Apchi and the chart run -- Apchi, both Trino roles, their initContainers, and the Validation pod Apchi creates -- meets Kubernetes' `restricted` Pod Security level: no privilege escalation, all capabilities dropped, `runAsNonRoot`, seccomp `RuntimeDefault`. The bundled MongoDB does not; it is for trying Apchi out |
 | `trino.environment` | `production` | `node.environment`; lowercase alphanumeric and underscores only |
 | `trino.coordinator.jvm.maxHeapSize`, `trino.worker.jvm.maxHeapSize` | `2G` | The heap, in `-Xmx` units. Into `JDK_JAVA_OPTIONS`, never a file: `jvm.config` is read after it and its last `-Xmx` would win. The render fails when it exceeds the role's `resources.limits.memory` |
 | `trino.coordinator.jvm.extraArgs`, `trino.worker.jvm.extraArgs` | `[]` | JVM flags, after the chart's defaults (G1, exit on OOM), so one here wins over them |

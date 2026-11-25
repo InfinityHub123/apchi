@@ -43,6 +43,12 @@ spec:
         - name: seed-catalogs
           image: "trinodb/trino:483"
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            runAsNonRoot: true
+            seccompProfile: {type: RuntimeDefault}
+            runAsUser: 1000
           command: ["sh", "-c"]
           args:
             - mkdir -p /data/trino/catalogs &&
@@ -70,6 +76,21 @@ spec:
           ports:
             - containerPort: 8080
               name: http
+          startupProbe:
+            exec: {command: ["/usr/lib/trino/bin/health-check"]}
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            exec: {command: ["/usr/lib/trino/bin/health-check"]}
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 8
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            runAsNonRoot: true
+            seccompProfile: {type: RuntimeDefault}
+            runAsUser: 1000
           readinessProbe:
             # Trino's own script. A Rollout's "complete" means every replica passed this,
             # which is what makes Apchi's Verification talk to a coordinator that answers.
