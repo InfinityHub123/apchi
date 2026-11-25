@@ -391,13 +391,22 @@ def _restricted_probe(files: dict[str, str] | None = None) -> dict[str, Any]:
     )
 
 
-def test_a_restricted_probe_leaves_the_security_context_to_the_platform() -> None:
-    """restricted-v2 refuses an fsGroup outside the namespace's range, and adds the uid,
-    runAsNonRoot, seccomp and the dropped capabilities to every pod itself."""
+def test_a_restricted_probe_leaves_the_uid_and_the_group_to_the_platform() -> None:
+    """restricted-v2 refuses an fsGroup outside the namespace's range and assigns the uid
+    itself, so neither is set. What the container asks for -- no escalation, no capabilities,
+    seccomp, non-root -- is what restricted-v2 requires anyway, and what Kubernetes' own
+    restricted level refuses a pod without, so that is set on every probe."""
     spec = _restricted_probe({"/etc/trino/certs/finance.key": "key"})["spec"]
 
-    assert "securityContext" not in spec
-    assert "securityContext" not in spec["containers"][0]
+    assert "securityContext" not in spec, "no fsGroup: the namespace's range is the platform's"
+    container = spec["containers"][0]["securityContext"]
+    assert container == {
+        "allowPrivilegeEscalation": False,
+        "capabilities": {"drop": ["ALL"]},
+        "runAsNonRoot": True,
+        "seccompProfile": {"type": "RuntimeDefault"},
+    }
+    assert "runAsUser" not in container and "runAsGroup" not in container
 
 
 def test_a_restricted_probe_can_write_trinos_data_directory() -> None:

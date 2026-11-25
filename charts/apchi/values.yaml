@@ -264,6 +264,18 @@ trino:
     podAnnotations: {}
     # Trino's own health-check script. It is what makes a Rollout's "complete" mean the
     # coordinator is answering, which Apchi's Verification depends on.
+    # Startup covers the boot, then liveness takes over: Trino's own health-check, failing for
+    # failureThreshold x periodSeconds before the pod is restarted. Loose by design -- a
+    # coordinator restart ends every query, so it must take a Trino that has stopped
+    # answering, not one in a long GC pause.
+    startupProbe:
+      periodSeconds: 5
+      failureThreshold: 60
+    livenessProbe:
+      enabled: true
+      periodSeconds: 15
+      timeoutSeconds: 10
+      failureThreshold: 8
     readinessProbe:
       initialDelaySeconds: 15
       periodSeconds: 5
@@ -304,6 +316,18 @@ trino:
     tolerations: []
     affinity: {}
     podAnnotations: {}
+    # Startup covers the boot, then liveness takes over: Trino's own health-check, failing for
+    # failureThreshold x periodSeconds before the pod is restarted. Loose by design -- a
+    # coordinator restart ends every query, so it must take a Trino that has stopped
+    # answering, not one in a long GC pause.
+    startupProbe:
+      periodSeconds: 5
+      failureThreshold: 60
+    livenessProbe:
+      enabled: true
+      periodSeconds: 15
+      timeoutSeconds: 10
+      failureThreshold: 8
     readinessProbe:
       initialDelaySeconds: 15
       periodSeconds: 5
@@ -360,6 +384,12 @@ trino:
   # choose, which Apchi accepts only with `restrictedPodSecurity`, because a 0640 credential
   # is then unreadable and has to be 0644.
   fsGroup: 1000
+
+  # The uid the image's `trino` user has. Stated because the image names its user rather than
+  # numbering it, and with runAsNonRoot -- which every container here sets, for Kubernetes'
+  # restricted Pod Security level -- the kubelet refuses a named user it cannot verify. Ignored
+  # under restrictedPodSecurity, where the platform assigns the uid.
+  runAsUser: 1000
 
 
   # How callers authenticate to Trino, and how their certificate becomes a Trino Identity.

@@ -16,6 +16,7 @@ arrives.
 """
 
 import asyncio
+import subprocess
 from collections.abc import Iterator
 
 import pytest
@@ -80,7 +81,14 @@ def event_receiver() -> Iterator[str]:
     loaded from a listener that is delivering."""
     kubectl("apply", "-f", "-", stdin=_MANIFEST)
     try:
-        kubectl("wait", "--for=condition=ready", f"pod/{RECEIVER}", "--timeout=180s")
+        # Generous, because the image is pulled from Docker Hub during the test: on a CI
+        # runner a slow or throttled pull once took the pod past 180s, and the test failed in
+        # setup with nothing wrong in Apchi. A timeout still says why, from the pod's events.
+        try:
+            kubectl("wait", "--for=condition=ready", f"pod/{RECEIVER}", "--timeout=600s")
+        except subprocess.CalledProcessError as timed_out:
+            events = kubectl("describe", "pod", RECEIVER)
+            raise AssertionError(f"the event receiver never became ready:\n{events}") from timed_out
         yield RECEIVER
     finally:
         kubectl("delete", "pod", RECEIVER, "--ignore-not-found", "--wait=false")

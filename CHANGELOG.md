@@ -59,6 +59,12 @@ Nothing yet.
 
 ### Added
 
+- **Startup and liveness probes on both Trino roles**, Trino's own `health-check`. Liveness is
+  loose -- two minutes of no answer -- because restarting the coordinator ends every query.
+- **Every container meets the `restricted` Pod Security level**: Apchi, both Trino roles, their
+  initContainers, and the Validation pod Apchi creates. A namespace enforcing that level
+  refused all of them before, the Validation pod included, which no chart value could fix.
+
 - **A disruption budget for the workers**, on by default (`trino.worker.podDisruptionBudget`,
   `maxUnavailable: 1`): a node drain takes one worker at a time, and each drains its tasks.
 - **A NetworkPolicy for Trino**, off by default (`networkPolicy.enabled`). On, only Trino's own

@@ -75,6 +75,21 @@ spec:
                     -H 'X-Trino-User: apchi'
                     http://localhost:8080/v1/info/state || exit 0;
                     while kill -0 1 2>/dev/null; do sleep 1; done
+          startupProbe:
+            exec: {command: ["/usr/lib/trino/bin/health-check"]}
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            exec: {command: ["/usr/lib/trino/bin/health-check"]}
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 8
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            runAsNonRoot: true
+            seccompProfile: {type: RuntimeDefault}
+            runAsUser: 1000
           readinessProbe:
             # The worker count Apchi's Verification expects comes from this Deployment's
             # ready replicas, so the probe is what decides whether a worker counts.
