@@ -514,6 +514,7 @@ function Sidebar({
               </Pill>
             )}
           </Item>
+          <Item to="/admin/server-configuration" icon="list" label="Server configuration" />
           <Item to="/admin/raw-files" icon="file" label="Raw files" />
         </>
       )}

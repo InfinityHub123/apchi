@@ -605,6 +605,15 @@ Visible only to Admins; an Operator should not see them at all.
 
 - **Maintenance Mode** — engage/disengage with a reason, showing who engaged it and when, and
   distinguishing an Admin engaging it from it engaging itself after an incident.
+- **Server configuration** — Trino's own properties, `config.properties`, `node.properties`
+  and `log.properties`, for the coordinator and for the workers. Apchi renders those files
+  (ADR-0010): the lines naming what the chart creates and the sizing that must fit the pod come
+  from the chart and are not editable here, and the rest is a plain map per file. Values are
+  readable back -- these are named properties, edited one at a time -- with credential-looking
+  ones masked until asked for (§12). The cost differs by role and the interface has to say so:
+  a coordinator change ends every running query at the next Apply, a worker-only change drains
+  the workers one at a time and loses none. The files as the next Apply would write them,
+  wiring included, can be read beside the editor.
 - **Raw files** — arbitrary Trino config files written directly. Listed by path and size; the
   **content is deliberately not readable back**, so this is not a round trip and the interface
   must not pretend it is.

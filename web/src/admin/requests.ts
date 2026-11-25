@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { api, done, unwrap } from "../api/client";
+import { api, done, unwrap, type S } from "../api/client";
 
 /**
  * Raw files are addressed by their absolute path, slashes and all, which the server takes
@@ -40,4 +40,39 @@ export async function sendRawFile(method: "PUT" | "DELETE", path: string, conten
   // Reuse the one place that turns an error body into Apchi's message.
   const body: unknown = response.status === 204 ? undefined : await response.json().catch(() => undefined);
   if (!response.ok) await done({ error: body ?? {}, response });
+}
+
+/** Trino's own files: the Admin's properties for each role, rendered with the chart's wiring. */
+export type ServerConfiguration = S["ServerConfiguration"];
+export type Role = "coordinator" | "worker";
+export const FILES = ["config.properties", "node.properties", "log.properties"] as const;
+export type FileName = (typeof FILES)[number];
+export type RoleFiles = Record<FileName, Record<string, string>>;
+
+/** Every role and file present, empty where nothing is set -- the shape the screen edits. */
+export function filled(configuration: ServerConfiguration | undefined): Record<Role, RoleFiles> {
+  const role = (r: Role): RoleFiles => {
+    const files = (configuration?.[r] ?? {}) as Partial<Record<FileName, Record<string, string>>>;
+    return Object.fromEntries(FILES.map((f) => [f, { ...(files[f] ?? {}) }])) as RoleFiles;
+  };
+  return { coordinator: role("coordinator"), worker: role("worker") };
+}
+
+export function useServerConfiguration() {
+  return useQuery({
+    queryKey: ["admin", "server-configuration"],
+    queryFn: () => api.GET("/api/v1/admin/server-configuration").then(unwrap),
+  });
+}
+
+export function useRenderedFiles() {
+  return useQuery({
+    queryKey: ["admin", "server-configuration", "files"],
+    queryFn: () => api.GET("/api/v1/admin/server-configuration/files").then(unwrap),
+  });
+}
+
+/** Replaces every property of both roles, as the PUT does. */
+export function saveServerConfiguration(configuration: Record<Role, RoleFiles>) {
+  return api.PUT("/api/v1/admin/server-configuration", { body: configuration }).then(unwrap);
 }
