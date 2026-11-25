@@ -26,12 +26,26 @@ RESTART_WARNING = (
     "queued query. Trino cannot drain a coordinator, so there is no way to avoid it."
 )
 
+#: The workers' restart, which costs no query: each one drains before it goes.
+WORKER_RESTART_WARNING = (
+    "Applying this restarts the Trino workers one at a time. Each finishes its running tasks "
+    "before it stops, so no query is lost, but the Cluster runs one worker short while each "
+    "is replaced."
+)
+
 
 class ApplyCost(BaseModel):
     """What an Operator is agreeing to when they Apply."""
 
     restarts_coordinator: bool = Field(
         description="Whether applying the Candidate as it stands requires a Rollout."
+    )
+    restarts_workers: bool = Field(
+        default=False,
+        description=(
+            "Whether it restarts the workers, which happens only when their own server "
+            "configuration changes. They drain first, so this costs no query."
+        ),
     )
     queries_at_risk: int | None = Field(
         default=None,
@@ -101,10 +115,14 @@ async def cost_of(
     applied -- or wiring the chart changed -- restarts the coordinator at the next Apply,
     whoever starts it. An Operator is told before they commit to that, not after.
     """
-    if not await sections_needing_rollout(plans, desired, cluster) and not await _admin_files_move(
-        cluster
-    ):
-        return ApplyCost(restarts_coordinator=False)
+    coordinator_files, workers = await _admin_files_move(cluster)
+    if not await sections_needing_rollout(plans, desired, cluster) and not coordinator_files:
+        # The workers drain, so their restart puts no query at risk and is nothing to count.
+        return ApplyCost(
+            restarts_coordinator=False,
+            restarts_workers=workers,
+            warning=WORKER_RESTART_WARNING if workers else None,
+        )
 
     try:
         at_risk: int | None = await cluster.trino.queries_at_risk()
@@ -114,21 +132,29 @@ async def cost_of(
         logger.warning("could not count queries at risk", exc_info=True)
         at_risk = None
 
-    return ApplyCost(restarts_coordinator=True, queries_at_risk=at_risk, warning=RESTART_WARNING)
+    return ApplyCost(
+        restarts_coordinator=True,
+        restarts_workers=workers,
+        queries_at_risk=at_risk,
+        warning=RESTART_WARNING,
+    )
 
 
-async def _admin_files_move(cluster: Cluster) -> bool:
-    """Whether the next Apply would rewrite the Admin's files on the coordinator.
+async def _admin_files_move(cluster: Cluster) -> tuple[bool, bool]:
+    """Whether the next Apply would rewrite the Admin's files: (on the coordinator, on the
+    workers). Raw files are mounted on the coordinator alone.
 
     An unreadable Cluster answers no, as `sections_needing_rollout` does for a Section: Review
     must still show what is staged when Kubernetes cannot be asked.
     """
     try:
-        return await server_configuration.changed(cluster) or await raw_files.changed(cluster)
+        roles = await server_configuration.changed_roles(cluster)
+        coordinator = "coordinator" in roles or await raw_files.changed(cluster)
+        return coordinator, "worker" in roles
     except Exception:
         logger.warning(
             "could not read the Admin's files on the coordinator; the restart decision "
             "leaves them out",
             exc_info=True,
         )
-        return False
+        return False, False

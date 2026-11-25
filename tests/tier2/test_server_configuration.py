@@ -61,12 +61,17 @@ async def _set(client: AsyncClient, coordinator: dict[str, dict[str, str]]) -> N
     assert response.status_code == 200, response.text
 
 
+async def _set_role(client: AsyncClient, role: str, files: dict[str, dict[str, str]]) -> None:
+    response = await client.put(SERVER_CONFIGURATION, json={role: files})
+    assert response.status_code == 200, response.text
+
+
 def _coordinator_pod() -> str:
     """The running coordinator's uid: a pod that was not replaced keeps it."""
     pods = json.loads(
         kubectl("get", "pods", "-l", "app.kubernetes.io/component=coordinator", "-o", "json")
     )["items"]
-    running = [pod for pod in pods if pod["status"].get("phase") == "Running"]
+    running = _serving(pods)
     assert len(running) == 1, [pod["metadata"]["name"] for pod in pods]
     return str(running[0]["metadata"]["uid"])
 
@@ -101,8 +106,7 @@ async def test_sizing_reaches_trino_from_the_pod_and_never_from_a_file(
     log = coordinator_log(lines=20000)
 
     assert "Picked up JDK_JAVA_OPTIONS: -Xmx2G" in log
-    memory = [line for line in log.splitlines() if "query.max-memory-per-node " in line]
-    assert memory and memory[-1].split()[-1] == "600MB", memory
+    assert _runtime_value(log, "query.max-memory-per-node") == "600MB"
     jvm = kubectl("exec", COORDINATOR, "-c", "trino", "--", "cat", "/etc/trino/jvm.config")
     assert "Xmx" not in jvm, jvm
 
@@ -184,6 +188,7 @@ async def test_a_mount_of_anyone_elses_under_etc_trino_refuses_the_apply(
 ) -> None:
     """The ninth precondition against a real pod template: a chart that mounts a file of its
     own under /etc/trino again is refused before Apchi writes anything."""
+    kubectl("create", "configmap", "apchi-test-foreign", "--from-literal=node.properties=x=y\n")
     patch = {
         "spec": {
             "template": {
@@ -193,14 +198,14 @@ async def test_a_mount_of_anyone_elses_under_etc_trino_refuses_the_apply(
                             "name": "trino",
                             "volumeMounts": [
                                 {
-                                    "name": "config",
+                                    "name": "foreign",
                                     "mountPath": "/etc/trino/exchange-manager.properties",
                                     "subPath": "node.properties",
                                 }
                             ],
                         }
                     ],
-                    "volumes": [{"name": "config", "configMap": {"name": "trino-config"}}],
+                    "volumes": [{"name": "foreign", "configMap": {"name": "apchi-test-foreign"}}],
                 }
             }
         }
@@ -211,7 +216,7 @@ async def test_a_mount_of_anyone_elses_under_etc_trino_refuses_the_apply(
 
         assert record["stage"] == "failed", record
         assert "/etc/trino/exchange-manager.properties" in record["failure_reason"]
-        assert "ConfigMap 'trino-config'" in record["failure_reason"]
+        assert "ConfigMap 'apchi-test-foreign'" in record["failure_reason"]
     finally:
         undo = {
             "spec": {
@@ -228,7 +233,7 @@ async def test_a_mount_of_anyone_elses_under_etc_trino_refuses_the_apply(
                                 ],
                             }
                         ],
-                        "volumes": [{"name": "config", "$patch": "delete"}],
+                        "volumes": [{"name": "foreign", "$patch": "delete"}],
                     }
                 }
             }
@@ -237,3 +242,150 @@ async def test_a_mount_of_anyone_elses_under_etc_trino_refuses_the_apply(
             "patch", "deployment", "trino-coordinator", "--type=strategic", "-p", json.dumps(undo)
         )
         kubectl("rollout", "status", COORDINATOR, "--timeout=600s")
+        kubectl("delete", "configmap", "apchi-test-foreign", "--ignore-not-found")
+
+
+# --- the workers (stage 2) ---------------------------------------------------------------------
+
+
+def _runtime_value(log: str, prop: str) -> str:
+    """The value Trino started with, from the table it logs at startup: property, default,
+    runtime value, then a description that may be empty or several words -- so the runtime
+    value is the third column, not the last."""
+    import re
+
+    found = re.findall(rf"\t{re.escape(prop)}\s+(\S+)\s+(\S+)", log)
+    assert found, f"{prop} is not in the startup log"
+    return str(found[-1][1])
+
+
+def _serving(pods: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Running and not on its way out. A draining worker still reports phase Running while its
+    preStop hook waits for it to exit -- measured, 10s with a 5s grace -- so the phase alone
+    counts it twice."""
+    return [
+        pod
+        for pod in pods
+        if pod["status"].get("phase") == "Running" and "deletionTimestamp" not in pod["metadata"]
+    ]
+
+
+def _pod_uid(component: str) -> str:
+    pods = json.loads(
+        kubectl("get", "pods", "-l", f"app.kubernetes.io/component={component}", "-o", "json")
+    )["items"]
+    running = _serving(pods)
+    assert len(running) == 1, [pod["metadata"]["name"] for pod in pods]
+    return str(running[0]["metadata"]["uid"])
+
+
+def _worker_pod() -> str:
+    pods = json.loads(
+        kubectl("get", "pods", "-l", "app.kubernetes.io/component=worker", "-o", "json")
+    )["items"]
+    running = _serving(pods)
+    assert len(running) == 1, [pod["metadata"]["name"] for pod in pods]
+    return str(running[0]["metadata"]["name"])
+
+
+async def test_a_workers_property_reaches_the_workers_after_a_drain_and_the_coordinator_stays(
+    e2e_client: AsyncClient,
+) -> None:
+    """The whole of stage 2 in one run: the property reaches the worker, the old worker
+    drains before it goes -- read from its own log, captured while it ran -- and the
+    coordinator, which cannot drain, is never touched."""
+    import subprocess
+
+    coordinator = _pod_uid("coordinator")
+    old_worker = _worker_pod()
+    captured = subprocess.Popen(
+        ["kubectl", "logs", "-f", f"pod/{old_worker}", "-c", "trino", "--tail=0"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        await _set_role(e2e_client, "worker", {"config.properties": {"task.concurrency": "8"}})
+        record = await _admin_apply(e2e_client)
+        # The rollout completes when the new worker is ready, which is when the old one
+        # *starts* draining. Its log is only whole once it has gone.
+        kubectl("wait", "--for=delete", f"pod/{old_worker}", "--timeout=120s")
+    finally:
+        captured.terminate()
+        drained = captured.communicate(timeout=30)[0]
+
+    assert record["stage"] == "succeeded", record
+    assert _pod_uid("coordinator") == coordinator, "a worker-only change restarted the coordinator"
+    assert _worker_pod() != old_worker, "the worker was not replaced"
+    assert "Shutdown requested" in drained, drained[-2000:]
+    assert "All active tasks are finished" in drained, drained[-2000:]
+    log = kubectl("logs", "deploy/trino-worker", "-c", "trino", "--tail=20000")
+    assert _runtime_value(log, "task.concurrency") == "8"
+
+
+async def test_only_apchis_identity_may_drain_a_worker(e2e_client: AsyncClient) -> None:
+    """The workers' own rules grant one identity one thing. Asked by anyone else, the worker
+    refuses and keeps serving."""
+    worker = _worker_pod()
+
+    status = kubectl(
+        "exec",
+        f"pod/{worker}",
+        "-c",
+        "trino",
+        "--",
+        "curl",
+        "-s",
+        "-o",
+        "/dev/null",
+        "-w",
+        "%{http_code}",
+        "-X",
+        "PUT",
+        "-d",
+        '"SHUTTING_DOWN"',
+        "-H",
+        "Content-Type: application/json",
+        "-H",
+        "X-Trino-User: intruder",
+        "http://localhost:8080/v1/info/state",
+    )
+
+    assert status == "403", status
+    # Still serving: the readiness probe's own check.
+    kubectl("exec", f"pod/{worker}", "-c", "trino", "--", "/usr/lib/trino/bin/health-check")
+    assert _worker_pod() == worker
+
+
+async def test_a_misspelled_worker_property_is_refused_on_the_probe(
+    e2e_client: AsyncClient,
+) -> None:
+    coordinator, worker = _pod_uid("coordinator"), _worker_pod()
+    await _set_role(e2e_client, "worker", {"config.properties": {"task.concurency": "8"}})
+
+    record = await _admin_apply(e2e_client)
+
+    assert record["stage"] == "failed", record
+    assert "was not used" in (record["failure_reason"] or ""), record["failure_reason"]
+    assert (_pod_uid("coordinator"), _worker_pod()) == (coordinator, worker)
+
+
+async def test_a_workers_value_the_coordinator_does_not_share_is_proved_on_its_own_probe(
+    e2e_client: AsyncClient,
+) -> None:
+    """The coordinator's value is valid and the workers' is not. One probe holding the
+    coordinator's would have passed both."""
+    worker = _worker_pod()
+    await e2e_client.put(
+        SERVER_CONFIGURATION,
+        json={
+            "coordinator": {"config.properties": {"task.max-worker-threads": "8"}},
+            "worker": {"config.properties": {"task.max-worker-threads": "many"}},
+        },
+    )
+
+    record = await _admin_apply(e2e_client)
+
+    assert record["stage"] == "failed", record
+    assert "The workers' properties" in (record["failure_reason"] or ""), record
+    assert _worker_pod() == worker

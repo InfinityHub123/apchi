@@ -204,6 +204,12 @@
             "title": "Restarts Coordinator",
             "type": "boolean"
           },
+          "restarts_workers": {
+            "default": false,
+            "description": "Whether it restarts the workers, which happens only when their own server configuration changes. They drain first, so this costs no query.",
+            "title": "Restarts Workers",
+            "type": "boolean"
+          },
           "warning": {
             "anyOf": [
               {
@@ -911,13 +917,13 @@
       },
       "CoordinatorFiles": {
         "additionalProperties": false,
-        "description": "The Admin's properties for the coordinator, one map per file Trino reads.",
+        "description": "The Admin's properties for the coordinator.",
         "properties": {
           "config.properties": {
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Properties for the coordinator's config.properties. Wiring and sizing are refused: they belong to the chart.",
+            "description": "Properties for this role's config.properties. Wiring and sizing are refused: they belong to the chart.",
             "title": "Config.Properties",
             "type": "object"
           },
@@ -1776,19 +1782,28 @@
       },
       "RenderedFiles": {
         "additionalProperties": false,
-        "description": "The files Apchi would write for the coordinator, as the next Apply would write them.",
+        "description": "The files Apchi would write for each role, as the next Apply would write them.",
         "properties": {
           "coordinator": {
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Each file Apchi renders under /etc/trino, by path: wiring first, then the Admin's properties. Holds whatever credentials those properties hold.",
+            "description": "Each file Apchi renders under /etc/trino on the coordinator, by path: wiring first, then the Admin's properties. Holds whatever credentials those hold.",
             "title": "Coordinator",
+            "type": "object"
+          },
+          "worker": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The same for every worker, its drain rule included.",
+            "title": "Worker",
             "type": "object"
           }
         },
         "required": [
-          "coordinator"
+          "coordinator",
+          "worker"
         ],
         "title": "RenderedFiles",
         "type": "object"
@@ -2666,10 +2681,13 @@
       },
       "ServerConfiguration": {
         "additionalProperties": false,
-        "description": "The Admin's half of Trino's own files. Workers arrive in the next stage.",
+        "description": "The Admin's half of Trino's own files.",
         "properties": {
           "coordinator": {
             "$ref": "#/components/schemas/CoordinatorFiles"
+          },
+          "worker": {
+            "$ref": "#/components/schemas/WorkerFiles"
           }
         },
         "title": "ServerConfiguration",
@@ -3066,6 +3084,38 @@
           "started_at"
         ],
         "title": "ValidationRecord",
+        "type": "object"
+      },
+      "WorkerFiles": {
+        "additionalProperties": false,
+        "description": "The Admin's properties for every worker: one set, because the workers are one\nDeployment and Trino expects them alike.",
+        "properties": {
+          "config.properties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Properties for this role's config.properties. Wiring and sizing are refused: they belong to the chart.",
+            "title": "Config.Properties",
+            "type": "object"
+          },
+          "log.properties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Log levels, by logger name: {\"io.trino.plugin.postgresql\": \"DEBUG\"}.",
+            "title": "Log.Properties",
+            "type": "object"
+          },
+          "node.properties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Extra node.properties.",
+            "title": "Node.Properties",
+            "type": "object"
+          }
+        },
+        "title": "WorkerFiles",
         "type": "object"
       }
     }

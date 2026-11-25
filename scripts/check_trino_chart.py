@@ -34,7 +34,7 @@ from app.adapters.kubernetes import FORBIDDEN_CREDENTIAL_BITS, TRINO_GROUP
 from app.config import Settings
 from app.pipeline.preconditions import PodSpec, PreconditionFailed, check
 from app.sections.admin import AdminValues
-from app.sections.server_configuration import coordinator_secret
+from app.sections.server_configuration import role_secret, secret_name
 
 ROOT = Path(__file__).resolve().parents[1]
 CHART = ROOT / "charts" / "apchi"
@@ -123,6 +123,7 @@ def _name_disagreements(documents: list[dict[str, Any]]) -> list[str]:
     # values in MongoDB, which no chart can read (ADR-0010). It must still be the Secret the
     # Apchi this chart renders is told to write, or the coordinator waits for it forever.
     written.add(_apchi_settings(documents).server_configuration_secret_name)
+    written.add(_apchi_settings(documents).worker_server_configuration_secret_name)
     coordinator = _coordinator(documents)
     spec = PodSpec.model_validate(coordinator["spec"]["template"]["spec"])
     mounted = {
@@ -287,9 +288,10 @@ def _check(values: tuple[str, ...]) -> int:
         # on its first start: the files the preconditions read, config.properties and
         # access-control.properties among them, are in it.
         | {
-            settings.server_configuration_secret_name: coordinator_secret(
-                AdminValues().server_configuration, settings
+            secret_name(role, settings): role_secret(
+                role, AdminValues().server_configuration, settings
             )
+            for role in ("coordinator", "worker")
         },
         {
             d["metadata"]["name"]: d["spec"]["template"]["spec"]
