@@ -95,7 +95,8 @@ async def test_the_deployed_cluster_is_told_to_reread_the_rules(
     manifests actually deployed. Apchi reads the Admin's access-control properties the way
     Trino finds them: through whatever is mounted at Trino's own path."""
     settings = Settings()
-    properties = await real_kubernetes.read_config_map("trino-config")
+    # Apchi's own Secret since ADR-0010: the chart mounts it, and renders none of Trino's files.
+    properties = await real_kubernetes.read_secret(settings.server_configuration_secret_name)
 
     assert "security.refresh-period" in properties["access-control.properties"]
     # And the whole precondition passes against the real deployment, which is what makes

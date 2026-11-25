@@ -1,5 +1,7 @@
 """Application entry point."""
 
+import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -36,6 +38,7 @@ from app.auth.tokens import TokenStore
 from app.auth.users import UserStore, bootstrap
 from app.config import AuthMode, Settings, get_settings
 from app.logging import configure_logging
+from app.pipeline import server_configuration
 from app.pipeline.admin_values import AdminStore
 from app.pipeline.applies import ApplyEngine, ApplyRunner, ApplyStore, recover_interrupted
 from app.pipeline.candidate import CandidateStore
@@ -167,6 +170,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("could not prepare authentication storage; retried at the next start")
 
+    # Trino cannot start without its own files, and on a new install nothing has written them:
+    # the coordinator waits in ContainerCreating until this Secret exists. Retried in the
+    # background rather than tried once, because on that same install MongoDB is often still
+    # starting -- and a coordinator waiting on a write that was attempted once and given up on
+    # would wait until somebody restarted Apchi.
+    app.state.server_configuration_writer = asyncio.create_task(
+        _write_server_configuration(app, settings)
+    )
+
     # A crash mid-validation leaks an ephemeral coordinator, and leaked Trino pods
     # are not cheap. The pods carry activeDeadlineSeconds as a second backstop, for
     # the Apchi that never comes back at all.
@@ -183,11 +195,39 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
 
     yield
+    app.state.server_configuration_writer.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await app.state.server_configuration_writer
     await app.state.oidc.close()
     await app.state.apply_runner.shutdown()
     await app.state.admin_apply_runner.shutdown()
     await app.state.validation_runner.shutdown()
     await app.state.mongo.close()
+
+
+#: How long to wait between attempts at the first write. Short, because a coordinator is waiting
+#: on it; nothing heavier than one read of a Secret and one of the Admin document per attempt.
+_FIRST_WRITE_RETRY_SECONDS = 5.0
+
+
+async def _write_server_configuration(app: FastAPI, settings: Settings) -> None:
+    """Write the coordinator's server configuration if it does not exist, until that works.
+
+    Never rewrites one that exists -- see `server_configuration.write_if_missing`.
+    """
+    while True:
+        try:
+            await server_configuration.write_if_missing(
+                app.state.kubernetes, settings, await app.state.admin_store.load()
+            )
+        except Exception:
+            logger.warning(
+                "could not check or write the coordinator's server configuration; retrying",
+                exc_info=True,
+            )
+            await asyncio.sleep(_FIRST_WRITE_RETRY_SECONDS)
+        else:
+            return
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

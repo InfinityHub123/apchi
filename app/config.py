@@ -6,7 +6,7 @@ import re
 from collections.abc import Mapping
 from enum import StrEnum
 from functools import lru_cache
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -220,6 +220,36 @@ class Settings(BaseSettings):
     #: on catalogs, which is what restricts catalog DDL to Apchi.
     trino_user: str = "apchi"
 
+    # Wiring: the lines in Trino's own files that name something the deployment creates.
+    # Apchi renders every file under /etc/trino, so these arrive from the chart that creates
+    # the ports, Services and mounts they name, and no Admin input can change them
+    # (ADR-0010, §14). Each default is what the chart renders for a default install.
+    #: Holds the coordinator's server configuration files, one key each. The chart mounts
+    #: every key with subPath, and never changes that mount: each file needs a restart to
+    #: take effect anyway, and the Rollout is what makes new content live.
+    server_configuration_secret_name: str = "trino-server-config-coordinator"
+    trino_http_port: int = 8080
+    #: Where workers announce themselves: the coordinator's Service, never a pod.
+    trino_discovery_uri: str = "http://trino:8080"
+    #: The HTTPS listener, when the coordinator serves one. Unset means plain HTTP only.
+    trino_https_port: int | None = None
+    trino_https_keystore_path: str = "/data/trino-https/keystore.pem"
+    #: Behind a proxy that terminates TLS, Trino has to believe its X-Forwarded headers, or
+    #: every redirect it issues points at plain http.
+    trino_process_forwarded: bool = False
+    #: Decides which user-mapping property the coordinator reads, and whether it demands a
+    #: certificate of every client -- Apchi included, which the eighth precondition checks.
+    trino_authentication_type: Literal["insecure", "certificate"] = "insecure"
+    #: `node.environment`. Every node must agree on it, so one value serves both roles.
+    trino_environment: str = "production"
+    trino_data_dir: str = "/data/trino"
+    #: How often Trino re-reads the access-control rules. Required, not tunable away:
+    #: without it Trino reads the rules once at startup, and every permission change Apchi
+    #: applies is reported applied and never arrives (§13.4).
+    trino_security_refresh_period: str = "30s"
+    #: The Java truststore every Trino JVM is pointed at, when the chart mounts one.
+    trino_java_truststore_path: str | None = None
+
     #: Holds the durable copy of every catalog. Apchi patches it; an initContainer
     #: seeds the coordinator's store directory from it at pod start.
     catalog_secret_name: str = "trino-catalog-seed"
@@ -330,6 +360,23 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _refuse_unrecognised_settings(self) -> Self:
         refuse_unrecognised(os.environ)
+        return self
+
+    @model_validator(mode="after")
+    def _wiring_trino_accepts(self) -> Self:
+        # Both are rendered into every Trino file Apchi writes, so a bad value here is a
+        # coordinator that will not start after the next Apply -- refused at Apchi's start
+        # instead, where the setting is named.
+        if not self.trino_security_refresh_period.strip():
+            raise ValueError(
+                "trino_security_refresh_period is required: without it Trino reads the "
+                "access-control rules once at startup and never again (§13.4)"
+            )
+        if not re.fullmatch(r"[a-z0-9_]+", self.trino_environment):
+            raise ValueError(
+                f"trino_environment {self.trino_environment!r} is not one Trino accepts: "
+                "lowercase letters, digits and underscores only"
+            )
         return self
 
     @model_validator(mode="after")

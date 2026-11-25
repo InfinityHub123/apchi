@@ -43,6 +43,12 @@ from app.sections.base import (
 )
 from app.sections.catalogs import SECTION as CATALOGS
 from app.sections.registry import REGISTERED
+from app.sections.server_configuration import (
+    CONFIG_PROPERTIES,
+    LOG_PROPERTIES,
+    NODE_PROPERTIES,
+    probe_properties,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +93,13 @@ _PROBE_CONFIG = {
     "catalog.management": f"${{ENV:{_CATALOG_MANAGEMENT_ENV}}}",
 }
 
-_CONFIG_PATH = "/etc/trino/config.properties"
+_CONFIG_PATH = CONFIG_PROPERTIES
+_NODE_PATH = NODE_PROPERTIES
+_LOG_PATH = LOG_PROPERTIES
+
+#: The probe's node.properties when an Admin adds to it: the image's own two lines, which the
+#: Admin's cannot replace. Wiring on the probe as on the Cluster.
+_PROBE_NODE = {"node.environment": "apchi_probe", "node.data-dir": _DATA_DIR}
 
 #: How much of a failed probe's log to read. Large because the interesting part is not at
 #: the end: a bootstrap failure prints its error block and then dumps every configuration
@@ -325,17 +337,30 @@ async def ephemeral_trino(
         logger.info("validation pod deleted", extra={"pod": name})
 
 
+#: Trino's numbered list of configuration errors, which follows "Configuration is invalid" and
+#: is where the reason actually is: "1) Configuration property 'query.max-memroy' was not used.
+#: Did you mean ...". Measured on Trino 483 -- the line carries none of the other markers.
+_NUMBERED_ERROR = re.compile(r"^\d+\) ")
+
+
 def _why(logs: str) -> str:
     """The lines of a failed probe's log that say what went wrong."""
     interesting = [
         stripped
         for line in logs.splitlines()
-        if ("ERROR" in line or "Caused by" in line or "Configuration is invalid" in line)
+        if (
+            "ERROR" in line
+            or "Caused by" in line
+            or "Configuration is invalid" in line
+            or _NUMBERED_ERROR.match(line.strip())
+        )
         # Guice points at its own wiki beside the real cause, which is a line of the quote
         # spent telling an Operator to read about dependency injection.
         and not (stripped := line.strip()).startswith("http")
     ]
-    return " / ".join(interesting[-3:])
+    # Each reason once: Guice repeats one cause per injection point that hit it, and three
+    # copies of the same sentence crowd out the one line that differs.
+    return " / ".join(list(dict.fromkeys(interesting))[-3:])
 
 
 def _blame(logs: str, blame: Mapping[str, str]) -> str | None:
@@ -403,6 +428,8 @@ async def validate_candidate(
     plans: dict[SectionName, SectionPlan],
     cluster: Cluster,
     validation_id: str,
+    *,
+    admin_changed: bool = False,
 ) -> list[ValidationFailure]:
     """Raises ValidationFailed if the Candidate should not be applied.
 
@@ -434,15 +461,33 @@ async def validate_candidate(
     probing = [
         section for section in REGISTERED if section.needs_probe(sections.get(section.name, {}))
     ]
-    if not probing:
+    if not probing and not admin_changed:
         # No pod for a Candidate with nothing a coordinator could reject. The pod is the
         # expensive part of Validation, and an empty Candidate is a real case: the first
         # Apply of a fresh Cluster, and every Apply that only drops things.
+        #
+        # Unless what changed is the Admin's. Their server configuration and raw files are
+        # the class of configuration most able to stop Trino booting (§14), and an Admin
+        # Apply moves no Section -- so before this, an Admin Apply on a Cluster with nothing
+        # else to probe delivered raw files straight to the Cluster, unvalidated.
         logger.info("no Trino validation needed")
         return warnings
 
     files: dict[str, str] = {}
-    properties = dict(_PROBE_CONFIG)
+    # The Admin's properties first and the probe's own wiring over them: the probe needs its
+    # wiring to read the files under test at all, and the Admin's keys are what is on trial.
+    # Sizing never reaches the probe -- see `probe_properties`.
+    admin_files = probe_properties(cluster.admin.server_configuration)
+    properties = {**admin_files["config.properties"], **_PROBE_CONFIG}
+    if admin_files["node.properties"]:
+        files[_NODE_PATH] = "".join(
+            f"{key}={value}\n"
+            for key, value in {**admin_files["node.properties"], **_PROBE_NODE}.items()
+        )
+    if admin_files["log.properties"]:
+        files[_LOG_PATH] = "".join(
+            f"{key}={value}\n" for key, value in sorted(admin_files["log.properties"].items())
+        )
     # Which resource to blame if the probe refuses to start: Trino names the file, and the
     # file is the Section's, so the path is what ties a startup failure back to a resource.
     blame: dict[str, str] = {}
@@ -459,31 +504,14 @@ async def validate_candidate(
             properties.update(spec.probe_config)
     # The Admin's raw files (§14) are validated like everything else: they are the class of
     # configuration most able to stop Trino booting, so the probe is where that should be
-    # found out rather than the Cluster.
-    #
-    # With one exclusion, and it is a real limit rather than an oversight. The probe's own
-    # `config.properties` is assembled here from each Section's `probe_config` -- the
-    # properties without which the probe would not read the files under test at all. A raw
-    # file at that path would replace them, and a probe configured by the thing it is
-    # probing is not a probe: it would start cleanly having validated nothing.
-    #
-    # So a raw `config.properties` reaches the Cluster but not the probe. If it is broken,
-    # the Cluster fails and Auto Rollback puts it back -- which is the contract §14 offers,
-    # arriving one stage later than for every other file.
-    raw = {
-        path: content for path, content in cluster.admin.raw_files.items() if path != _CONFIG_PATH
-    }
+    # found out rather than the Cluster. None can be at a path Apchi renders -- those are
+    # refused before Validation -- so none can replace the probe's own configuration.
+    raw = dict(cluster.admin.raw_files)
     if raw:
         logger.info("probing admin raw files", extra={"raw_files": sorted(raw)})
     files.update(raw)
-    if _CONFIG_PATH in cluster.admin.raw_files:
-        logger.warning(
-            "an admin raw config.properties is not validated on the probe; the probe needs "
-            "that file itself, so the Cluster is where it is proved",
-            extra={"raw_file": _CONFIG_PATH},
-        )
 
-    if files:
+    if files or admin_files["config.properties"]:
         files[_CONFIG_PATH] = "".join(f"{key}={value}\n" for key, value in properties.items())
 
     async with ephemeral_trino(

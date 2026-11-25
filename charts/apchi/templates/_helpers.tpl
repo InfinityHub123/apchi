@@ -219,23 +219,6 @@ Java still reads it only at startup.
 {{- end }}
 {{- end -}}
 
-{{/*
-The truststore's password, for a store that needs one to load. From its Secret and into the
-JVM by Kubernetes' own $(VAR) expansion, so it is never in a ConfigMap or the pod spec.
-*/}}
-{{- define "apchi.truststorePasswordEnv" -}}
-{{- $p := .Values.javaTruststore.password -}}
-{{- if and (include "apchi.hasTruststore" .) $p.existingSecret }}
-- name: TRUSTSTORE_PASSWORD
-  valueFrom:
-    secretKeyRef:
-      name: {{ $p.existingSecret | quote }}
-      key: {{ $p.key | quote }}
-- name: JDK_JAVA_OPTIONS
-  value: "-Djavax.net.ssl.trustStorePassword=$(TRUSTSTORE_PASSWORD)"
-{{- end }}
-{{- end -}}
-
 {{/* The same two, as the JSON settings Apchi builds its Validation pod from. */}}
 {{- define "apchi.validationCaBundle" -}}
 {{- $s := .Values.caBundle -}}
@@ -417,4 +400,110 @@ spec:
                   name: {{ $port }}
 {{- end }}
 {{- end }}
+{{- end -}}
+
+{{/*
+Bytes, from a size in one of three notations, so the chart can check that sizing fits before
+anything is rolled out. Takes (dict "value" "2G" "kind" "java|trino|k8s" "name" "the.value").
+
+- java:  -Xmx's units, powers of 1024: k, m, g, t (either case), or plain bytes.
+- trino: Trino's DataSize, powers of 1024: B, kB, MB, GB, TB, PB.
+- k8s:   a Kubernetes quantity: Ki, Mi, Gi, Ti (1024) or k, M, G, T (1000), or plain bytes.
+*/}}
+{{- define "apchi.bytes" -}}
+{{- $v := toString .value | trim -}}
+{{- if not (regexMatch "^[0-9]+(\\.[0-9]+)?[A-Za-z]*$" $v) -}}
+{{- fail (printf "%s: %q is not a size" .name $v) -}}
+{{- end -}}
+{{- $n := regexReplaceAll "^([0-9.]+)([A-Za-z]*)$" $v "${1}" | float64 -}}
+{{- $u := regexReplaceAll "^([0-9.]+)([A-Za-z]*)$" $v "${2}" -}}
+{{- $units := dict -}}
+{{- if eq .kind "java" -}}
+{{- $units = dict "" 1.0 "k" 1024.0 "K" 1024.0 "m" 1048576.0 "M" 1048576.0 "g" 1073741824.0 "G" 1073741824.0 "t" 1099511627776.0 "T" 1099511627776.0 -}}
+{{- else if eq .kind "trino" -}}
+{{- $units = dict "B" 1.0 "kB" 1024.0 "MB" 1048576.0 "GB" 1073741824.0 "TB" 1099511627776.0 "PB" 1125899906842624.0 -}}
+{{- else -}}
+{{- $units = dict "" 1.0 "Ki" 1024.0 "Mi" 1048576.0 "Gi" 1073741824.0 "Ti" 1099511627776.0 "k" 1000.0 "M" 1000000.0 "G" 1000000000.0 "T" 1000000000000.0 -}}
+{{- end -}}
+{{- if not (hasKey $units $u) -}}
+{{- fail (printf "%s: %q has a unit %q that is not one of %s" .name $v $u (keys $units | sortAlpha | join ", ")) -}}
+{{- end -}}
+{{- mulf $n (get $units $u) -}}
+{{- end -}}
+
+{{/*
+A role's sizing, checked: the heap has to fit the container's memory limit, and query memory
+plus headroom has to fit the heap. Trino refuses the second at startup anyway -- "Invalid
+memory configuration" -- but a render that fails costs nothing, and a rollout that stalls on
+it costs a stuck Deployment. Takes (dict "root" . "role" "coordinator|worker").
+*/}}
+{{- define "trino.checkSizing" -}}
+{{- $role := index .root.Values.trino .role -}}
+{{- $p := printf "trino.%s" .role -}}
+{{- $heapName := printf "%s.jvm.maxHeapSize" $p -}}
+{{- $heap := include "apchi.bytes" (dict "value" (required (printf "%s is required" $heapName) $role.jvm.maxHeapSize) "kind" "java" "name" $heapName) | float64 -}}
+{{- $perNodeName := printf "%s.memory.maxMemoryPerNode" $p -}}
+{{- $perNode := include "apchi.bytes" (dict "value" (required (printf "%s is required" $perNodeName) $role.memory.maxMemoryPerNode) "kind" "trino" "name" $perNodeName) | float64 -}}
+{{- $headroomName := printf "%s.memory.heapHeadroomPerNode" $p -}}
+{{- $headroom := include "apchi.bytes" (dict "value" (required (printf "%s is required" $headroomName) $role.memory.heapHeadroomPerNode) "kind" "trino" "name" $headroomName) | float64 -}}
+{{- if gt (addf $perNode $headroom) $heap -}}
+{{- fail (printf "%s + %s (%s + %s) is larger than the heap %s (%s); Trino refuses to start with that" $perNodeName $headroomName $role.memory.maxMemoryPerNode $role.memory.heapHeadroomPerNode $heapName $role.jvm.maxHeapSize) -}}
+{{- end -}}
+{{- with (($role.resources).limits).memory -}}
+{{- $limit := include "apchi.bytes" (dict "value" . "kind" "k8s" "name" (printf "%s.resources.limits.memory" $p)) | float64 -}}
+{{- if gt $heap $limit -}}
+{{- fail (printf "%s (%s) is larger than %s.resources.limits.memory (%s); the pod would be OOM-killed under load" $heapName $role.jvm.maxHeapSize $p .) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The values sizing replaced, refused by name so an upgrade says where each one went rather than
+rendering a Trino that silently ignores it.
+*/}}
+{{- define "trino.refuseMovedValues" -}}
+{{- if hasKey .Values.trino "jvm" -}}
+{{- fail "trino.jvm is gone: the heap and JVM flags are per role now, under trino.coordinator.jvm and trino.worker.jvm" -}}
+{{- end -}}
+{{- if .Values.trino.additionalCoordinatorProperties -}}
+{{- fail "trino.additionalCoordinatorProperties is gone: Apchi renders the coordinator's config.properties. Set those properties through PUT /api/v1/admin/server-configuration (memory sizing is trino.coordinator.memory)" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+A role's JVM and sizing, as the pod's environment. The heap and every tuning flag travel in
+JDK_JAVA_OPTIONS, which the java launcher reads itself; jvm.config carries none, because it is
+read after this variable and its last -Xmx would win (measured). Query memory travels in the
+three variables the rendered config.properties refers to by ${ENV:...}, and each is always
+set: a reference to an unset one stops Trino with "Environment variable is not set".
+
+The truststore password, when there is one, comes first, so that $(TRUSTSTORE_PASSWORD) in the
+options below expands: Kubernetes expands a reference only to a variable defined earlier.
+Takes (dict "root" . "role" "coordinator|worker").
+*/}}
+{{- define "trino.jvmEnv" -}}
+{{- $root := .root -}}
+{{- $role := index $root.Values.trino .role -}}
+{{- include "trino.checkSizing" . -}}
+{{- $options := list (printf "-Xmx%s" $role.jvm.maxHeapSize) "-XX:+UseG1GC" "-XX:+ExitOnOutOfMemoryError" "-XX:-OmitStackTraceInFastThrow" -}}
+{{- $options = concat $options ($role.jvm.extraArgs | default list) -}}
+{{- $p := $root.Values.javaTruststore.password -}}
+{{- if and (include "apchi.hasTruststore" $root) $p.existingSecret }}
+- name: TRUSTSTORE_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ $p.existingSecret | quote }}
+      key: {{ $p.key | quote }}
+{{- $options = append $options "-Djavax.net.ssl.trustStorePassword=$(TRUSTSTORE_PASSWORD)" -}}
+{{- end }}
+- name: JDK_JAVA_OPTIONS
+  value: {{ join " " $options | quote }}
+{{- if eq .role "coordinator" }}
+- name: TRINO_QUERY_MAX_MEMORY
+  value: {{ required "trino.coordinator.memory.queryMaxMemory is required" $role.memory.queryMaxMemory | quote }}
+{{- end }}
+- name: TRINO_QUERY_MAX_MEMORY_PER_NODE
+  value: {{ $role.memory.maxMemoryPerNode | quote }}
+- name: TRINO_MEMORY_HEAP_HEADROOM_PER_NODE
+  value: {{ $role.memory.heapHeadroomPerNode | quote }}
 {{- end -}}
