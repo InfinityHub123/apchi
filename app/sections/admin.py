@@ -31,6 +31,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.sections.certificate_mapping.model import CertificateMappingWrite
+from app.sections.server_configuration import ServerConfiguration
 
 #: Enough to migrate a Cluster that accumulated conventions over years, few enough that the
 #: file stays something a person can read. Nobody has a legitimate hundredth pattern.
@@ -58,6 +59,16 @@ class AdminValues(BaseModel):
             "working beneath the Operator's grants while the grants catch up. Keyed by the "
             "block they belong to -- the blocks Apchi generates, and the ones it does not "
             "model at all. An Admin removes them when the migration is done."
+        ),
+    )
+    #: Trino's own files, less what the chart owns (ADR-0010). Typed by file and role, with no
+    #: schema over the properties themselves: Trino judges those.
+    server_configuration: ServerConfiguration = Field(
+        default_factory=ServerConfiguration,
+        description=(
+            "The Admin's properties for Trino's own files, by role and file. Apchi renders "
+            "each file as wiring first, then these. Wiring and sizing come from the chart "
+            "and are refused here."
         ),
     )
     #: §14's escape hatch, keyed by the path each file is delivered at. Every value is

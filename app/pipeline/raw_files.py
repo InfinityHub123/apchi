@@ -35,6 +35,7 @@ from app.sections.admin import AdminValues
 from app.sections.base import CoordinatorDirectory, CoordinatorFile
 from app.sections.raw_files import CONFIG_DIR, MAX_FILES, normalised, within_config_dir
 from app.sections.registry import REGISTERED
+from app.sections.server_configuration import RENDERED_PATHS
 
 if TYPE_CHECKING:  # a Cluster carries the adapters and the Admin values together
     from app.sections.base import Cluster
@@ -56,12 +57,14 @@ def _owner_of(path: str, settings: Settings) -> str | None:
     Checking only the first was the gap: `owned_paths` answers "what does Apchi mount", and
     the question here is "what does Apchi generate", which is the larger set.
 
-    Note what is *not* here. `/etc/trino/access-control.properties` is the **Admin's** file --
-    it points Trino at the rules directory Apchi fills -- so an Admin may write it raw. If
-    they leave out the refresh period, precondition 5 refuses the Apply, which is "if it works
-    it works" working as intended.
+    And a third: Trino's own files, which Apchi renders from the Server Configuration and the
+    chart's wiring (ADR-0010). A raw file at one of those would replace the whole file,
+    wiring included -- measured on kind, Kubernetes merges container mounts by path, so the
+    raw mount silently takes the place of the other one.
     """
     candidate = PurePosixPath(path)
+    if str(candidate) in RENDERED_PATHS:
+        return "Server Configuration"
     for section in REGISTERED:
         for spec in section.coordinator_files(settings):
             declared = PurePosixPath(spec.path)
@@ -88,6 +91,14 @@ async def refuse_unusable(
             f"{candidate!r} is not under {CONFIG_DIR}. Raw files are an escape hatch for "
             "Trino's configuration, not a way to write elsewhere in the container.",
             details=[{"property": "path", "problem": f"must be under {CONFIG_DIR}"}],
+        )
+
+    if _owner_of(candidate, settings) == "Server Configuration":
+        raise UnprocessablePayload(
+            f"Apchi renders {candidate!r} itself, from the Server Configuration and the "
+            "chart's wiring, so a raw file there would replace the whole file. Set the "
+            "properties you need through PUT /api/v1/admin/server-configuration instead.",
+            details=[{"property": "path", "problem": "rendered by Apchi: Server Configuration"}],
         )
 
     if (volume := _owner_of(candidate, settings)) is not None:
@@ -141,6 +152,23 @@ async def _refuse_if_unmountable(
     volumes = {volume.name: volume for volume in spec.volumes}
     for container in spec.containers:
         for mount in container.volume_mounts:
+            # The deployment already puts a file of its own here. Apchi's mount would replace
+            # it, because Kubernetes merges container mounts by path -- measured on kind -- and
+            # a re-apply of the deployment's manifests, which is what Argo CD's sync does,
+            # would then silently put theirs back.
+            if (
+                mount.mount_path.rstrip("/") == path
+                and mount.name != settings.raw_files_volume_name
+            ):
+                raise UnprocessablePayload(
+                    f"The deployment already mounts {mount.name!r} at {path}. A raw file "
+                    "there would replace that mount, and the next sync of the deployment "
+                    "would put it back without a word. Write the file somewhere the "
+                    "deployment does not mount anything.",
+                    details=[
+                        {"property": "path", "problem": f"mounted by the deployment ({mount.name})"}
+                    ],
+                )
             if mount.sub_path:
                 continue
             volume = volumes.get(mount.name)
@@ -172,6 +200,26 @@ def _covers(mount_path: str, directory: str) -> bool:
     """
     normalised_mount = mount_path.rstrip("/")
     return directory == normalised_mount or directory.startswith(f"{normalised_mount}/")
+
+
+def refuse_rendered_paths(values: AdminValues) -> None:
+    """Refuse an Apply while a Raw File sits at a path Apchi renders.
+
+    Such a file can only predate Apchi rendering that path: writing one now is refused. It is
+    not converted into Server Configuration -- splitting an arbitrary file into wiring and
+    Admin keys is a guess, and a wrong guess changes a Cluster nobody asked to change.
+    """
+    stranded = sorted(path for path in values.raw_files if normalised(path) in RENDERED_PATHS)
+    if stranded:
+        raise preconditions.PreconditionFailed(
+            [
+                f"A raw file is stored at {path}, which Apchi now renders itself from the "
+                "Server Configuration and the chart's wiring. Move the properties you need "
+                "into PUT /api/v1/admin/server-configuration, then DELETE "
+                f"/api/v1/admin/files{path}."
+                for path in stranded
+            ]
+        )
 
 
 def secret_key(path: str) -> str:
@@ -279,6 +327,8 @@ async def changed(cluster: "Cluster") -> bool:
     if set(desired) != await _mounted_paths(cluster):
         return True
     live = await cluster.kubernetes.read_secret_if_present(cluster.settings.raw_files_secret_name)
-    return {secret_key(p): c for p, c in desired.items()} != {
-        key: value for key, value in (live or {}).items()
-    }
+    # Only the keys a mount reads. A key nothing mounts is a file Trino never sees, so content
+    # left in the Secret after its mount went -- by hand, or by a reset that took the mount
+    # off -- is no reason to end every running query.
+    wanted = {secret_key(p): c for p, c in desired.items()}
+    return wanted != {key: (live or {}).get(key) for key in wanted}

@@ -11,6 +11,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import socket
 import subprocess
 import time
@@ -35,6 +36,40 @@ from app.pipeline.admin_values import AdminStore
 
 logger = logging.getLogger(__name__)
 
+#: The wiring the chart passes Apchi for `deploy/trino-dev`, generated beside it by
+#: scripts/export_trino_dev.py. Tier 2 runs Apchi with it, so Apchi renders Trino's files
+#: exactly as the committed manifests have them: otherwise its first Apply would see a
+#: difference in node.environment or the refresh period, and restart the coordinator for
+#: nothing.
+_DEV_WIRING = Path(__file__).resolve().parents[2] / "deploy" / "trino-dev.apchi.env"
+
+
+def dev_wiring() -> dict[str, str]:
+    """The fixture's wiring, as `APCHI_` variables."""
+    wiring: dict[str, str] = {}
+    for line in _DEV_WIRING.read_text().splitlines():
+        if line and not line.startswith("#"):
+            name, value = line.split("=", 1)
+            wiring[name] = value
+    return wiring
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _apchi_wired_like_the_fixture() -> Iterator[None]:
+    """Set for the session and put back after it, rather than at import: tier 1 imports this
+    module to check the forwarding wrapper, and a variable set on import leaked into every
+    tier 1 Settings built after it."""
+    previous = {name: os.environ.get(name) for name in dev_wiring()}
+    for name, value in dev_wiring().items():
+        os.environ.setdefault(name, value)
+    yield
+    for name, value in previous.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
+
+
 COORDINATOR = "deploy/trino-coordinator"
 TRINO_SERVICE = "svc/trino"
 CATALOG_SEED_SECRET = "trino-catalog-seed"
@@ -43,6 +78,7 @@ EVENT_LISTENER_SECRET = "trino-event-listener"
 USER_MAPPING_SECRET = "trino-user-mapping"
 RESOURCE_GROUPS_SECRET = "trino-resource-groups"
 CLIENT_CERTIFICATE_SECRET = "trino-client-certificates"
+SERVER_CONFIG_SECRET = "trino-server-config-coordinator"
 
 #: The mounts Apchi adds and removes on the coordinator, by the volume that carries
 #: them. What the reset has to take back off between tests.
@@ -516,7 +552,7 @@ def divergence_at_session_start() -> list[str]:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def baseline(cluster: None) -> None:
+def baseline(cluster: None, _apchi_wired_like_the_fixture: None) -> None:
     """Put the cluster into a known state once, before any test runs.
 
     The per-test reset restores what a test changed, which is not the same thing: it
@@ -747,6 +783,7 @@ async def cluster_state(
         USER_MAPPING_SECRET,
         RESOURCE_GROUPS_SECRET,
         CLIENT_CERTIFICATE_SECRET,
+        SERVER_CONFIG_SECRET,
     )
     originals = {name: await real_kubernetes.read_secret(name) for name in secrets}
 
@@ -764,7 +801,9 @@ async def cluster_state(
         # -- UserMapping parses them when the authenticator is built. Either one changed
         # means the pod has to go.
         changed_rules = False
-        for name in (ACCESS_CONTROL_SECRET, USER_MAPPING_SECRET):
+        # And Trino's own files (ADR-0010), which the coordinator reads once at start: a test
+        # that applied a property leaves a coordinator running it until it restarts.
+        for name in (ACCESS_CONTROL_SECRET, USER_MAPPING_SECRET, SERVER_CONFIG_SECRET):
             if await real_kubernetes.read_secret(name) != originals[name]:
                 changed_rules = True
         for name, content in originals.items():

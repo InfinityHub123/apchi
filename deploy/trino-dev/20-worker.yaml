@@ -35,6 +35,14 @@ spec:
         - name: trino
           image: "trinodb/trino:483"
           imagePullPolicy: IfNotPresent
+          # Sizing, on the pod beside the memory limit it has to fit. See the coordinator.
+          env:
+            - name: JDK_JAVA_OPTIONS
+              value: "-Xmx2G -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -XX:-OmitStackTraceInFastThrow"
+            - name: TRINO_QUERY_MAX_MEMORY_PER_NODE
+              value: "600MB"
+            - name: TRINO_MEMORY_HEAP_HEADROOM_PER_NODE
+              value: "600MB"
           ports:
             - containerPort: 8080
               name: http

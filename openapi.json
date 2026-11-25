@@ -126,6 +126,10 @@
             "description": "Raw Trino configuration files, by path. Delivered as written; Apchi does not parse or validate the contents. Never returned with their content.",
             "title": "Raw Files",
             "type": "object"
+          },
+          "server_configuration": {
+            "$ref": "#/components/schemas/ServerConfiguration",
+            "description": "The Admin's properties for Trino's own files, by role and file. Apchi renders each file as wiring first, then these. Wiring and sizing come from the chart and are refused here."
           }
         },
         "title": "AdminValues",
@@ -903,6 +907,38 @@
           "sections"
         ],
         "title": "Configuration",
+        "type": "object"
+      },
+      "CoordinatorFiles": {
+        "additionalProperties": false,
+        "description": "The Admin's properties for the coordinator, one map per file Trino reads.",
+        "properties": {
+          "config.properties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Properties for the coordinator's config.properties. Wiring and sizing are refused: they belong to the chart.",
+            "title": "Config.Properties",
+            "type": "object"
+          },
+          "log.properties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Log levels, by logger name: {\"io.trino.plugin.postgresql\": \"DEBUG\"}.",
+            "title": "Log.Properties",
+            "type": "object"
+          },
+          "node.properties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Extra node.properties.",
+            "title": "Node.Properties",
+            "type": "object"
+          }
+        },
+        "title": "CoordinatorFiles",
         "type": "object"
       },
       "Credentials": {
@@ -1736,6 +1772,25 @@
           "content"
         ],
         "title": "RawFileWrite",
+        "type": "object"
+      },
+      "RenderedFiles": {
+        "additionalProperties": false,
+        "description": "The files Apchi would write for the coordinator, as the next Apply would write them.",
+        "properties": {
+          "coordinator": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Each file Apchi renders under /etc/trino, by path: wiring first, then the Admin's properties. Holds whatever credentials those properties hold.",
+            "title": "Coordinator",
+            "type": "object"
+          }
+        },
+        "required": [
+          "coordinator"
+        ],
+        "title": "RenderedFiles",
         "type": "object"
       },
       "ResourceChange": {
@@ -2607,6 +2662,17 @@
           }
         },
         "title": "Selectors",
+        "type": "object"
+      },
+      "ServerConfiguration": {
+        "additionalProperties": false,
+        "description": "The Admin's half of Trino's own files. Workers arrive in the next stage.",
+        "properties": {
+          "coordinator": {
+            "$ref": "#/components/schemas/CoordinatorFiles"
+          }
+        },
+        "title": "ServerConfiguration",
         "type": "object"
       },
       "Snapshot": {
@@ -3628,6 +3694,150 @@
           }
         },
         "summary": "Decide whether grants are enforced",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/server-configuration": {
+      "get": {
+        "description": "Returned with their values, unlike a Raw File's content: these are named properties an\nAdmin edits one at a time, and this surface is the Admin's alone. They can still be\ncredentials, which is why they are never logged.",
+        "operationId": "get_server_configuration_api_v1_admin_server_configuration_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerConfiguration"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated, but not an Admin."
+          }
+        },
+        "summary": "The Admin's properties for Trino's own files",
+        "tags": [
+          "admin"
+        ]
+      },
+      "put": {
+        "description": "Replaces every property of every file, as a PUT does.\n\nRefused here, before anything is stored: wiring and sizing, which are the chart's, and\nany key or value Trino would read differently from how it is written -- a line break adds\na hidden line, a trailing backslash joins the next one. Everything else Trino judges: on\nthe validation probe at the next Apply, and on the Cluster after it, where Auto Rollback\nputs the previous properties back if the coordinator does not come up.\n\nNothing reaches the Cluster until an Apply, and that Apply restarts the coordinator,\nbecause Trino reads each of these files once at start.",
+        "operationId": "set_server_configuration_api_v1_admin_server_configuration_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServerConfiguration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerConfiguration"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated, but not an Admin."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace the Admin's properties for Trino's own files",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/server-configuration/files": {
+      "get": {
+        "description": "What the next Apply writes, wiring included -- the only place the wiring can be read\nwhole, because it comes from the chart's settings rather than from anything stored.",
+        "operationId": "get_rendered_files_api_v1_admin_server_configuration_files_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderedFiles"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No usable credential."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated, but not an Admin."
+          }
+        },
+        "summary": "The files Apchi renders for the coordinator",
         "tags": [
           "admin"
         ]

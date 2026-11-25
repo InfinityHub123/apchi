@@ -54,6 +54,7 @@ _PROPERTIES_DIR = str(PurePosixPath(PROPERTIES_PATH).parent)
 
 #: Where `event-listener.config-files` lives when a deployment sets it.
 _CONFIG_PROPERTIES = "/etc/trino/config.properties"
+_CONFIG_DIR = "/etc/trino"
 
 
 def _covers(mount_path: str, directory: str) -> bool:
@@ -171,9 +172,61 @@ async def check(kubernetes: KubernetesAdapter, spec: PodSpec, settings: Settings
     #    every query timing out with nothing to read (#188).
     problems.extend(await _unreachable_coordinator_problems(kubernetes, spec, settings))
 
+    # 9. Nothing under /etc/trino is mounted from a volume Apchi does not write. Apchi renders
+    #    every file there (ADR-0010), and a file of anyone else's would either be replaced by
+    #    Apchi's mount at the same path -- Kubernetes merges mounts by path, measured on kind --
+    #    or would put back into the directory a second owner that Apchi cannot see.
+    problems.extend(_foreign_mounts_in_config_dir(spec, volumes, settings))
+
     if problems:
         raise PreconditionFailed(problems)
     logger.debug("deployment preconditions hold")
+
+
+def apchi_secrets(settings: Settings) -> set[str]:
+    """Every Secret Apchi writes that the coordinator may mount under /etc/trino."""
+    return {
+        spec.secret for section in REGISTERED for spec in section.coordinator_files(settings)
+    } | {settings.server_configuration_secret_name, settings.raw_files_secret_name}
+
+
+def _foreign_mounts_in_config_dir(
+    spec: PodSpec, volumes: dict[str, Volume], settings: Settings
+) -> list[str]:
+    """Mounts in Trino's configuration directory that come from somewhere other than Apchi.
+
+    Only the Trino container: a sidecar's filesystem is its own, and nothing it mounts reaches
+    the files Trino reads. Judged by the Secret behind the volume rather than the volume's
+    name, because the name is the deployment's choice and the Secret is the thing Apchi writes.
+    """
+    ours = apchi_secrets(settings)
+    problems: list[str] = []
+    for container in spec.containers:
+        if container.name != settings.trino_container_name:
+            continue
+        for mount in container.volume_mounts:
+            path = mount.mount_path.rstrip("/")
+            if path != _CONFIG_DIR and not path.startswith(f"{_CONFIG_DIR}/"):
+                continue
+            volume = volumes.get(mount.name)
+            if volume is not None and volume.secret_name in ours:
+                continue
+            source = (
+                "no such volume"
+                if volume is None
+                else f"ConfigMap {volume.config_map_name!r}"
+                if volume.config_map_name
+                else f"Secret {volume.secret_name!r}"
+                if volume.secret_name
+                else "a volume that is neither a Secret nor a ConfigMap"
+            )
+            problems.append(
+                f"Container {container.name!r} mounts {mount.name!r} ({source}) at "
+                f"{mount.mount_path}. Apchi renders every file under {_CONFIG_DIR}, so "
+                "nothing else may be mounted there: set the properties through the Server "
+                "Configuration, or write the file as a Raw File, and remove this mount."
+            )
+    return problems
 
 
 async def _credential_exposure_problems(
@@ -244,7 +297,13 @@ def _exposure_in(
     case is what a chart or a manifest on disk looks like, which is what
     `scripts/check_trino_chart.py` reads.
     """
-    bearing = credential_secrets(REGISTERED, settings) | {settings.catalog_secret_name}
+    # The server configuration is the Admin's properties, and those can be credentials --
+    # `internal-communication.shared-secret`, an OAuth client secret -- so it is held to
+    # the same mode as everything else that carries one. The chart mounts it 0640.
+    bearing = credential_secrets(REGISTERED, settings) | {
+        settings.catalog_secret_name,
+        settings.server_configuration_secret_name,
+    }
     mounted = [volume for volume in spec.volumes if volume.secret_name in bearing]
     if not mounted:
         return []
