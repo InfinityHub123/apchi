@@ -352,14 +352,10 @@ def coordinator_log(lines: int = 400) -> str:
 
 
 def template_checksum(deployment: str) -> str | None:
-    value = kubectl(
-        "get",
-        "deployment",
-        deployment,
-        "-o",
-        "jsonpath={.spec.template.metadata.annotations.apchi/rolled-out-checksum}",
-    ).strip()
-    return value or None
+    """`deployment` in the `deploy/<name>` form `COORDINATOR` and `WORKER` are written in."""
+    template = json.loads(kubectl("get", deployment, "-o", "json"))["spec"]["template"]
+    value = (template["metadata"].get("annotations") or {}).get(ROLLED_OUT_CHECKSUM)
+    return None if value is None else str(value)
 
 
 def put_back_checksum(deployment: str, checksum: str | None) -> bool:
@@ -373,7 +369,7 @@ def put_back_checksum(deployment: str, checksum: str | None) -> bool:
     if template_checksum(deployment) == checksum:
         return False
     patch = {"spec": {"template": {"metadata": {"annotations": {ROLLED_OUT_CHECKSUM: checksum}}}}}
-    kubectl("patch", "deployment", deployment, "--type=strategic", "-p", json.dumps(patch))
+    kubectl("patch", deployment, "--type=strategic", "-p", json.dumps(patch))
     kubectl("rollout", "status", deployment, "--timeout=600s")
     return True
 

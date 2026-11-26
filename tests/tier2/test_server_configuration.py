@@ -460,13 +460,11 @@ async def test_recording_the_verified_snapshot_restarts_nothing(e2e_client: Asyn
     started = await e2e_client.post("/api/v1/applies", json={})
     record = await _settled(e2e_client, started.json()["id"])
 
-    recorded = kubectl(
-        "get",
-        "deployment",
-        COORDINATOR,
-        "-o",
-        "jsonpath={.metadata.annotations.apchi/verified-snapshot}",
-    ).strip()
+    recorded = (
+        json.loads(kubectl("get", COORDINATOR, "-o", "json"))["metadata"]
+        .get("annotations", {})
+        .get("apchi/verified-snapshot")
+    )
     assert record["stage"] == "succeeded", record
     assert recorded == str(record["snapshot"])
     assert _coordinator_pod() == coordinator
