@@ -56,4 +56,4 @@ stringData:
     access-control.name=file
     security.config-file=/etc/trino/worker-rules.json
   worker-rules.json: |
-    {"system_information": [{"user": "^apchi$", "allow": ["write"]}]}
+    {"system_information": [{"user": "^apchi$", "allow": ["read", "write"]}, {"allow": ["read"]}]}

@@ -1860,6 +1860,15 @@ authorization happens there. *Measured:* a worker with only this rule ran querie
 refused the drain for any other identity (403), and accepted it for Apchi's. The rule's user is
 the identity escaped and anchored, because Trino reads it as a regular expression.
 
+**Anyone may read a worker's system information** (#285), which is what its `/metrics` checks.
+A rules file that grants no read refuses every scrape -- *measured*: 403, and 401 with no user
+named -- and a worker is reached only from inside the cluster: the coordinator is what a Route
+or an Ingress exposes. Write stays Apchi's alone. A scraper still names a user, by
+`X-Trino-User` or a Basic username with no password: the worker authenticates nobody, and a
+password is refused. `management.user`, which would fix that identity and let a scrape name
+none, is refused on the workers, because the drain is a management request too: *measured*,
+with it set Apchi's drain got 403. The coordinator's metrics stay an Admin's grant.
+
 **The grace period is the chart's.** `shutdown.grace-period` is wiring, from
 `trino.worker.gracefulShutdown.gracePeriodSeconds`, because it has to fit the
 `terminationGracePeriodSeconds` the chart gives the pod: a drain takes at least twice the grace
