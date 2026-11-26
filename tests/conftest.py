@@ -301,6 +301,11 @@ class FakeKubernetes:
         #: And which Deployment each was of, in the same order: a worker-only change must
         #: restart the workers and leave the coordinator, and only this can show it.
         self.restarted: list[str] = []
+        #: The checksum each Deployment's pod template carries, as the last restart wrote it.
+        #: Empty until Apchi restarts one, as on a fresh install.
+        self.checksums: dict[str, str] = {}
+        #: Annotations on each Deployment itself, which restart nothing.
+        self.deployment_annotations: dict[str, dict[str, str]] = {}
         #: Set by a test to make the container behind the Cluster genuinely restart.
         self.restarts_for_real = False
         #: Set by a test to make the rollout never finish, proving the hard timeout.
@@ -363,7 +368,7 @@ class FakeKubernetes:
             return self.worker_pod_spec
         return self.pod_spec
 
-    async def restart_deployment(self, deployment: str, reason: str) -> None:
+    async def restart_deployment(self, deployment: str, reason: str, checksum: str) -> None:
         """Records the restart, and optionally performs one.
 
         Restarting the container for real is opt-in because it costs twenty seconds. What
@@ -373,8 +378,18 @@ class FakeKubernetes:
         """
         self.restarts.append(reason)
         self.restarted.append(deployment)
+        self.checksums[deployment] = checksum
         if self.restarts_for_real and self._cluster is not None:
             self._cluster.get_wrapped_container().restart()
+
+    async def rolled_out_checksum(self, deployment: str) -> str | None:
+        return self.checksums.get(deployment)
+
+    async def annotate_deployment(self, deployment: str, annotations: dict[str, str]) -> bool:
+        if deployment == _SETTINGS.worker_deployment_name and self.worker_pod_spec is None:
+            return False
+        self.deployment_annotations.setdefault(deployment, {}).update(annotations)
+        return True
 
     async def rollout_state(self, deployment: str) -> RolloutState:
         """Reports what Kubernetes would report.

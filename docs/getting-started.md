@@ -588,7 +588,7 @@ what it read at startup until it restarts. `kubectl logs` shows the warning nami
 
 **A validation fails with "the validation coordinator was not serving within 300s".** Either
 Apchi is running outside the cluster, where it cannot reach the probe's pod IP, or the node is
-out of memory and the probe never started. `kubectl get pods -n apchi -l apchi.dev/role=trino-validation`
+out of memory and the probe never started. `kubectl get pods -n apchi -l apchi/role=trino-validation`
 while a validation is running shows whether the pod is there and what state it is in.
 
 **An apply fails on a precondition.** Apchi refuses to touch a deployment it cannot configure

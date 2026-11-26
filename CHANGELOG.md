@@ -25,9 +25,17 @@ Two breaks the committed contract cannot show you, and which belong here when th
 - `management.user` and `management.user.https-enabled` are refused in the workers' Server
   Configuration: they replace the identity of the drain Apchi sends a worker before it stops,
   and Trino then refuses it.
+- Every label and annotation Apchi writes is under `apchi/` instead of `apchi.dev/`: the
+  validation probe's `apchi/role` label and the restart annotations on the pod templates.
+  `apchi.dev` is not a domain the project owns. A selector on `apchi.dev/role` finds nothing.
 
 ### Added
 
+- **Each Trino Deployment records what its pods were started from** (#290). A restart writes
+  `apchi/rolled-out-checksum`, a checksum of the files Trino reads only at start, onto the pod
+  template, and an Apply restarts a role whose pods carry a different one even when its Secrets
+  match. `apchi/verified-snapshot` on the Deployment itself names the Snapshot the Cluster was
+  last verified on, and restarts nothing.
 - **Workers serve their metrics to any named user** (#285). Apchi's rules for the workers now
   let anyone read system information, which is what a worker's `/metrics` checks. Before, every
   scrape got 403. Workers are reached only from inside the cluster. A scraper names a user with
