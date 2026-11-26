@@ -28,9 +28,6 @@ dependencies = [
     # shared signing key, and its httpx integration is deprecated in favour of a separate
     # httpx2 distribution. See app/auth/oidc.py.
     "joserfc>=1.7.5",
-    # The Prometheus project's own client. Its own registry per app, not the global default,
-    # so two apps in one process -- every tier 1 test -- do not count each other's Applies.
-    "prometheus-client>=0.21",
 ]
 
 [project.optional-dependencies]

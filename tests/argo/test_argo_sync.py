@@ -273,17 +273,6 @@ class _Apchi:
         self._forward.terminate()
 
 
-def _counted() -> set[str]:
-    """The kinds of Apply /metrics has counted as succeeded."""
-    # At the root, not under the API's /api/v1 base.
-    scraped = httpx.get("http://127.0.0.1:18000/metrics", timeout=30).text
-    return {
-        line.split('kind="', 1)[1].split('"', 1)[0]
-        for line in scraped.splitlines()
-        if line.startswith("apchi_applies_total{") and 'outcome="succeeded"' in line
-    }
-
-
 def _await_answer(http: httpx.Client) -> None:
     deadline = time.monotonic() + 120
     while time.monotonic() < deadline:
@@ -332,9 +321,6 @@ def test_an_argo_sync_keeps_everything_apchi_applied(argo: None) -> None:
         assert listener.status_code == 200, listener.text
         record = apchi.apply("/admin/applies")
         assert record["stage"] == "succeeded", record
-        # The one test that reaches Apchi's image through the chart's Service, which is the
-        # path a ServiceMonitor scrapes (#280).
-        _await("both Applies to be counted", lambda: _counted() == {"apply", "admin_apply"})
     finally:
         apchi.close()
 

@@ -2,10 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "apchi.fullname" . }}
-  labels:
-    {{- include "apchi.labels" . | nindent 4 }}
-    # What the ServiceMonitor selects on: the release's labels alone also match MongoDB's.
-    app.kubernetes.io/component: api
+  labels: {{- include "apchi.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
   ports:

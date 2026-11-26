@@ -20,13 +20,6 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
-### Added
-
-- **Prometheus metrics** at `/metrics`, with no identity required (#280): Maintenance Mode,
-  an Apply in flight, Applies and Auto Rollbacks by outcome, Apply and stage durations, and
-  the expiry of every certificate Apchi loaded. `metrics.serviceMonitor.enabled` renders a
-  ServiceMonitor. See the Monitoring page.
-
 ## 0.4.0 — 2026-11-26
 
 Apchi renders every Trino file and the chart renders none (ADR-0010); an Argo CD sync no longer
