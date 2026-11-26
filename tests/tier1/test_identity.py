@@ -31,9 +31,6 @@ from tests.conftest import FakeKubernetes
 #: in to clear would crashloop the pod they need alive to reach it -- the argument
 #: api/health.py already makes about what may go in it.
 #:
-#: /metrics is scraped by Prometheus, which holds no Apchi identity, and it exports counts,
-#: stages and certificate paths -- no resource, identity or credential (api/metrics.py).
-#:
 #: /auth/login and /auth/sso/* are how a caller gets an identity, so they cannot require one.
 #: They are covered by test_password_mode.py and test_sso_mode.py instead, which are the
 #: stricter tests: not "does it refuse nobody" but "does it refuse the wrong password, the
@@ -46,7 +43,6 @@ from tests.conftest import FakeKubernetes
 #: no hint about which accounts exist, which test_sign_in_discovery.py asserts.
 OPEN = {
     "/api/v1/health",
-    "/metrics",
     "/api/v1/auth/login",
     "/api/v1/auth/sign-in",
     "/api/v1/auth/sso/login",

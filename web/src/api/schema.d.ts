@@ -1443,29 +1443,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/metrics": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Prometheus metrics
-         * @description Answers while MongoDB is down, with the Cluster's state left out of it.
-         *
-         *     A scrape that failed with MongoDB would lose the Apply counters and the certificate
-         *     expiries exactly when somebody is looking, and `/health` already reports MongoDB.
-         */
-        get: operations["metrics_metrics_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -6301,26 +6278,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    metrics_metrics_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The exposition. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/plain; version=1.0.0; charset=utf-8": unknown;
                 };
             };
         };

@@ -265,8 +265,6 @@ spec:
             - name: APCHI_DEBUG
               value: "true"
             {{- end }}
-            - name: APCHI_METRICS_ENABLED
-              value: {{ .Values.metrics.enabled | quote }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
