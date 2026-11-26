@@ -282,3 +282,22 @@ def test_no_other_procedure_is_granted() -> None:
     rules = json.loads(render_rules("apchi", {"k": READ_NATION}, "system"))
 
     assert len(rules["procedures"]) == 1
+
+
+def test_everyone_may_read_the_coordinators_system_information() -> None:
+    """What /metrics checks. A rules file that grants no read refuses every scrape (measured
+    on 483: 403), and read yields metrics and cluster information, never data (#288)."""
+    rules = json.loads(render_rules("apchi", {}, "system"))
+
+    assert rules["system_information"] == [{"allow": ["read"]}]
+
+
+def test_an_admins_own_system_information_rules_decide_before_the_open_read() -> None:
+    """First match wins, so a preserved rule for a user has to sit above the rule that lets
+    everyone read, or it would never be reached."""
+    mine = {"user": "^ops$", "allow": ["read", "write"]}
+    rules = json.loads(
+        render_rules("apchi", {}, "system", preserved={"system_information": [mine]})
+    )
+
+    assert rules["system_information"] == [mine, {"allow": ["read"]}]

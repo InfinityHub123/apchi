@@ -359,11 +359,11 @@ async def test_only_apchis_identity_may_drain_a_worker(e2e_client: AsyncClient) 
     assert _worker_pod() == worker
 
 
-def _worker_metrics(worker: str, *auth: str) -> str:
-    """The status of a scrape of the worker's own /metrics, from inside its pod."""
+def _metrics(pod: str, *auth: str) -> str:
+    """The status of a scrape of a Trino pod's own /metrics, from inside it."""
     return kubectl(
         "exec",
-        f"pod/{worker}",
+        f"pod/{pod}",
         "-c",
         "trino",
         "--",
@@ -384,10 +384,23 @@ async def test_a_worker_serves_its_metrics_to_any_named_user(e2e_client: AsyncCl
     name from the request."""
     worker = _worker_pod()
 
-    assert _worker_metrics(worker, "-H", "X-Trino-User: prometheus") == "200"
+    assert _metrics(worker, "-H", "X-Trino-User: prometheus") == "200"
     # Prometheus' basic_auth with a username and no password.
-    assert _worker_metrics(worker, "-u", "prometheus:") == "200"
-    assert _worker_metrics(worker) == "401"
+    assert _metrics(worker, "-u", "prometheus:") == "200"
+    assert _metrics(worker) == "401"
+
+
+async def test_the_coordinator_serves_its_metrics_to_any_named_user(
+    e2e_client: AsyncClient,
+) -> None:
+    """The rules Apchi writes for the coordinator let everyone read system information, which
+    is what /metrics checks (#288)."""
+    pods = json.loads(
+        kubectl("get", "pods", "-l", "app.kubernetes.io/component=coordinator", "-o", "json")
+    )["items"]
+    coordinator = _serving(pods)[0]["metadata"]["name"]
+
+    assert _metrics(coordinator, "-H", "X-Trino-User: prometheus") == "200"
 
 
 async def test_a_misspelled_worker_property_is_refused_on_the_probe(

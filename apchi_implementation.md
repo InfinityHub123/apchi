@@ -1867,7 +1867,13 @@ or an Ingress exposes. Write stays Apchi's alone. A scraper still names a user, 
 `X-Trino-User` or a Basic username with no password: the worker authenticates nobody, and a
 password is refused. `management.user`, which would fix that identity and let a scrape name
 none, is refused on the workers, because the drain is a management request too: *measured*,
-with it set Apchi's drain got 403. The coordinator's metrics stay an Admin's grant.
+with it set Apchi's drain got 403.
+
+**The coordinator's are open to read too** (#288), though it is the node a Route or an Ingress
+exposes: read yields metrics and cluster information, never data, and once Trino authenticates
+its callers only an authenticated one reaches it. Its rules end their `system_information`
+block with read for everyone, beneath any an Admin preserves, so an Admin's rule for a user
+still decides for that user. Write is granted to nobody.
 
 **The grace period is the chart's.** `shutdown.grace-period` is wiring, from
 `trino.worker.gracefulShutdown.gracePeriodSeconds`, because it has to fit the
