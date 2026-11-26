@@ -340,3 +340,37 @@ async def test_the_probe_trusts_what_the_settings_name(
 
     spec = next(iter(fake_kubernetes.pod_manifests.values()))["spec"]
     assert {"ca-bundle", "java-truststore"} <= {v["name"] for v in spec["volumes"]}
+
+
+async def test_a_validation_that_blamed_a_retired_section_still_reads(
+    client: AsyncClient, settings: Settings
+) -> None:
+    """Stored while the Event Listeners Section existed (#269). One unreadable record would
+    fail the whole page of history it is on, not only itself."""
+    from datetime import UTC, datetime
+
+    from pymongo import AsyncMongoClient
+
+    now = datetime.now(UTC)
+    database = AsyncMongoClient(settings.mongo_uri)[settings.mongo_database]
+    await database["validations"].insert_one(
+        {
+            "_id": "val_before_the_move",
+            "id": "val_before_the_move",
+            "outcome": "failed",
+            "failures": [
+                {"section": "event_listeners", "resource": "audit", "reason": "would not load"}
+            ],
+            "warnings": [],
+            "base_snapshot": None,
+            "started_at": now,
+            "finished_at": now,
+        }
+    )
+
+    one = await client.get("/api/v1/validations/val_before_the_move")
+    page = await client.get("/api/v1/validations")
+
+    assert one.status_code == 200, one.text
+    assert one.json()["failures"][0]["section"] == "event_listeners"
+    assert page.status_code == 200, page.text

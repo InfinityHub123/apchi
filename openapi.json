@@ -416,6 +416,10 @@
                 "type": "string"
               },
               {
+                "const": "event_listeners",
+                "type": "string"
+              },
+              {
                 "enum": [
                   "admin",
                   "pipeline"
@@ -2905,6 +2909,10 @@
                 "type": "string"
               },
               {
+                "const": "event_listeners",
+                "type": "string"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -4029,6 +4037,10 @@
                     "permissions",
                     "resource_groups"
                   ],
+                  "type": "string"
+                },
+                {
+                  "const": "event_listeners",
                   "type": "string"
                 },
                 {
