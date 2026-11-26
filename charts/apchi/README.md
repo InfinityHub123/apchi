@@ -192,10 +192,10 @@ chart cannot drift into something Apchi refuses. CI runs it. It proves:
    never starts -- and Apchi mounts `resource-groups.properties` there itself. The official `trinodb/charts` chart mounts the
    whole directory, which is why Apchi does not support it (ADR-0008).
 
-**Workers serve their metrics to any named user** (#285). Each worker answers `/metrics`
-on its own port, and the rules Apchi writes for the workers let anyone read them. Workers are
-reached only from inside the cluster, and only the coordinator is exposed. A scraper still has
-to name a user, because the worker authenticates no one:
+**Every Trino pod serves its metrics to any named user** (#285, #288). Each one answers
+`/metrics` on its own port, and the rules Apchi writes for both roles let anyone read them:
+metrics and cluster information, never data. A scraper still has to name a user, because a
+worker authenticates no one:
 
 ```yaml
 - job_name: trino-workers
@@ -207,10 +207,10 @@ to name a user, because the worker authenticates no one:
   basic_auth: {username: prometheus}   # no password: the worker refuses one
 ```
 
-With `networkPolicy.enabled`, add Prometheus' namespace to `networkPolicy.worker.from`. The
-coordinator's metrics are an Admin's to grant: a `system_information` read rule for the
-scraper's user, in the Admin's access-control values. `management.user` is refused on the
-workers, because it replaces the identity of Apchi's drain request and Trino refuses it.
+`regex: worker|coordinator` scrapes both. With `networkPolicy.enabled`, add Prometheus'
+namespace to `networkPolicy.worker.from` and `networkPolicy.coordinator.from`.
+`management.user` is refused on the workers, because it replaces the identity of Apchi's drain
+request and Trino refuses it.
 
 Both roles run with a writable `emptyDir` at `/data/trino`, which `node.properties` names as
 `node.data-dir`: the launcher writes its pid file and an `etc` symlink there, and the image's

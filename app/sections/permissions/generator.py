@@ -221,6 +221,11 @@ def render_rules(
             query_rules(trino_user, sorted({staged[key]["identity"] for key in staged})),
             kept.pop("queries", []),
         ),
+        # Read is what /metrics checks, and a rules file that grants none refuses every scrape
+        # (measured on 483: 403). Open to everyone, as on the workers (#285, #288): it yields
+        # metrics and cluster information, never data. Write -- shutting a node down -- stays
+        # denied, since nothing grants it.
+        "system_information": [*kept.pop("system_information", []), {"allow": ["read"]}],
     }
     # Blocks Apchi does not model at all -- impersonation, system_information, schemas,
     # functions, authorization. Nothing here generates them, so they pass through whole.
