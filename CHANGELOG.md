@@ -33,6 +33,10 @@ Two breaks the committed contract cannot show you, and which belong here when th
   scrape got 403. Workers are reached only from inside the cluster. A scraper names a user with
   `X-Trino-User` or a Basic username with no password. The rules reach a running Cluster at its
   next Apply, which Review reports as a worker restart.
+- **The coordinator serves its metrics to any named user too** (#288): its rules end their
+  `system_information` block with read for everyone, beneath any an Admin preserved. Before,
+  every scrape got 403. It reaches the coordinator at the next Apply, without a restart: Trino
+  re-reads its rules on `security.refresh-period`.
 
 ## 0.4.0 — 2026-11-26
 
