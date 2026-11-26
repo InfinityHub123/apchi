@@ -359,6 +359,37 @@ async def test_only_apchis_identity_may_drain_a_worker(e2e_client: AsyncClient) 
     assert _worker_pod() == worker
 
 
+def _worker_metrics(worker: str, *auth: str) -> str:
+    """The status of a scrape of the worker's own /metrics, from inside its pod."""
+    return kubectl(
+        "exec",
+        f"pod/{worker}",
+        "-c",
+        "trino",
+        "--",
+        "curl",
+        "-s",
+        "-o",
+        "/dev/null",
+        "-w",
+        "%{http_code}",
+        *auth,
+        "http://localhost:8080/metrics",
+    )
+
+
+async def test_a_worker_serves_its_metrics_to_any_named_user(e2e_client: AsyncClient) -> None:
+    """Workers are not exposed outside the cluster, so their metrics are open by default
+    (#285). A scraper still has to name a user: the worker authenticates no one and reads the
+    name from the request."""
+    worker = _worker_pod()
+
+    assert _worker_metrics(worker, "-H", "X-Trino-User: prometheus") == "200"
+    # Prometheus' basic_auth with a username and no password.
+    assert _worker_metrics(worker, "-u", "prometheus:") == "200"
+    assert _worker_metrics(worker) == "401"
+
+
 async def test_a_misspelled_worker_property_is_refused_on_the_probe(
     e2e_client: AsyncClient,
 ) -> None:

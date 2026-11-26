@@ -22,6 +22,20 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ### Added
 
+- **Workers serve their metrics to any named user** (#285). Apchi's rules for the workers now
+  let anyone read system information, which is what a worker's `/metrics` checks. Before, every
+  scrape got 403. Workers are reached only from inside the cluster. A scraper names a user with
+  `X-Trino-User` or a Basic username with no password. The rules reach a running Cluster at its
+  next Apply, which Review reports as a worker restart.
+
+### Breaking
+
+- `management.user` and `management.user.https-enabled` are refused in the workers' Server
+  Configuration: they replace the identity of the drain Apchi sends a worker before it stops,
+  and Trino then refuses it.
+
+### Added
+
 - **Prometheus metrics** at `/metrics`, with no identity required (#280): Maintenance Mode,
   an Apply in flight, Applies and Auto Rollbacks by outcome, Apply and stage durations, and
   the expiry of every certificate Apchi loaded. `metrics.serviceMonitor.enabled` renders a

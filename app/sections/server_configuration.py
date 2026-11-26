@@ -148,6 +148,25 @@ WORKER_WIRING: Final[dict[str, dict[str, str]]] = {
     "node.properties": _NODE_WIRING,
     "log.properties": {},
 }
+#: Properties an Admin may not set on a role because they would break something Apchi does,
+#: as the message refusing each one says why.
+#:
+#: `management.user` fixes the identity of every request to a management endpoint, and the
+#: drain a worker's preStop hook sends as Apchi is one: with it set, the drain was refused
+#: (measured on 483: 403) and every worker replacement would end its running tasks (#285).
+_BREAKS_THE_DRAIN = (
+    "it replaces the identity of every management request, the drain Apchi sends a worker "
+    "before it stops included, which Trino then refuses"
+)
+REFUSED_BY_ROLE: Final[dict[Role, dict[str, dict[str, str]]]] = {
+    "coordinator": {},
+    "worker": {
+        "config.properties": {
+            "management.user": _BREAKS_THE_DRAIN,
+            "management.user.https-enabled": _BREAKS_THE_DRAIN,
+        }
+    },
+}
 WIRING_BY_ROLE: Final[dict[Role, dict[str, dict[str, str]]]] = {
     "coordinator": WIRING,
     "worker": WORKER_WIRING,
@@ -259,6 +278,8 @@ class _RoleFiles(BaseModel):
                     problems.append(
                         f"{file}: {key} is wiring and cannot be set here; it comes from {owner}"
                     )
+                if (why := REFUSED_BY_ROLE[self.role].get(file, {}).get(key)) is not None:
+                    problems.append(f"{file}: {key} cannot be set on the {self.role}s: {why}")
         if problems:
             raise ValueError("; ".join(problems))
         return self
@@ -426,15 +447,22 @@ def worker_config_wiring(settings: Settings) -> list[tuple[str, str]]:
 
 
 def worker_rules(settings: Settings) -> str:
-    """The workers' own access control: Apchi's identity may drain one, and nothing else.
+    """The workers' own access control: Apchi's identity may drain one, and anyone may read.
 
     Needed at all because a worker with no access control configured still refuses the drain
-    request -- Trino's default denies writing system information (measured on 483: 403). Nothing
-    else is granted, and nothing else is needed: authorization happens on the coordinator, and a
-    worker with only this rule ran queries as before (measured). Anyone else is refused (403).
+    request -- Trino's default denies writing system information (measured on 483: 403).
+    Authorization happens on the coordinator, and a worker with only these rules ran queries as
+    before (measured). Write -- the drain -- is Apchi's alone; anyone else asking is refused.
+
+    Read is everyone's because it is what a worker's `/metrics` checks, and a rules file without
+    it refuses every scrape (measured on 483: 403). A worker is reached only from inside the
+    cluster -- the coordinator is the one a Route or an Ingress exposes -- so its metrics are
+    open the way its port already is (#285). The first rule that matches a user decides, so
+    Apchi's carries read too.
     """
     user = f"^{re.escape(settings.trino_user)}$"
-    return json.dumps({"system_information": [{"user": user, "allow": ["write"]}]}) + "\n"
+    rules = [{"user": user, "allow": ["read", "write"]}, {"allow": ["read"]}]
+    return json.dumps({"system_information": rules}) + "\n"
 
 
 def render_worker(admin: ServerConfiguration, settings: Settings) -> dict[str, str]:

@@ -194,6 +194,26 @@ chart cannot drift into something Apchi refuses. CI runs it. It proves:
    never starts -- and Apchi mounts `resource-groups.properties` there itself. The official `trinodb/charts` chart mounts the
    whole directory, which is why Apchi does not support it (ADR-0008).
 
+**Workers serve their metrics to any named user** (#285). Each worker answers `/metrics`
+on its own port, and the rules Apchi writes for the workers let anyone read them. Workers are
+reached only from inside the cluster, and only the coordinator is exposed. A scraper still has
+to name a user, because the worker authenticates no one:
+
+```yaml
+- job_name: trino-workers
+  kubernetes_sd_configs: [{role: pod}]
+  relabel_configs:
+    - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+      regex: worker
+      action: keep
+  basic_auth: {username: prometheus}   # no password: the worker refuses one
+```
+
+With `networkPolicy.enabled`, add Prometheus' namespace to `networkPolicy.worker.from`. The
+coordinator's metrics are an Admin's to grant: a `system_information` read rule for the
+scraper's user, in the Admin's access-control values. `management.user` is refused on the
+workers, because it replaces the identity of Apchi's drain request and Trino refuses it.
+
 Both roles run with a writable `emptyDir` at `/data/trino`, which `node.properties` names as
 `node.data-dir`: the launcher writes its pid file and an `etc` symlink there, and the image's
 own copy belongs to uid 1000, so without it Trino cannot start as any other uid.
