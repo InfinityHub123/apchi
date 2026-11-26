@@ -78,6 +78,7 @@ nav:
   - Deploying:
       - A development cluster: deploying/trino-dev.md
       - OpenShift and restricted clusters: deploying/openshift.md
+      - Argo CD: deploying/argo-cd.md
       - Monitoring: deploying/monitoring.md
   - Reference:
       - HTTP API: reference/api.md
