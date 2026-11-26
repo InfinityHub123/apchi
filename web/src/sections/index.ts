@@ -2,7 +2,7 @@ import type { SectionName } from "../api/client";
 import type { IconName } from "../ui/Icon";
 
 /**
- * The six Sections as the console names and routes them.
+ * The five Sections as the console names and routes them.
  *
  * Presentation only. Whether a Section's change costs a Rollout is deliberately not here: it
  * comes from `Review.cost.rollout_sections`, because a Section is also in the Rollout when
@@ -25,7 +25,6 @@ export const SECTIONS: ReadonlyArray<{
   { key: "certificate_mapping", label: "Certificate mapping", short: "Mapping", noun: "Certificate mapping", path: "/certificate-mapping", icon: "mapping", api: "certificate-mapping" },
   { key: "permissions", label: "Permissions", short: "Permissions", noun: "Permissions", path: "/permissions", icon: "shield", api: "permissions" },
   { key: "resource_groups", label: "Resource groups", short: "Resource groups", noun: "Resource groups", path: "/resource-groups", icon: "groups", api: "resource-groups" },
-  { key: "event_listeners", label: "Event listeners", short: "Listeners", noun: "Event listener", path: "/event-listeners", icon: "listeners", api: "event-listeners" },
 ];
 
 const BY_KEY = new Map(SECTIONS.map((s) => [s.key, s]));
@@ -36,7 +35,15 @@ export function section(key: SectionName) {
   return found;
 }
 
-export const sectionLabel = (key: SectionName) => BY_KEY.get(key)?.label ?? key;
+/**
+ * Sections that no longer exist, by the name a stored record may still carry. The Event
+ * Listener became part of the Admin's Server Configuration (#269), and an audit event or a
+ * validation failure recorded before that still names it -- history reads as it was written.
+ */
+const RETIRED: Record<string, string> = { event_listeners: "Event listeners" };
+
+/** A Section's label -- or a retired one's, from a record that outlived it. */
+export const sectionLabel = (key: string) => BY_KEY.get(key as SectionName)?.label ?? RETIRED[key] ?? key;
 
 /**
  * A resource's name as a person reads it. Resource Groups keeps its selector list and its

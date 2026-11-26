@@ -2,14 +2,18 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
-  FILES,
   type FileName,
+  LISTENER_FILE,
+  LISTENER_NAME,
   type Role,
+  filesOf,
   filled,
   saveServerConfiguration,
+  useEventListenerTypes,
   useRenderedFiles,
   useServerConfiguration,
 } from "../admin/requests";
+import type { S } from "../api/client";
 import { Value } from "../review/ChangeCard";
 import { ErrorNote, Loading, PageHead } from "../ui/States";
 
@@ -31,7 +35,7 @@ const ROLES: { key: Role; label: string; restart: string }[] = [
 
 /**
  * Trino's own files -- config.properties, node.properties, log.properties -- for the coordinator
- * and the workers. Apchi renders them: the lines that name what the chart creates (ports,
+ * and the workers, and the coordinator's Event Listener. Apchi renders them: the lines that name what the chart creates (ports,
  * Services, paths) and the sizing that has to fit the pod come from the chart, and every other
  * property is the Admin's, here, with no schema over it. Trino judges them on the validation
  * probe at the next Apply.
@@ -88,9 +92,13 @@ export function ServerConfigurationScreen() {
               <Loading what="the server configuration" />
             </div>
           ) : (
-            FILES.map((file) => (
-              <PropertiesCard key={`${role}-${file}`} file={file} properties={draft[role][file]} onChange={(next) => edit(file, next)} />
-            ))
+            filesOf(role).map((file) =>
+              file === LISTENER_FILE ? (
+                <EventListenerCard key={`${role}-${file}`} properties={draft[role][file] ?? {}} onChange={(next) => edit(file, next)} />
+              ) : (
+                <PropertiesCard key={`${role}-${file}`} file={file} properties={draft[role][file] ?? {}} onChange={(next) => edit(file, next)} />
+              ),
+            )
           )}
           <section className="card cp" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -121,14 +129,133 @@ export function ServerConfigurationScreen() {
   );
 }
 
+/**
+ * Where Trino sends query events: `event-listener.name` names the plugin, and the rest are its
+ * own properties. Apchi renders the file into the coordinator's Secret and points
+ * config.properties at it only when one is set, so empty here is no listener at all. Loaded
+ * once per process, so any change restarts the coordinator.
+ *
+ * For a plugin Apchi has a schema for, the properties it requires are offered, because a
+ * missing one is refused on Save; any other plugin is Trino's to judge, on the probe.
+ */
+function EventListenerCard({
+  properties,
+  onChange,
+}: {
+  properties: Record<string, string>;
+  onChange: (next: Record<string, string>) => void;
+}) {
+  const types = useEventListenerTypes();
+  const plugin = properties[LISTENER_NAME] ?? "";
+  const rules: S["PropertyRules"] | undefined = types.data?.find((t) => t.name === plugin);
+  const curated = (types.data ?? []).map((t) => t.name);
+  const [other, setOther] = useState(plugin !== "" && !curated.includes(plugin));
+  const rest = Object.fromEntries(Object.entries(properties).filter(([k]) => k !== LISTENER_NAME));
+  const setPlugin = (name: string) =>
+    onChange(name === "" ? {} : { ...rest, [LISTENER_NAME]: name });
+  const missing = (rules?.required ?? []).filter((k) => !(k in properties));
+  const optional = [...(rules?.optional ?? [])].filter((k) => !(k in properties));
+  return (
+    <section className="card" aria-label="Event listener">
+      <div className="chd">
+        <span className="ct">Event listener</span>
+        <span className="sm muted mono">{LISTENER_FILE}</span>
+        <span className="sp" />
+        <span className="pill a">Restarts the coordinator</span>
+      </div>
+      <div className="cp" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="sm muted">
+          Where Trino sends query events — an audit or cost pipeline, Kafka, an HTTP collector. None is configured until a plugin is
+          chosen here.
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <label className="fl" style={{ flex: "1 1 200px" }}>
+            Plugin
+            <select
+              className="inp"
+              aria-label="Event listener plugin"
+              value={other ? "__other" : plugin}
+              onChange={(e) => {
+                if (e.target.value === "__other") {
+                  setOther(true);
+                  return;
+                }
+                setOther(false);
+                setPlugin(e.target.value);
+              }}
+            >
+              <option value="">None</option>
+              {curated.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+              <option value="__other">Another plugin…</option>
+            </select>
+          </label>
+          {other && (
+            <label className="fl" style={{ flex: "1 1 200px" }}>
+              {LISTENER_NAME}
+              <input
+                className="inp mono"
+                aria-label="Event listener plugin name"
+                placeholder="openlineage"
+                value={plugin}
+                onChange={(e) => setPlugin(e.target.value.trim())}
+              />
+            </label>
+          )}
+          {plugin !== "" && (
+            <button type="button" className="btn dng" onClick={() => { setOther(false); onChange({}); }}>
+              Remove the listener
+            </button>
+          )}
+        </div>
+        {other && plugin !== "" && (
+          <div className="sm muted">Apchi has no schema for this plugin: its properties are checked by Trino at the next Apply.</div>
+        )}
+        {missing.length > 0 && (
+          <div className="note note--flush" role="status">
+            <b>{plugin}</b> requires {missing.map((k, i) => (
+              <span key={k}>
+                {i > 0 && ", "}
+                <span className="mono">{k}</span>
+              </span>
+            ))}
+            . Saving refuses the listener without {missing.length === 1 ? "it" : "them"}.
+          </div>
+        )}
+      </div>
+      {plugin !== "" && (
+        <PropertiesCard
+          file={LISTENER_FILE}
+          embedded
+          properties={rest}
+          suggestions={[...missing, ...optional]}
+          isSecret={(k) => rules?.secrets.includes(k) ?? secret(k)}
+          onChange={(next) => onChange({ ...next, [LISTENER_NAME]: plugin })}
+        />
+      )}
+    </section>
+  );
+}
+
 function PropertiesCard({
   file,
   properties,
   onChange,
+  embedded = false,
+  suggestions = [],
+  isSecret = secret,
 }: {
   file: FileName;
   properties: Record<string, string>;
   onChange: (next: Record<string, string>) => void;
+  /** Inside another card, which carries the heading. */
+  embedded?: boolean;
+  /** Property names to offer, filled into the form when picked. */
+  suggestions?: string[];
+  isSecret?: (key: string) => boolean;
 }) {
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
@@ -139,13 +266,23 @@ function PropertiesCard({
     setKey("");
     setValue("");
   };
-  const placeholder = file === "log.properties" ? "io.trino.plugin.postgresql" : file === "node.properties" ? "node.internal-address-source" : "query.max-execution-time";
+  const placeholder =
+    file === "log.properties"
+      ? "io.trino.plugin.postgresql"
+      : file === "node.properties"
+        ? "node.internal-address-source"
+        : file === LISTENER_FILE
+          ? "http-event-listener.connect-ingest-uri"
+          : "query.max-execution-time";
+  const Outer = embedded ? "div" : "section";
   return (
-    <section className="card" aria-label={file}>
-      <div className="chd">
-        <span className="ct mono">{file}</span>
-        <span className="sm muted">{entries.length === 0 ? "nothing set" : `${entries.length} set`}</span>
-      </div>
+    <Outer className={embedded ? undefined : "card"} aria-label={embedded ? undefined : file}>
+      {!embedded && (
+        <div className="chd">
+          <span className="ct mono">{file}</span>
+          <span className="sm muted">{entries.length === 0 ? "nothing set" : `${entries.length} set`}</span>
+        </div>
+      )}
       {entries.length > 0 && (
         <div className="tbl-wrap">
           <table className="nw">
@@ -161,7 +298,7 @@ function PropertiesCard({
                 <tr key={k}>
                   <td className="mono">{k}</td>
                   <td>
-                    <Value value={v} secret={secret(k)} />
+                    <Value value={v} secret={isSecret(k)} />
                   </td>
                   <td className="right">
                     <button
@@ -196,7 +333,7 @@ function PropertiesCard({
           <input
             className="inp mono"
             aria-label={`${file} value`}
-            type={secret(key) ? "password" : "text"}
+            type={isSecret(key) ? "password" : "text"}
             value={value}
             onChange={(e) => setValue(e.target.value)}
           />
@@ -204,8 +341,18 @@ function PropertiesCard({
         <button type="submit" className="btn" disabled={!key.trim()}>
           {key.trim() in properties ? "Replace" : "Add"}
         </button>
+        {suggestions.length > 0 && (
+          <div className="sm" style={{ flexBasis: "100%", display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <span className="muted">Known properties:</span>
+            {suggestions.map((k) => (
+              <button key={k} type="button" className="btn btn--sm mono" onClick={() => setKey(k)}>
+                {k}
+              </button>
+            ))}
+          </div>
+        )}
       </form>
-    </section>
+    </Outer>
   );
 }
 

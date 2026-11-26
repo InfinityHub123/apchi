@@ -52,15 +52,13 @@ const LOOKS_SECRET = /password|secret|token|credential|private|passphrase|api[-_
 export function secretTest(
   section: SectionName,
   body: Json,
-  schemas: { connectors?: S["PropertyRules"][]; listeners?: S["PropertyRules"][] },
+  schemas: { connectors?: S["PropertyRules"][] },
 ): (path: string) => boolean {
   const record = (body ?? {}) as Record<string, unknown>;
   if (section === "client_certificates") return (p) => p === "private_key";
-  if (section === "catalogs" || section === "event_listeners") {
-    const kind = String(section === "catalogs" ? record.connector : record.type);
-    const rules = (section === "catalogs" ? schemas.connectors : schemas.listeners)?.find(
-      (r) => r.name === kind,
-    );
+  if (section === "catalogs") {
+    const kind = String(record.connector);
+    const rules = schemas.connectors?.find((r) => r.name === kind);
     return (p) => {
       if (!p.startsWith("properties.")) return false;
       const name = p.slice("properties.".length);

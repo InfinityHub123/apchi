@@ -56,17 +56,17 @@ export const REVIEW_STAGED = {
     { section: "permissions", changes: [] },
     {
       section: "resource_groups",
-      changes: [{ resource: "global.etl.batch", change: "changed", before: { hardCpuLimit: null }, after: { hardCpuLimit: "4h" } }],
-    },
-    {
-      section: "event_listeners",
-      changes: [{ resource: "events_kafka", change: "changed", before: { type: "kafka", properties: { a: "1" } }, after: { type: "kafka", properties: { a: "2" } } }],
+      changes: [
+        { resource: "global.etl.batch", change: "changed", before: { hardCpuLimit: null }, after: { hardCpuLimit: "4h" } },
+        // No audit event names it, so its author is not known.
+        { resource: "global.adhoc", change: "added", before: null, after: { hardConcurrencyLimit: 20 } },
+      ],
     },
   ],
   cost: {
     restarts_coordinator: true,
     queries_at_risk: 14,
-    rollout_sections: ["certificate_mapping", "resource_groups", "event_listeners"],
+    rollout_sections: ["certificate_mapping", "resource_groups"],
     warning: "Applying this will terminate running queries.",
   },
   size_bytes: 421_888,
@@ -186,6 +186,7 @@ export const CATALOGS = [
   { name: "lake_iceberg", connector: "iceberg", supported: true, certificate: null, properties: { "iceberg.catalog.type": "rest", "iceberg.rest-catalog.uri": "https://rest" } },
 ];
 export const LISTENER_TYPES = [
+  rules("http", { required: ["http-event-listener.connect-ingest-uri"], optional: ["http-event-listener.log-completed"], secrets: [] }),
   rules("kafka", { required: ["kafka-event-listener.broker-endpoints"], optional: ["kafka-event-listener.client-id"], secrets: [] }),
 ];
 
@@ -208,10 +209,6 @@ export const SELECTORS = [
   { group: "global.etl", user: "^svc_.*" },
 ];
 
-export const LISTENERS = [
-  { name: "events_kafka", type: "kafka", supported: true, properties: { "kafka-event-listener.broker-endpoints": "broker-1:9092" } },
-  { name: "audit_sink", type: "http", supported: false, properties: { "http-event-listener.connect-ingest-uri": "https://audit" } },
-];
 
 const NO_PROPERTIES = { "config.properties": {}, "node.properties": {}, "log.properties": {} };
 
@@ -219,6 +216,7 @@ const NO_PROPERTIES = { "config.properties": {}, "node.properties": {}, "log.pro
 export const SERVER_CONFIGURATION = {
   coordinator: {
     ...NO_PROPERTIES,
+    "event-listener.properties": {},
     "config.properties": {
       "query.max-execution-time": "2h",
       "internal-communication.shared-secret": "s3cret-shared",
@@ -249,7 +247,6 @@ export const DRIFT = {
     { section: "certificate_mapping", status: "diverged", restarts_coordinator: true },
     { section: "permissions", status: "in_sync", restarts_coordinator: false },
     { section: "resource_groups", status: "unknown", restarts_coordinator: true },
-    { section: "event_listeners", status: "in_sync", restarts_coordinator: true },
   ],
 };
 
@@ -290,7 +287,7 @@ export const DEFAULTS: Stubs = {
   "GET /api/v1/certificates": CERTIFICATES,
   "GET /api/v1/validations": { items: VALIDATIONS, next: null },
   "GET /api/v1/catalogs/connectors": CONNECTORS,
-  "GET /api/v1/event-listeners/types": LISTENER_TYPES,
+  "GET /api/v1/admin/server-configuration/event-listener-types": LISTENER_TYPES,
   "GET /api/v1/cluster/drift": DRIFT,
   "GET /api/v1/catalogs": CATALOGS,
   "GET /api/v1/permissions": GRANTS,
@@ -300,8 +297,6 @@ export const DEFAULTS: Stubs = {
   "GET /api/v1/resource-groups": GROUPS,
   "GET /api/v1/resource-groups/selectors": { selectors: SELECTORS },
   "GET /api/v1/resource-groups/settings": { cpu_quota_period: null },
-  "GET /api/v1/event-listeners": LISTENERS,
-  "GET /api/v1/event-listeners/*": (_route: Route, url: URL) => LISTENERS.find((l) => url.pathname.endsWith(`/${l.name}`)) ?? new Reply(404, { message: "no" }),
   "GET /api/v1/certificate-mapping": new Reply(404, { code: "not_found", message: "No pattern.", request_id: "r" }),
   "GET /api/v1/admin/certificate-mapping/preserved": { patterns: [] },
   "GET /api/v1/admin/server-configuration": SERVER_CONFIGURATION,

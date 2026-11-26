@@ -2,7 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api, unwrap } from "../api/client";
 import { useCluster } from "../api/queries";
-import { FILES, filled, useAdminApply, useEnforcement, useRawFiles, useServerConfiguration } from "../admin/requests";
+import { filesOf, filled, useAdminApply, useEnforcement, useRawFiles, useServerConfiguration } from "../admin/requests";
 import { useQuery } from "@tanstack/react-query";
 import { Pill } from "../ui/Pill";
 import { ErrorNote, PageHead } from "../ui/States";
@@ -16,7 +16,7 @@ export function AdminValuesScreen() {
   const server = useServerConfiguration();
   const set = (["coordinator", "worker"] as const).map((role) => ({
     role,
-    count: FILES.reduce((n, f) => n + Object.keys(filled(server.data)[role][f]).length, 0),
+    count: filesOf(role).reduce((n, f) => n + Object.keys(filled(server.data)[role][f] ?? {}).length, 0),
   }));
   const preserved = useQuery({ queryKey: ["admin", "preserved-mappings"], queryFn: () => api.GET("/api/v1/admin/certificate-mapping/preserved").then(unwrap) });
   const apply = useAdminApply();

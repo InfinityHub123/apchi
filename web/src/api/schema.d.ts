@@ -268,6 +268,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/server-configuration/event-listener-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What each curated Event Listener accepts
+         * @description The rules a curated listener's properties are checked against when written, for the
+         *     same reason as `GET /catalogs/connectors`: a form that carries its own copy of them drifts.
+         *
+         *     The listener's own properties, without `event-listener.name`, which names the type. An
+         *     uncurated type is still accepted, and judged by Trino on the validation probe (§13.6).
+         */
+        get: operations["list_event_listener_types_api_v1_admin_server_configuration_event_listener_types_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/server-configuration/files": {
         parameters: {
             query?: never;
@@ -1026,94 +1050,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/event-listeners": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List staged Event Listeners */
-        get: operations["list_event_listeners_api_v1_event_listeners_get"];
-        put?: never;
-        /** Stage a new Event Listener */
-        post: operations["create_event_listener_api_v1_event_listeners_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/event-listeners/revert": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Revert one Section to an earlier Snapshot
-         * @description Stages into the Candidate; it does not apply. An ordinary POST /applies follows,
-         *     like any other edit -- and because this Section is rollout-required, that Apply
-         *     restarts the coordinator. The effect says so, and what it costs.
-         *     To take **every** Section back to one Snapshot instead of just this one, use
-         *     `POST /candidate/rollback` -- a Full Rollback.
-         */
-        post: operations["revert_api_v1_event_listeners_revert_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/event-listeners/types": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * What each curated listener accepts
-         * @description The same rules the write endpoints enforce, for the same reason as
-         *     `GET /catalogs/connectors`: a form that carries its own copy of them drifts.
-         *
-         *     Two curated types against seven connectors, and the asymmetry is real -- a Cluster has
-         *     one event listener configuration and many Catalogs. An uncurated type is still accepted
-         *     and still passes through unvalidated.
-         *
-         *     Declared before `/{name}` so the path does not resolve to a listener called "types".
-         */
-        get: operations["list_types_api_v1_event_listeners_types_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/event-listeners/{name}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Fetch a staged Event Listener */
-        get: operations["get_event_listener_api_v1_event_listeners__name__get"];
-        put?: never;
-        post?: never;
-        /** Remove a staged Event Listener */
-        delete: operations["delete_event_listener_api_v1_event_listeners__name__delete"];
-        options?: never;
-        head?: never;
-        /** Edit a staged Event Listener */
-        patch: operations["update_event_listener_api_v1_event_listeners__name__patch"];
-        trace?: never;
-    };
     "/api/v1/health": {
         parameters: {
             query?: never;
@@ -1634,7 +1570,7 @@ export interface components {
              * Rollout Sections
              * @description Which Sections the Rollout is for, in Section order. §21 requires an Operator to see which changes force a restart and which do not, and a client cannot work it out from `Section.requires_rollout`: a Section also forces a Rollout when what Apchi would render is not what the Cluster has mounted. A name here with no entry in the diff is a Rollout that no staged change accounts for.
              */
-            rollout_sections?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners")[];
+            rollout_sections?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups")[];
             /**
              * Warning
              * @description What to show an Operator before they Apply.
@@ -1750,7 +1686,7 @@ export interface components {
              */
             at: string;
             /** Category */
-            category: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners") | ("admin" | "pipeline" | "audit");
+            category: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups") | "event_listeners" | ("admin" | "pipeline" | "audit");
             /**
              * Detail
              * @description Why it was refused, or how it failed. Never a configuration value.
@@ -2133,6 +2069,13 @@ export interface components {
                 [key: string]: string;
             };
             /**
+             * Event-Listener.Properties
+             * @description The Event Listener: where Trino sends query events. Empty is none. `event-listener.name` names the plugin, and the rest are its own properties: {"event-listener.name": "http", "http-event-listener.connect-ingest-uri": "http://audit:8080/events"}. Loaded once per process, so a change restarts the coordinator.
+             */
+            "event-listener.properties"?: {
+                [key: string]: string;
+            };
+            /**
              * Log.Properties
              * @description Log levels, by logger name: {"io.trino.plugin.postgresql": "DEBUG"}.
              */
@@ -2186,61 +2129,6 @@ export interface components {
          * @enum {string}
          */
         EngagedBy: "admin" | "auto_rollback_failure";
-        /**
-         * EventListener
-         * @description An Event Listener as it is stored and returned.
-         */
-        EventListener: {
-            /** Name */
-            name: string;
-            /** Properties */
-            properties?: {
-                [key: string]: string;
-            };
-            /**
-             * Supported
-             * @description False when the listener type has no curated schema. Its properties passed through unvalidated and are checked only by Trino at Apply.
-             */
-            supported: boolean;
-            /** Type */
-            type: string;
-        };
-        /**
-         * EventListenerUpdate
-         * @description A partial update, by named fields (§19).
-         *
-         *     Omitted means unchanged; present means replaces. Neither field can be cleared, so null is
-         *     refused rather than read as "leave it alone". The name is immutable -- renaming is a
-         *     remove and an add.
-         */
-        EventListenerUpdate: {
-            /**
-             * Properties
-             * @description **Replaces** the property map rather than merging into it. Omit to keep the current ones; they cannot be cleared.
-             */
-            properties?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Type
-             * @description Omit to keep the current type. It cannot be cleared.
-             */
-            type?: string | null;
-        };
-        /**
-         * EventListenerWrite
-         * @description What an Operator sends.
-         */
-        EventListenerWrite: {
-            /** Name */
-            name: string;
-            /** Properties */
-            properties?: {
-                [key: string]: unknown;
-            };
-            /** Type */
-            type: string;
-        };
         /**
          * Grant
          * @description A grant as it is stored and returned, with the key that addresses it.
@@ -2860,7 +2748,7 @@ export interface components {
              * Section
              * @enum {string}
              */
-            section: "catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners";
+            section: "catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups";
         };
         /**
          * RevertEffect
@@ -2893,7 +2781,7 @@ export interface components {
              * Sections
              * @description The Sections replaced in the Candidate.
              */
-            sections: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners")[];
+            sections: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups")[];
             /**
              * Staged
              * @description Whether the Candidate was actually changed. False for a `dry_run`, where everything else in this response is what *would* have happened. The only field that distinguishes a preview from the act, so a client that ignores it cannot tell them apart.
@@ -2965,7 +2853,7 @@ export interface components {
              * Section
              * @enum {string}
              */
-            section: "catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners";
+            section: "catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups";
         };
         /**
          * SectionDrift
@@ -2981,7 +2869,7 @@ export interface components {
              * Section
              * @enum {string}
              */
-            section: "catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners";
+            section: "catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups";
             /**
              * Status
              * @description `in_sync` when what Apchi would render is byte-identical to what the Cluster holds. `diverged` when it is not. `unknown` when the Cluster could not be read. `not_comparable` when this Section does not reach Trino as a file at all -- Catalogs are delivered as statements, so no file diff can speak for them, and claiming they are in sync would be an answer Apchi has not earned.
@@ -3204,7 +3092,7 @@ export interface components {
             /** Resource */
             resource?: string | null;
             /** Section */
-            section?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners") | null;
+            section?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups") | "event_listeners" | null;
         };
         /** ValidationRecord */
         ValidationRecord: {
@@ -3889,6 +3777,44 @@ export interface operations {
             };
         };
     };
+    list_event_listener_types_api_v1_admin_server_configuration_event_listener_types_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PropertyRules"][];
+                };
+            };
+            /** @description No usable credential. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated, but not an Admin. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
     get_rendered_files_api_v1_admin_server_configuration_files_get: {
         parameters: {
             query?: never;
@@ -4087,7 +4013,7 @@ export interface operations {
                 limit?: number;
                 /** @description A `next` from a previous page. Omit for the newest page. */
                 before?: string | null;
-                category?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners") | ("admin" | "pipeline" | "audit") | null;
+                category?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups") | "event_listeners" | ("admin" | "pipeline" | "audit") | null;
                 actor?: string | null;
                 /** @description `refused` is the one people come here for: a frozen Candidate, Maintenance Mode, a rejected payload. It is Apchi working correctly, which is why it is recorded and why it is worth being able to ask for on its own. */
                 outcome?: ("succeeded" | "refused" | "failed") | null;
@@ -4137,7 +4063,7 @@ export interface operations {
     export_api_v1_audit_export_get: {
         parameters: {
             query?: {
-                category?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups" | "event_listeners") | ("admin" | "pipeline" | "audit") | null;
+                category?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups") | "event_listeners" | ("admin" | "pipeline" | "audit") | null;
                 actor?: string | null;
                 /** @description `refused` is the one people come here for: a frozen Candidate, Maintenance Mode, a rejected payload. It is Apchi working correctly, which is why it is recorded and why it is worth being able to ask for on its own. */
                 outcome?: ("succeeded" | "refused" | "failed") | null;
@@ -5286,270 +5212,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Probe"];
-                };
-            };
-            /** @description No usable credential. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiError"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_event_listeners_api_v1_event_listeners_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EventListener"][];
-                };
-            };
-            /** @description No usable credential. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiError"];
-                };
-            };
-        };
-    };
-    create_event_listener_api_v1_event_listeners_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EventListenerWrite"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EventListener"];
-                };
-            };
-            /** @description No usable credential. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiError"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    revert_api_v1_event_listeners_revert_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RevertRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RevertEffect"];
-                };
-            };
-            /** @description No usable credential. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiError"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_types_api_v1_event_listeners_types_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PropertyRules"][];
-                };
-            };
-            /** @description No usable credential. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiError"];
-                };
-            };
-        };
-    };
-    get_event_listener_api_v1_event_listeners__name__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EventListener"];
-                };
-            };
-            /** @description No usable credential. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiError"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_event_listener_api_v1_event_listeners__name__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No usable credential. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiError"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_event_listener_api_v1_event_listeners__name__patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EventListenerUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EventListener"];
                 };
             };
             /** @description No usable credential. */
