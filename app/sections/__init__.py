@@ -11,7 +11,7 @@ which is why it cannot live here: a Section that had to import the registry to l
 own name would be a cycle.
 """
 
-from typing import Literal
+from typing import Literal, get_args
 
 SectionName = Literal[
     "catalogs",
@@ -25,7 +25,11 @@ SectionName = Literal[
 #: still holds it in MongoDB, and is read without it rather than refused: the Event Listener
 #: became part of the Admin's Server Configuration, and an existing one is carried over into it
 #: once, at startup (`app.pipeline.retired`).
-RETIRED_SECTIONS: tuple[str, ...] = ("event_listeners",)
+#:
+#: A type as well as a tuple, because records outlive the Section they name: an audit event or a
+#: validation failure stored while it existed must still read.
+RetiredSectionName = Literal["event_listeners"]
+RETIRED_SECTIONS: tuple[str, ...] = get_args(RetiredSectionName)
 
 
 def without_retired(sections: object) -> object:
