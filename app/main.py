@@ -23,7 +23,6 @@ from app.api.certificate_mapping import router as certificate_mapping_router
 from app.api.client_certificates import router as certificates_router
 from app.api.deps import AdminOnly, Authenticated
 from app.api.docs import install_docs
-from app.api.event_listeners import router as event_listeners_router
 from app.api.health import router as health_router
 from app.api.permissions import router as permissions_router
 from app.api.resource_groups import router as resource_groups_router
@@ -44,6 +43,7 @@ from app.pipeline.applies import ApplyEngine, ApplyRunner, ApplyStore, recover_i
 from app.pipeline.candidate import CandidateStore
 from app.pipeline.engine import AdminEngine, Engine
 from app.pipeline.maintenance import MaintenanceStore
+from app.pipeline.retired import carry_over_event_listener
 from app.pipeline.snapshots import SnapshotStore
 from app.pipeline.validation import VALIDATION_SELECTOR
 from app.pipeline.validations import ValidationRunner, ValidationStore
@@ -221,6 +221,9 @@ async def _write_missing_secrets(app: FastAPI, settings: Settings) -> None:
     """
     while True:
         try:
+            # First, so a Secret written below already reflects it. Idempotent: once carried,
+            # the Admin values hold a listener and this does nothing.
+            await carry_over_event_listener(app.state.snapshot_store, app.state.admin_store)
             await secrets_bootstrap.write_missing(
                 app.state.kubernetes, settings, app.state.snapshot_store, app.state.admin_store
             )
@@ -279,7 +282,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         certificates_router,
         permissions_router,
         resource_groups_router,
-        event_listeners_router,
         candidate_router,
         applies_router,
         snapshots_router,

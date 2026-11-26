@@ -19,8 +19,21 @@ SectionName = Literal[
     "certificate_mapping",
     "permissions",
     "resource_groups",
-    "event_listeners",
 ]
+
+#: Sections that existed once and do not now. A Snapshot or Candidate written while one did
+#: still holds it in MongoDB, and is read without it rather than refused: the Event Listener
+#: became part of the Admin's Server Configuration, and an existing one is carried over into it
+#: once, at startup (`app.pipeline.retired`).
+RETIRED_SECTIONS: tuple[str, ...] = ("event_listeners",)
+
+
+def without_retired(sections: object) -> object:
+    """A stored `sections` map with the retired Sections dropped, for a `before` validator."""
+    if isinstance(sections, dict):
+        return {name: value for name, value in sections.items() if name not in RETIRED_SECTIONS}
+    return sections
+
 
 # The registry lives in app.sections.registry, which imports the Section
 # implementations -- so it cannot live here without a cycle. SECTIONS is derived there

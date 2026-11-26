@@ -45,9 +45,12 @@ from app.sections.catalogs import SECTION as CATALOGS
 from app.sections.registry import REGISTERED
 from app.sections.server_configuration import (
     CONFIG_PROPERTIES,
+    LISTENER_FILES_KEY,
+    LISTENER_PATH,
     LOG_PROPERTIES,
     NODE_PROPERTIES,
     probe_properties,
+    render_listener,
 )
 
 logger = logging.getLogger(__name__)
@@ -564,6 +567,14 @@ async def validate_candidate(
     worker_only = _clashing(coordinator_files, worker_files)
     properties = {**admin_files["config.properties"], **_PROBE_CONFIG}
     files.update(_probe_node_and_log(admin_files))
+    # The Admin's Event Listener, where the Cluster reads it and pointed at the same way: a
+    # listener Trino will not load is a coordinator that will not start (measured on 483: its
+    # numbered reasons name the property), so the probe is where that is found out. Not blamed
+    # on a Section's resource -- it is no Section's -- and its reasons say which property.
+    listener = configuration.coordinator.event_listener_properties
+    if listener:
+        files[LISTENER_PATH] = render_listener(listener)
+        properties[LISTENER_FILES_KEY] = LISTENER_PATH
     # Which resource to blame if the probe refuses to start: Trino names the file, and the
     # file is the Section's, so the path is what ties a startup failure back to a resource.
     blame: dict[str, str] = {}

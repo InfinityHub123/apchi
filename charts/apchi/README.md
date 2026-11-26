@@ -105,10 +105,8 @@ does not create.
 | `mongodb.deploy`, `mongodb.image` | `false`, `mongo:7` | A MongoDB beside Apchi, for trying it out. Loses Snapshots on restart |
 | `secrets.*` | see above | Must be what Trino mounts |
 | `secrets.workerServerConfiguration` | `trino-server-config-worker` | The workers' own files, including the access-control rule that lets Apchi's identity drain a worker. Written by Apchi like the coordinator's |
-| `secrets.serverConfiguration` | `trino-server-config-coordinator` | The coordinator's own files -- `config.properties`, `jvm.config`, `node.properties`, `log.properties`, `catalog-store.properties`, `access-control.properties` -- which Apchi renders and this chart only mounts (ADR-0010). Not created by the chart: Apchi writes it on its first start, and the coordinator waits in `ContainerCreating` until then |
+| `secrets.serverConfiguration` | `trino-server-config-coordinator` | The coordinator's own files -- `config.properties`, `jvm.config`, `node.properties`, `log.properties`, `catalog-store.properties`, `access-control.properties`, and the Event Listener when one is configured -- which Apchi renders and this chart only mounts (ADR-0010). Not created by the chart: Apchi writes it on its first start, and the coordinator waits in `ContainerCreating` until then |
 | `volumes.*` | `apchi-*` | The volumes Apchi adds to the coordinator's pod template. Everything else there is the Admin's. The user-mapping Secret is not here: the Admin mounts it as a directory and Apchi only fills it |
-| `deployment.providesResourceGroupsProperties` | `false` | Set on a coordinator that mounts the whole of `/etc/trino`, where Apchi cannot mount `resource-groups.properties` itself. The deployment then provides it, pointing `resource-groups.config-file` at `/etc/trino/resource-groups/` |
-| `deployment.setsEventListenerConfigFiles` | `false` | The same, for `event-listener.config-files` naming a file in `/etc/trino/event-listener/`. Costs the ability to empty that Section, because Trino refuses to start without the file the property names |
 | `validation.resources` | `{}` | Requests and limits for the Validation pod's container. Apchi creates that pod itself, so this is the only place a cluster that requires them on every container can set them. Trino needs about `2Gi` to start. Empty sets none |
 | `validation.catalogConnectivityBlocksApply` | `false` | Whether a Catalog the validation probe cannot reach **fails** the Apply rather than warning on it. Off by default because the probe's network is not the coordinator's: a firewall between the probe and a database would otherwise block every Apply for a configuration that works. Turn it on where the two are known to reach the same places (§6) |
 | `timeouts.rolloutSeconds` | `600` | A coordinator that never comes back fails the Apply rather than hanging it |
@@ -151,9 +149,9 @@ cluster-scoped rule.
 
 ## The Secrets Apchi writes, and why the chart creates none of them
 
-Apchi writes into nine Secrets: the catalog seed, the access-control rules, the user-mapping
-file, the client certificates, Resource Groups, the Event Listener, the raw files, and Trino's
-own files for each role. **This chart creates none of them.** Apchi writes each one that is
+Apchi writes into eight Secrets: the catalog seed, the access-control rules, the user-mapping
+file, the client certificates, Resource Groups, the raw files, and Trino's own files for each
+role -- the coordinator's including its Event Listener. **This chart creates none of them.** Apchi writes each one that is
 missing when it starts -- rendered from the latest Snapshot and the Admin values in force, which
 on a new install is the empty configuration -- and never rewrites one that exists. Trino's pods
 wait in `ContainerCreating` until they appear, which Kubernetes retries by itself.
@@ -191,18 +189,23 @@ chart cannot drift into something Apchi refuses. CI runs it. It proves:
    once at startup and never again.
 6. **`/etc/trino` is mounted file by file.** Kubernetes will not place a single file inside a
    read-only directory volume -- runc fails the container with `not a directory` and Trino
-   never starts -- and Apchi mounts `resource-groups.properties` and
-   `event-listener.properties` there itself. The official `trinodb/charts` chart mounts the
+   never starts -- and Apchi mounts `resource-groups.properties` there itself. The official `trinodb/charts` chart mounts the
    whole directory, which is why Apchi does not support it (ADR-0008).
 
 Both roles run with a writable `emptyDir` at `/data/trino`, which `node.properties` names as
 `node.data-dir`: the launcher writes its pid file and an `etc` symlink there, and the image's
 own copy belongs to uid 1000, so without it Trino cannot start as any other uid.
 
-**Resource groups and event listeners are not mounted by the chart.** For both, the
-*absence* of the mount is how "none configured" is expressed, since Trino refuses to start
-when a file it was told to read is missing. Apchi adds and removes those two volumes itself,
-and they are the only part of the Trino pod template it writes.
+**Resource groups are not mounted by the chart.** The *absence* of the mount is how "none
+configured" is expressed, since Trino refuses to start when a file it was told to read is
+missing, so Apchi adds and removes that volume itself -- with the Admin's Raw Files, the only
+part of the Trino pod template it writes besides the restart annotation.
+
+**The Event Listener is.** The coordinator mounts its Server Configuration Secret a second
+time, whole, at `/etc/trino/apchi`. When the Admin configures a listener, Apchi writes
+`event-listener.properties` into that Secret and points `event-listener.config-files` in
+`config.properties` at it; without one, neither exists. A fixed mount, so Argo CD sees nothing
+change on the Deployment for it (#269).
 
 **`trino.https` makes the coordinator serve HTTPS**, on `trino.https.port` beside plain HTTP,
 with the certificate in `trino.https.existingSecret`. A TLS Secret holds the certificate and

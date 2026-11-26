@@ -167,6 +167,8 @@ def healthy_pod_spec() -> dict[str, Any]:
                         }
                         for file in SERVER_CONFIG_FILES
                     ),
+                    # The same Secret whole, for the optional Event Listener (#269).
+                    {"name": "server-config", "mountPath": "/etc/trino/apchi", "readOnly": True},
                     {"name": "access-control", "mountPath": "/etc/trino/access-control"},
                     {"name": "apchi-user-mapping", "mountPath": MAPPING_DIR},
                     {"name": "catalog-store", "mountPath": "/data/trino/catalogs"},
@@ -635,3 +637,42 @@ async def applying_client(
         # left behind would collide with the next test's Apply.
         for name in await app.state.trino.catalogs() - baseline:
             await app.state.trino.drop_catalog(name)
+
+
+# --- a change Trino adopts only by restarting --------------------------------------------------
+
+#: The Operator Section whose change restarts the coordinator, for the tests about the Rollout
+#: rather than about the Section: Trino reads resource-groups.properties once, at startup. It
+#: was the Event Listener until that became the Admin's (#269).
+RESTART_SECTION = "resource_groups"
+RESTART_SECRET = "trino-resource-groups"
+RESTART_VOLUME = "apchi-resource-groups"
+RESTART_GROUP = "global"
+
+
+async def stage_a_restart(client: Any, limit: int = 10) -> None:
+    """Stage one resource group and the selector that routes every query to it."""
+    created = await client.post(
+        "/api/v1/resource-groups", json={"path": RESTART_GROUP, "hard_concurrency_limit": limit}
+    )
+    assert created.status_code == 201, created.text
+    routed = await client.put(
+        "/api/v1/resource-groups/selectors", json={"selectors": [{"group": RESTART_GROUP}]}
+    )
+    assert routed.status_code == 200, routed.text
+
+
+async def change_the_restart(client: Any, limit: int = 20) -> None:
+    """Edit the staged group in place, which changes the rules file Trino read at startup."""
+    edited = await client.put(
+        f"/api/v1/resource-groups/{RESTART_GROUP}", json={"hard_concurrency_limit": limit}
+    )
+    assert edited.status_code == 200, edited.text
+
+
+async def unstage_the_restart(client: Any) -> None:
+    """Empty the Section again: no selectors, no group, and so no files to mount."""
+    cleared = await client.put("/api/v1/resource-groups/selectors", json={"selectors": []})
+    assert cleared.status_code == 200, cleared.text
+    removed = await client.delete(f"/api/v1/resource-groups/{RESTART_GROUP}")
+    assert removed.status_code == 204, removed.text

@@ -41,10 +41,10 @@ REPO = "git://gitd.argocd.svc.cluster.local/apchi.git"
 
 CATALOG = {"name": "argotest", "connector": "memory", "properties": {}}
 GRANT = {"identity": "analyst", "catalog": "argotest", "privileges": ["SELECT"]}
+#: The Admin's, in the coordinator's Server Configuration (#269): no mount of its own.
 LISTENER = {
-    "name": "audit",
-    "type": "http",
-    "properties": {"http-event-listener.connect-ingest-uri": "http://localhost:9/events"},
+    "event-listener.name": "http",
+    "http-event-listener.connect-ingest-uri": "http://localhost:9/events",
 }
 RAW_FILE = "/etc/trino/apchi-raw-test.properties"
 
@@ -257,8 +257,8 @@ class _Apchi:
         self.http = httpx.Client(base_url="http://127.0.0.1:18000/api/v1", timeout=60)
         _await_answer(self.http)
 
-    def apply(self) -> dict[str, Any]:
-        started = self.http.post("/applies")
+    def apply(self, path: str = "/applies") -> dict[str, Any]:
+        started = self.http.post(path, json={})
         assert started.status_code == 202, started.text
         deadline = time.monotonic() + 900
         while time.monotonic() < deadline:
@@ -292,7 +292,7 @@ def _apchi_volumes() -> set[str]:
     return {
         n
         for n in names
-        if n in ("apchi-event-listener", "apchi-resource-groups", "apchi-admin-raw-files")
+        if n in ("apchi-resource-groups", "apchi-admin-raw-files", "apchi-event-listener")
     }
 
 
@@ -302,7 +302,6 @@ def test_an_argo_sync_keeps_everything_apchi_applied(argo: None) -> None:
         for path, body in (
             ("/catalogs", CATALOG),
             ("/permissions", GRANT),
-            ("/event-listeners", LISTENER),
             ("/resource-groups", {"path": "global", "hard_concurrency_limit": 10}),
         ):
             response = apchi.http.post(path, json=body)
@@ -315,6 +314,13 @@ def test_an_argo_sync_keeps_everything_apchi_applied(argo: None) -> None:
         assert raw.status_code == 200, raw.text
         record = apchi.apply()
         assert record["stage"] == "succeeded", record
+        listener = apchi.http.put(
+            "/admin/server-configuration",
+            json={"coordinator": {"event-listener.properties": LISTENER}},
+        )
+        assert listener.status_code == 200, listener.text
+        record = apchi.apply("/admin/applies")
+        assert record["stage"] == "succeeded", record
     finally:
         apchi.close()
 
@@ -324,19 +330,17 @@ def test_an_argo_sync_keeps_everything_apchi_applied(argo: None) -> None:
             "trino-catalog-seed",
             "trino-access-control",
             "trino-user-mapping",
-            "trino-event-listener",
+            "trino-server-config-coordinator",
             "trino-resource-groups",
             "trino-client-certificates",
         )
     }
     assert "argotest.properties" in applied["trino-catalog-seed"]
     assert "analyst" in applied["trino-access-control"]["rules.json"]
-    assert applied["trino-event-listener"], "the listener was never written"
-    assert _apchi_volumes() == {
-        "apchi-event-listener",
-        "apchi-resource-groups",
-        "apchi-admin-raw-files",
-    }
+    assert "event-listener.properties" in applied["trino-server-config-coordinator"], (
+        "the listener was never written"
+    )
+    assert _apchi_volumes() == {"apchi-resource-groups", "apchi-admin-raw-files"}
     syncs_before = len(_app()["status"].get("history", []))
 
     # An ordinary chart change: the kind of commit a platform team makes every week. It changes
@@ -361,11 +365,7 @@ def test_an_argo_sync_keeps_everything_apchi_applied(argo: None) -> None:
         assert _secret(name) == before, f"the sync changed {name}, which Apchi had written"
     _await("the chart to come back synced and healthy", _synced_and_healthy)
 
-    assert _apchi_volumes() == {
-        "apchi-event-listener",
-        "apchi-resource-groups",
-        "apchi-admin-raw-files",
-    }
+    assert _apchi_volumes() == {"apchi-resource-groups", "apchi-admin-raw-files"}
     annotations = json.loads(
         kubectl(
             "get",

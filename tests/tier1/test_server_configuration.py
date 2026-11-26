@@ -124,7 +124,9 @@ async def test_nothing_is_set_until_an_admin_sets_it(as_admin: AsyncClient) -> N
 
     assert response.status_code == 200, response.text
     empty = {"config.properties": {}, "node.properties": {}, "log.properties": {}}
-    assert response.json() == {"coordinator": empty, "worker": empty}
+    # The coordinator's Event Listener is one more file, and empty is no listener (#269).
+    coordinator = {**empty, "event-listener.properties": {}}
+    assert response.json() == {"coordinator": coordinator, "worker": empty}
 
 
 async def test_properties_are_stored_by_the_file_trino_reads_them_from(

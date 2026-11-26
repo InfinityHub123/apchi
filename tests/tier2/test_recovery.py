@@ -63,43 +63,34 @@ async def test_a_revert_drops_a_catalog_for_real_and_the_drop_survives_a_restart
     assert "beta" not in after_restart
 
 
-async def test_reverting_a_listener_restarts_the_coordinator_and_takes_effect(
+async def test_reverting_groups_restarts_the_coordinator_and_takes_effect(
     e2e_client: AsyncClient, forward: PortForward, real_kubernetes: RealKubernetes
 ) -> None:
     """A recovery action for a rollout-required Section is not a paper change: it restarts
     the Cluster, and the effect says so before an Operator asks for it."""
-    from app.sections.event_listeners.generator import FILE_KEY
-    from tests.tier2.conftest import EVENT_LISTENER_SECRET
+    from app.sections.resource_groups.generator import RULES_KEY
+    from tests.conftest import RESTART_SECTION, change_the_restart, stage_a_restart
+    from tests.tier2.conftest import RESOURCE_GROUPS_SECRET
 
-    listener = {
-        "name": "audit",
-        "type": "http",
-        "properties": {"http-event-listener.connect-ingest-uri": "http://first.invalid:8080/e"},
-    }
-    await e2e_client.post("/api/v1/event-listeners", json=listener)
+    await stage_a_restart(e2e_client, limit=10)
     await _apply(e2e_client)
 
-    await e2e_client.patch(
-        "/api/v1/event-listeners/audit",
-        json={
-            "properties": {"http-event-listener.connect-ingest-uri": "http://second.invalid:9/e"}
-        },
-    )
+    await change_the_restart(e2e_client, limit=20)
     await _apply(e2e_client)
 
-    effect = (await e2e_client.post("/api/v1/event-listeners/revert", json={"snapshot": 1})).json()
+    effect = (await e2e_client.post("/api/v1/resource-groups/revert", json={"snapshot": 1})).json()
     assert effect["cost"]["restarts_coordinator"] is True
 
     record = await _apply(e2e_client)
 
     assert record["snapshot"] == 3
     assert record["rolled_out"] is True
-    delivered = await real_kubernetes.read_secret(EVENT_LISTENER_SECRET)
-    assert "http://first.invalid:8080/e" in delivered[FILE_KEY]
+    delivered = await real_kubernetes.read_secret(RESOURCE_GROUPS_SECRET)
+    assert '"hardConcurrencyLimit": 10' in delivered[RULES_KEY]
     original = (await e2e_client.get("/api/v1/snapshots/1")).json()
     assert (await e2e_client.get("/api/v1/snapshots/3")).json()["sections"][
-        "event_listeners"
-    ] == original["sections"]["event_listeners"]
+        RESTART_SECTION
+    ] == original["sections"][RESTART_SECTION]
 
 
 async def test_a_full_rollback_restores_a_snapshot_without_modifying_it(

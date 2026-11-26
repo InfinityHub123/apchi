@@ -54,15 +54,15 @@ async def _apply(client: AsyncClient, timeout: float = 180.0) -> dict:
     raise AssertionError("Apply never settled")
 
 
-def test_it_owns_all_nine() -> None:
-    """The nine the chart used to create -- six of them, as hooks -- plus Trino's own files and
-    the raw files. A tenth would need its own reason to be the chart's."""
+def test_it_owns_all_eight() -> None:
+    """The five the chart used to create as hooks, Trino's own files for each role, and the raw
+    files. The Event Listener's is no longer one: the listener is in the coordinator's Server
+    Configuration (#269). A ninth would need its own reason to be the chart's."""
     assert OWNED == [
         "trino-access-control",
         "trino-admin-raw-files",
         "trino-catalog-seed",
         "trino-client-certificates",
-        "trino-event-listener",
         "trino-resource-groups",
         "trino-server-config-coordinator",
         "trino-server-config-worker",

@@ -12,7 +12,7 @@ later merges it with today's Admin values, a combination never verified together
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pymongo.asynchronous.database import AsyncDatabase
 
 from app.api.errors import Conflict
@@ -24,7 +24,7 @@ from app.api.pages import (
     decode_cursor,
     encode_cursor,
 )
-from app.sections import SectionName
+from app.sections import SectionName, without_retired
 from app.sections.registry import SECTIONS
 
 
@@ -32,6 +32,8 @@ class Snapshot(BaseModel):
     number: int = Field(description="Sequential within this Cluster.")
     sections: dict[SectionName, dict[str, Any]]
     created_at: datetime
+
+    _drop_retired = field_validator("sections", mode="before")(lambda value: without_retired(value))
     apply_id: str = Field(description="The Apply that produced this Snapshot.")
 
 
@@ -62,6 +64,17 @@ class SnapshotStore:
     async def latest(self) -> Snapshot | None:
         document = await self._collection.find_one(sort=[("number", -1)])
         return None if document is None else self._as_snapshot(document)
+
+    async def retired_section(self, name: str) -> dict[str, Any]:
+        """What the latest Snapshot holds of a Section that no longer exists.
+
+        Read from the stored document, because the model drops retired Sections on the way in
+        -- which is what lets every other reader ignore them.
+        """
+        document = await self._collection.find_one(sort=[("number", -1)])
+        if document is None:
+            return {}
+        return dict((document.get("sections") or {}).get(name) or {})
 
     async def get(self, number: int) -> Snapshot | None:
         document = await self._collection.find_one({"_id": number})

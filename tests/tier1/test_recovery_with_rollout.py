@@ -14,15 +14,12 @@ from httpx import AsyncClient
 from app.pipeline.applies import TERMINAL
 from app.pipeline.impact import RESTART_WARNING
 from app.sections.registry import SECTIONS
+from tests.conftest import RESTART_GROUP, RESTART_SECTION, change_the_restart, stage_a_restart
 
 KEPT = {"name": "kept", "connector": "memory", "properties": {}}
 ADDED = {"name": "added", "connector": "memory", "properties": {}}
-FIRST = {
-    "name": "audit",
-    "type": "http",
-    "properties": {"http-event-listener.connect-ingest-uri": "http://first:8080/e"},
-}
-SECOND_URI = "http://second:9090/e"
+GROUP = f"/api/v1/resource-groups/{RESTART_GROUP}"
+REVERT = "/api/v1/resource-groups/revert"
 
 
 async def _apply(client: AsyncClient, timeout: float = 180.0) -> dict:
@@ -41,57 +38,46 @@ async def _apply(client: AsyncClient, timeout: float = 180.0) -> dict:
 
 @pytest.fixture
 async def two_snapshots(applying_client: AsyncClient) -> AsyncClient:
-    """Snapshot 1 holds `kept` and the first listener; Snapshot 2 adds `added` and
-    repoints the listener."""
+    """Snapshot 1 holds `kept` and a group limited to 10; Snapshot 2 adds `added` and
+    raises the limit to 20."""
     await applying_client.post("/api/v1/catalogs", json=KEPT)
-    await applying_client.post("/api/v1/event-listeners", json=FIRST)
+    await stage_a_restart(applying_client, limit=10)
     await _apply(applying_client)
 
     await applying_client.post("/api/v1/catalogs", json=ADDED)
-    await applying_client.patch(
-        "/api/v1/event-listeners/audit",
-        json={"properties": {"http-event-listener.connect-ingest-uri": SECOND_URI}},
-    )
+    await change_the_restart(applying_client, limit=20)
     await _apply(applying_client)
     return applying_client
 
 
-async def test_reverting_the_listeners_leaves_the_catalogs_alone(
+async def test_reverting_the_groups_leaves_the_catalogs_alone(
     two_snapshots: AsyncClient,
 ) -> None:
-    effect = (
-        await two_snapshots.post("/api/v1/event-listeners/revert", json={"snapshot": 1})
-    ).json()
+    effect = (await two_snapshots.post(REVERT, json={"snapshot": 1})).json()
 
-    assert effect["sections"] == ["event_listeners"]
-    listeners = (await two_snapshots.get("/api/v1/event-listeners")).json()
-    assert listeners[0]["properties"]["http-event-listener.connect-ingest-uri"] == (
-        "http://first:8080/e"
-    )
+    assert effect["sections"] == [RESTART_SECTION]
+    group = (await two_snapshots.get(GROUP)).json()
+    assert group["hard_concurrency_limit"] == 10
     staged = [c["name"] for c in (await two_snapshots.get("/api/v1/catalogs")).json()]
     assert staged == ["added", "kept"], "the Catalogs Section was not touched"
 
 
-async def test_a_listener_revert_says_it_will_restart_the_coordinator(
+async def test_a_group_revert_says_it_will_restart_the_coordinator(
     two_snapshots: AsyncClient,
 ) -> None:
-    effect = (
-        await two_snapshots.post("/api/v1/event-listeners/revert", json={"snapshot": 1})
-    ).json()
+    effect = (await two_snapshots.post(REVERT, json={"snapshot": 1})).json()
 
     assert effect["cost"]["restarts_coordinator"] is True
     assert RESTART_WARNING in effect["summary"]
     assert effect["cost"]["queries_at_risk"] == 0
 
 
-async def test_a_listener_revert_still_says_the_combination_has_never_run(
+async def test_a_group_revert_still_says_the_combination_has_never_run(
     two_snapshots: AsyncClient,
 ) -> None:
     """The restart warning must not crowd out the older one. Reverting one Section while
     the others stay put is novel configuration, not a return to a known-good state."""
-    effect = (
-        await two_snapshots.post("/api/v1/event-listeners/revert", json={"snapshot": 1})
-    ).json()
+    effect = (await two_snapshots.post(REVERT, json={"snapshot": 1})).json()
 
     assert "has never run" in effect["summary"]
     assert effect["other_sections_stay_at"] == 2
@@ -108,13 +94,11 @@ async def test_a_catalogs_revert_costs_no_restart(two_snapshots: AsyncClient) ->
     assert "drop 1 catalog: added" in effect["summary"]
 
 
-async def test_reverting_to_a_snapshot_with_the_same_listener_reports_no_restart(
+async def test_reverting_to_a_snapshot_with_the_same_groups_reports_no_restart(
     two_snapshots: AsyncClient,
 ) -> None:
     """Nothing would change, so nothing would restart."""
-    effect = (
-        await two_snapshots.post("/api/v1/event-listeners/revert", json={"snapshot": 2})
-    ).json()
+    effect = (await two_snapshots.post(REVERT, json={"snapshot": 2})).json()
 
     assert effect["cost"]["restarts_coordinator"] is False
     assert effect["cost"]["warning"] is None
@@ -132,44 +116,42 @@ async def test_a_full_rollback_restores_every_section_and_warns(
     assert effect["catalogs_dropped"] == ["added"]
     assert effect["cost"]["restarts_coordinator"] is True
     assert RESTART_WARNING in effect["summary"]
-    listeners = (await two_snapshots.get("/api/v1/event-listeners")).json()
-    assert listeners[0]["properties"]["http-event-listener.connect-ingest-uri"] == (
-        "http://first:8080/e"
-    )
+    group = (await two_snapshots.get(GROUP)).json()
+    assert group["hard_concurrency_limit"] == 10
 
 
-async def test_applying_a_listener_revert_produces_a_new_snapshot(
+async def test_applying_a_group_revert_produces_a_new_snapshot(
     two_snapshots: AsyncClient, fake_kubernetes
 ) -> None:
     """History is never rewritten: Snapshot 1's content comes back as Snapshot 3."""
     before = (await two_snapshots.get("/api/v1/snapshots/1")).json()
-    await two_snapshots.post("/api/v1/event-listeners/revert", json={"snapshot": 1})
+    await two_snapshots.post(REVERT, json={"snapshot": 1})
     fake_kubernetes.restarts.clear()
 
     record = await _apply(two_snapshots)
 
     assert record["snapshot"] == 3
-    assert record["rolled_out"] is True, "a listener change reaches Trino only by restarting"
+    assert record["rolled_out"] is True, "a group change reaches Trino only by restarting"
     assert len(fake_kubernetes.restarts) == 1
     after = (await two_snapshots.get("/api/v1/snapshots/1")).json()
     assert after == before
     restored = (await two_snapshots.get("/api/v1/snapshots/3")).json()
-    assert restored["sections"]["event_listeners"] == before["sections"]["event_listeners"]
+    assert restored["sections"][RESTART_SECTION] == before["sections"][RESTART_SECTION]
 
 
 async def test_a_revert_is_refused_under_maintenance_mode(two_snapshots: AsyncClient) -> None:
     await two_snapshots.put("/api/v1/admin/maintenance-mode", json={"engaged": True})
 
-    refused = await two_snapshots.post("/api/v1/event-listeners/revert", json={"snapshot": 1})
+    refused = await two_snapshots.post(REVERT, json={"snapshot": 1})
 
     assert refused.status_code == 409
     assert refused.json()["code"] == "maintenance_mode"
 
 
-async def test_reverting_listeners_to_an_unknown_snapshot_is_not_found(
+async def test_reverting_groups_to_an_unknown_snapshot_is_not_found(
     two_snapshots: AsyncClient,
 ) -> None:
-    missing = await two_snapshots.post("/api/v1/event-listeners/revert", json={"snapshot": 99})
+    missing = await two_snapshots.post(REVERT, json={"snapshot": 99})
 
     assert missing.status_code == 404
     assert missing.json()["code"] == "not_found"

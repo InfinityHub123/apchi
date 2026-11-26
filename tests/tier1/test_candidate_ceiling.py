@@ -184,7 +184,6 @@ async def test_an_oversized_import_is_refused_whole(tight: AsyncClient) -> None:
                 "certificate_mapping": {},
                 "permissions": {},
                 "resource_groups": {},
-                "event_listeners": {},
             },
             "admin": None,
         },

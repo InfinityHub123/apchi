@@ -22,6 +22,14 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ### Breaking
 
+- **The Event Listener is the Admin's** (#269, ADR-0011): `event-listener.properties` under
+  `coordinator` in `PUT /api/v1/admin/server-configuration`. `/api/v1/event-listeners` and its
+  revert are gone. An existing listener is carried into the Admin values when Apchi starts, and
+  keeps running from its old mount until the next Admin Apply moves it and removes that mount.
+  The chart mounts the coordinator's Server Configuration Secret whole at `/etc/trino/apchi`,
+  which the ninth precondition now requires. `event-listener.config-files` in
+  `config.properties` is refused: Apchi writes it. An import carrying a non-empty
+  `event_listeners` Section is refused, naming where the listener goes now.
 - **The chart creates none of the Secrets Apchi writes into** (#268). Apchi writes each one
   that is missing when it starts, from the latest Snapshot and the Admin values, and never
   rewrites one that exists. Created by the chart as Helm hooks, Argo CD recreated them with the

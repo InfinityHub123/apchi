@@ -165,7 +165,6 @@ curl -s $A/review | python3 -m json.tool
                   "after": {"connector": "tpch", "properties": {"tpch.splits-per-node": "4"}}}]},
     {"section": "client_certificates", "changes": []},
     {"section": "certificate_mapping", "changes": []},
-    {"section": "event_listeners", "changes": []},
     {"section": "permissions", "changes": []},
     {"section": "resource_groups", "changes": []}
   ],
@@ -299,8 +298,8 @@ curl -s $A/snapshots | python3 -m json.tool
     "number": 1,
     "sections": {
       "catalogs": {"sales": {"connector": "tpch", "properties": {"tpch.splits-per-node": "4"}}},
-      "client_certificates": {}, "certificate_mapping": {}, "event_listeners": {},
-      "permissions": {}, "resource_groups": {}
+      "client_certificates": {}, "certificate_mapping": {}, "permissions": {},
+      "resource_groups": {}
     },
     "created_at": "2026-10-04T07:42:48.495229Z",
     "apply_id": "apl_7526623bbb2f4f96"

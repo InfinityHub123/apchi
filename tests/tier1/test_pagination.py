@@ -217,7 +217,6 @@ async def test_tokens_are_newest_first(http: AsyncClient) -> None:
         "certificates",
         "permissions",
         "resource-groups",
-        "event-listeners",
     ],
 )
 async def test_section_collections_answer_whole(http: AsyncClient, section: str) -> None:

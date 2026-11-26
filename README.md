@@ -1,7 +1,7 @@
 # Apchi
 
 Apchi is a control plane for configuring one Trino cluster. The people running Trino
-configure catalogs, permissions, resource groups, event listeners and certificates through a
+configure catalogs, permissions, resource groups, certificates and Trino's own files through a
 REST API, and never hand-edit a Trino configuration file or restart a coordinator by hand.
 
 Every change goes through the same loop:
@@ -26,12 +26,12 @@ Documentation: **<https://infinityhub123.github.io/apchi/>**, built from `main`.
 | Client certificates | Certificates Trino presents to external systems | Nothing — a new file in a mounted directory |
 | Certificate mapping | How a caller's certificate becomes a Trino identity | A coordinator restart |
 | Resource groups | Concurrency, memory and CPU limits, and what lands where | A coordinator restart |
-| Event listeners | Where Trino sends query events | A coordinator restart |
 
 Review tells you which of those a pending change is before you run it, and — if it restarts
 the coordinator — how many queries that will destroy.
 
-Those six are the Operator's. An **Admin** can do everything an Operator can, and also write
+Those five are the Operator's. An **Admin** can do everything an Operator can, and also set
+Trino's own server configuration -- where query events go, the Event Listener, among it -- write
 raw Trino configuration files that Apchi delivers without forming an opinion about, and engage
 Maintenance Mode, which keeps read access and refuses every configuration change (§14).
 

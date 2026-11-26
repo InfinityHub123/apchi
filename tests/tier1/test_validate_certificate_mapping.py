@@ -19,15 +19,10 @@ from app.main import create_app
 from app.pipeline.applies import TERMINAL
 from app.pipeline.impact import RESTART_WARNING
 from app.sections.certificate_mapping.generator import FILE_KEY, MOUNT_PATH
-from app.sections.event_listeners.generator import MOUNT_PATH as LISTENER_PATH
-from tests.conftest import FakeKubernetes, container_url
+from app.sections.resource_groups.generator import RULES_PATH as GROUPS_PATH
+from tests.conftest import FakeKubernetes, container_url, stage_a_restart
 
 PATTERN = {"pattern": "(.*)@example\\.com", "user": "$1", "case": "lower"}
-HTTP = {
-    "name": "audit",
-    "type": "http",
-    "properties": {"http-event-listener.connect-ingest-uri": "http://collector:8080/events"},
-}
 
 
 async def _validation(client: AsyncClient, timeout: float = 90.0) -> dict:
@@ -178,17 +173,19 @@ async def test_the_section_blamed_is_the_one_whose_file_trino_named(
     fake_kubernetes.pod_problem = "the pod failed"
     fake_kubernetes.pod_log = (
         "2026-09-29T00:00:01Z\tERROR\tmain\tio.trino.server.Server\t"
-        f"Error loading event listener from {LISTENER_PATH}: unknown property\n"
+        f"Invalid resource groups file {GROUPS_PATH}: unknown property\n"
     )
 
     async with _running(settings, fake_kubernetes, trino_cluster, trino_validation) as client:
         await client.put("/api/v1/certificate-mapping", json=PATTERN)
-        await client.post("/api/v1/event-listeners", json=HTTP)
+        await stage_a_restart(client)
 
         verdict = await _validation(client)
 
     assert verdict["outcome"] == "failed"
-    assert verdict["failures"][0]["resource"] == "audit"
+    # A Resource Groups resource -- the Section stages its selectors beside its groups -- and
+    # not the certificate mapping pattern staged with it.
+    assert verdict["failures"][0]["resource"] in {"global", "#selectors"}
 
 
 async def test_applying_a_pattern_delivers_the_file_and_restarts_the_coordinator(
@@ -214,7 +211,7 @@ async def test_applying_a_pattern_delivers_the_file_and_restarts_the_coordinator
 async def test_clearing_a_pattern_leaves_the_pass_through_rule_behind(
     applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
 ) -> None:
-    """Unmounting is not an option here the way it is for a listener: the authenticator is
+    """Unmounting is not an option here the way it is for resource groups: the authenticator is
     configured to read the file, so "no pattern" has to be spelled out as a rule."""
     await applying_client.put("/api/v1/certificate-mapping", json=PATTERN)
     await _apply(applying_client)
