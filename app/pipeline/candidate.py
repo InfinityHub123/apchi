@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from bson import encode as bson_encode
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pymongo import ReturnDocument
 from pymongo.asynchronous.database import AsyncDatabase
 
@@ -23,7 +23,7 @@ from app.audit.actor import actor
 from app.audit.changes import Sections, changes_between
 from app.audit.events import Action, AuditStore, Category, Entry
 from app.pipeline.snapshots import SnapshotStore
-from app.sections import SectionName
+from app.sections import SectionName, without_retired
 from app.sections.registry import SECTIONS
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,8 @@ class Candidate(BaseModel):
     )
     sections: dict[SectionName, dict[str, Any]] = Field(default_factory=dict)
     updated_at: datetime | None = None
+
+    _drop_retired = field_validator("sections", mode="before")(lambda value: without_retired(value))
 
     def resources(self, section: SectionName) -> dict[str, Any]:
         return self.sections.setdefault(section, {})

@@ -31,8 +31,7 @@
                 "client_certificates",
                 "certificate_mapping",
                 "permissions",
-                "resource_groups",
-                "event_listeners"
+                "resource_groups"
               ]
             },
             "title": "Sections",
@@ -412,8 +411,7 @@
                   "client_certificates",
                   "certificate_mapping",
                   "permissions",
-                  "resource_groups",
-                  "event_listeners"
+                  "resource_groups"
                 ],
                 "type": "string"
               },
@@ -910,8 +908,7 @@
                 "client_certificates",
                 "certificate_mapping",
                 "permissions",
-                "resource_groups",
-                "event_listeners"
+                "resource_groups"
               ]
             },
             "title": "Sections",
@@ -935,6 +932,14 @@
             },
             "description": "Properties for this role's config.properties. Wiring and sizing are refused: they belong to the chart.",
             "title": "Config.Properties",
+            "type": "object"
+          },
+          "event-listener.properties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The Event Listener: where Trino sends query events. Empty is none. `event-listener.name` names the plugin, and the rest are its own properties: {\"event-listener.name\": \"http\", \"http-event-listener.connect-ingest-uri\": \"http://audit:8080/events\"}. Loaded once per process, so a change restarts the coordinator.",
+            "title": "Event-Listener.Properties",
             "type": "object"
           },
           "log.properties": {
@@ -993,124 +998,6 @@
         ],
         "title": "EngagedBy",
         "type": "string"
-      },
-      "EventListener": {
-        "description": "An Event Listener as it is stored and returned.",
-        "examples": [
-          {
-            "name": "audit_sink",
-            "properties": {
-              "http-event-listener.connect-ingest-uri": "http://audit.observability.svc.cluster.local:8080/trino",
-              "http-event-listener.log-completed": "true",
-              "http-event-listener.log-created": "false"
-            },
-            "supported": true,
-            "type": "http"
-          }
-        ],
-        "properties": {
-          "name": {
-            "pattern": "^[a-z][a-z0-9_]{0,62}$",
-            "title": "Name",
-            "type": "string"
-          },
-          "properties": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "title": "Properties",
-            "type": "object"
-          },
-          "supported": {
-            "description": "False when the listener type has no curated schema. Its properties passed through unvalidated and are checked only by Trino at Apply.",
-            "title": "Supported",
-            "type": "boolean"
-          },
-          "type": {
-            "pattern": "^[a-z][a-z0-9_-]{0,62}$",
-            "title": "Type",
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "type",
-          "supported"
-        ],
-        "title": "EventListener",
-        "type": "object"
-      },
-      "EventListenerUpdate": {
-        "additionalProperties": false,
-        "description": "A partial update, by named fields (\u00a719).\n\nOmitted means unchanged; present means replaces. Neither field can be cleared, so null is\nrefused rather than read as \"leave it alone\". The name is immutable -- renaming is a\nremove and an add.",
-        "properties": {
-          "properties": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "**Replaces** the property map rather than merging into it. Omit to keep the current ones; they cannot be cleared.",
-            "title": "Properties"
-          },
-          "type": {
-            "anyOf": [
-              {
-                "pattern": "^[a-z][a-z0-9_-]{0,62}$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Omit to keep the current type. It cannot be cleared.",
-            "title": "Type"
-          }
-        },
-        "title": "EventListenerUpdate",
-        "type": "object"
-      },
-      "EventListenerWrite": {
-        "additionalProperties": false,
-        "description": "What an Operator sends.",
-        "examples": [
-          {
-            "name": "audit_sink",
-            "properties": {
-              "http-event-listener.connect-ingest-uri": "http://audit.observability.svc.cluster.local:8080/trino",
-              "http-event-listener.log-completed": "true",
-              "http-event-listener.log-created": "false"
-            },
-            "type": "http"
-          }
-        ],
-        "properties": {
-          "name": {
-            "pattern": "^[a-z][a-z0-9_]{0,62}$",
-            "title": "Name",
-            "type": "string"
-          },
-          "properties": {
-            "additionalProperties": true,
-            "title": "Properties",
-            "type": "object"
-          },
-          "type": {
-            "pattern": "^[a-z][a-z0-9_-]{0,62}$",
-            "title": "Type",
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "type"
-        ],
-        "title": "EventListenerWrite",
-        "type": "object"
       },
       "Grant": {
         "additionalProperties": false,
@@ -2397,8 +2284,7 @@
                 "client_certificates",
                 "certificate_mapping",
                 "permissions",
-                "resource_groups",
-                "event_listeners"
+                "resource_groups"
               ],
               "type": "string"
             },
@@ -2503,8 +2389,7 @@
               "client_certificates",
               "certificate_mapping",
               "permissions",
-              "resource_groups",
-              "event_listeners"
+              "resource_groups"
             ],
             "title": "Section",
             "type": "string"
@@ -2731,8 +2616,7 @@
                 "client_certificates",
                 "certificate_mapping",
                 "permissions",
-                "resource_groups",
-                "event_listeners"
+                "resource_groups"
               ]
             },
             "title": "Sections",
@@ -3016,8 +2900,7 @@
                   "client_certificates",
                   "certificate_mapping",
                   "permissions",
-                  "resource_groups",
-                  "event_listeners"
+                  "resource_groups"
                 ],
                 "type": "string"
               },
@@ -4144,8 +4027,7 @@
                     "client_certificates",
                     "certificate_mapping",
                     "permissions",
-                    "resource_groups",
-                    "event_listeners"
+                    "resource_groups"
                   ],
                   "type": "string"
                 },
@@ -5471,367 +5353,6 @@
         "summary": "One certificate",
         "tags": [
           "client certificates"
-        ]
-      }
-    },
-    "/api/v1/event-listeners": {
-      "get": {
-        "operationId": "list_event_listeners_api_v1_event_listeners_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/EventListener"
-                  },
-                  "title": "Response List Event Listeners Api V1 Event Listeners Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            },
-            "description": "No usable credential."
-          }
-        },
-        "summary": "List staged Event Listeners",
-        "tags": [
-          "event listeners"
-        ]
-      },
-      "post": {
-        "operationId": "create_event_listener_api_v1_event_listeners_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "examples": {
-                "http": {
-                  "description": "`connect-ingest-uri` is the one required property. The two `log-*` flags are what decides whether a query produces one event or two: logging only completed events halves the traffic and is the usual choice for an audit trail, since a created event carries no outcome.",
-                  "summary": "POST each event to an HTTP endpoint",
-                  "value": {
-                    "name": "audit_sink",
-                    "properties": {
-                      "http-event-listener.connect-ingest-uri": "http://audit.observability.svc.cluster.local:8080/trino",
-                      "http-event-listener.connect-retry-count": "3",
-                      "http-event-listener.log-completed": "true",
-                      "http-event-listener.log-created": "false"
-                    },
-                    "type": "http"
-                  }
-                },
-                "kafka": {
-                  "description": "All four of these are required -- the broker list, a topic per event kind and a client id -- and Trino refuses to start if any is missing, even when the matching `publish-*-event` is false. Omitting one is the mistake this example exists to prevent.",
-                  "summary": "Publish events to Kafka topics",
-                  "value": {
-                    "name": "query_events",
-                    "properties": {
-                      "kafka-event-listener.broker-endpoints": "kafka-0.kafka.svc.cluster.local:9092,kafka-1.kafka.svc.cluster.local:9092",
-                      "kafka-event-listener.client-id": "trino-production",
-                      "kafka-event-listener.completed-event.topic": "trino_query_completed",
-                      "kafka-event-listener.created-event.topic": "trino_query_created",
-                      "kafka-event-listener.excluded-fields": "payload,user",
-                      "kafka-event-listener.publish-created-event": "false"
-                    },
-                    "type": "kafka"
-                  }
-                },
-                "uncurated": {
-                  "description": "Trino ships more listeners than Apchi curates. Properties pass through unchecked and the listener comes back with `supported: false`, so nothing but the ephemeral coordinator at Validation will judge them.",
-                  "summary": "A listener type Apchi has no schema for",
-                  "value": {
-                    "name": "query_log",
-                    "properties": {
-                      "mysql-event-listener.db.url": "jdbc:mysql://audit-db.observability.svc.cluster.local:3306/trino_events?user=trino_writer&password=the-password-goes-here"
-                    },
-                    "type": "mysql"
-                  }
-                }
-              },
-              "schema": {
-                "$ref": "#/components/schemas/EventListenerWrite"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EventListener"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            },
-            "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Stage a new Event Listener",
-        "tags": [
-          "event listeners"
-        ]
-      }
-    },
-    "/api/v1/event-listeners/revert": {
-      "post": {
-        "description": "Stages into the Candidate; it does not apply. An ordinary POST /applies follows,\nlike any other edit -- and because this Section is rollout-required, that Apply\nrestarts the coordinator. The effect says so, and what it costs.\nTo take **every** Section back to one Snapshot instead of just this one, use\n`POST /candidate/rollback` -- a Full Rollback.",
-        "operationId": "revert_api_v1_event_listeners_revert_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RevertRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RevertEffect"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            },
-            "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Revert one Section to an earlier Snapshot",
-        "tags": [
-          "event listeners"
-        ]
-      }
-    },
-    "/api/v1/event-listeners/{name}": {
-      "delete": {
-        "operationId": "delete_event_listener_api_v1_event_listeners__name__delete",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            },
-            "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Remove a staged Event Listener",
-        "tags": [
-          "event listeners"
-        ]
-      },
-      "get": {
-        "operationId": "get_event_listener_api_v1_event_listeners__name__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EventListener"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            },
-            "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Fetch a staged Event Listener",
-        "tags": [
-          "event listeners"
-        ]
-      },
-      "patch": {
-        "operationId": "update_event_listener_api_v1_event_listeners__name__patch",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "examples": {
-                "properties": {
-                  "description": "Every property this listener should keep has to be in the body. Omitting `log-created` here is not 'leave it alone', it is 'remove it' -- and Trino then falls back to the listener's own default rather than failing.",
-                  "summary": "Change one property, resend the rest",
-                  "value": {
-                    "properties": {
-                      "http-event-listener.connect-ingest-uri": "http://audit.observability.svc.cluster.local:8080/trino-v2",
-                      "http-event-listener.log-completed": "true",
-                      "http-event-listener.log-created": "false"
-                    }
-                  }
-                },
-                "type": {
-                  "description": "It cannot be cleared: a listener without a type is not a listener. Omit the field to keep the current one. Changing it almost certainly means changing `properties` in the same request, since the property names are the type's.",
-                  "summary": "Change the listener type",
-                  "value": {
-                    "properties": {
-                      "kafka-event-listener.broker-endpoints": "kafka.svc.cluster.local:9092",
-                      "kafka-event-listener.client-id": "trino-apchi",
-                      "kafka-event-listener.completed-event.topic": "trino-queries-completed",
-                      "kafka-event-listener.created-event.topic": "trino-queries-created",
-                      "kafka-event-listener.publish-created-event": "false"
-                    },
-                    "type": "kafka"
-                  }
-                }
-              },
-              "schema": {
-                "$ref": "#/components/schemas/EventListenerUpdate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EventListener"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            },
-            "description": "No usable credential."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Edit a staged Event Listener",
-        "tags": [
-          "event listeners"
         ]
       }
     },

@@ -74,7 +74,6 @@ COORDINATOR = "deploy/trino-coordinator"
 TRINO_SERVICE = "svc/trino"
 CATALOG_SEED_SECRET = "trino-catalog-seed"
 ACCESS_CONTROL_SECRET = "trino-access-control"
-EVENT_LISTENER_SECRET = "trino-event-listener"
 USER_MAPPING_SECRET = "trino-user-mapping"
 RESOURCE_GROUPS_SECRET = "trino-resource-groups"
 CLIENT_CERTIFICATE_SECRET = "trino-client-certificates"
@@ -89,13 +88,11 @@ WORKER = "deploy/trino-worker"
 #: choose, so its mount paths are read from the live Deployment rather than listed. A reset
 #: that guessed would leave mounts behind for the next test to trip over.
 OPTIONAL_VOLUMES = (
-    "apchi-event-listener",
     "apchi-resource-groups",
     "apchi-admin-raw-files",
 )
 
 APCHI_MOUNTS = {
-    "apchi-event-listener": ["/etc/trino/event-listener.properties"],
     "apchi-resource-groups": [
         "/etc/trino/resource-groups.json",
         "/etc/trino/resource-groups.properties",
@@ -348,7 +345,7 @@ def coordinator_log(lines: int = 400) -> str:
     """The coordinator's own log.
 
     How Tier 2 proves a listener was adopted. Nothing functional can tell Apchi whether an
-    event listener loaded -- its output goes to an external sink -- so the proof is read
+    Event Listener loaded -- its output goes to an external sink -- so the proof is read
     from outside the product rather than turned into a product capability.
     """
     return kubectl("logs", f"deploy/{'trino-coordinator'}", "-c", "trino", f"--tail={lines}")
@@ -793,7 +790,6 @@ async def cluster_state(
     secrets = (
         CATALOG_SEED_SECRET,
         ACCESS_CONTROL_SECRET,
-        EVENT_LISTENER_SECRET,
         USER_MAPPING_SECRET,
         RESOURCE_GROUPS_SECRET,
         CLIENT_CERTIFICATE_SECRET,
@@ -831,8 +827,8 @@ async def cluster_state(
             await real_kubernetes.write_secret(name, content)
         if changed_workers:
             restart_workers()
-        # Apchi mounts its own volume on the coordinator when a listener is configured.
-        # Left behind, the next test inherits a listener it never asked for.
+        # Apchi mounts its own volumes on the coordinator for resource groups and raw files.
+        # Left behind, the next test inherits configuration it never asked for.
         #
         # Removing it changes the pod template, which starts a rollout -- so this waits for
         # it. Leaving a rollout in flight was the whole bug: the next test began while the

@@ -1,9 +1,10 @@
 """Trino's own server configuration: what an Admin sets, and the files Apchi renders from it.
 
 Apchi renders every file under `/etc/trino`, and the chart renders none (ADR-0010, §14). The
-Sections cover catalogs, rules, mapping, resource groups and event listeners. This is the rest:
+Sections cover catalogs, rules, mapping and resource groups. This is the rest:
 `config.properties`, `jvm.config`, `node.properties`, `log.properties`,
-`catalog-store.properties` and `access-control.properties` for the coordinator, and the
+`catalog-store.properties`, `access-control.properties` and the Event Listener for the
+coordinator, and the
 workers' `config.properties`, `jvm.config`, `node.properties`, `log.properties` and the
 access control that lets Apchi's identity drain them.
 
@@ -47,6 +48,22 @@ JVM_CONFIG: Final = f"{CONFIG_DIR}/jvm.config"
 NODE_PROPERTIES: Final = f"{CONFIG_DIR}/node.properties"
 LOG_PROPERTIES: Final = f"{CONFIG_DIR}/log.properties"
 CATALOG_STORE_PROPERTIES: Final = f"{CONFIG_DIR}/catalog-store.properties"
+
+#: Where the coordinator's Event Listener is, when the Admin configures one. A directory the
+#: chart mounts whole from the coordinator's Secret, because the file is optional: each other
+#: file here is a subPath mount, and a subPath mount of a key the Secret does not hold is not
+#: "no file" but a pod that cannot start. Trino finds it because config.properties names it in
+#: `event-listener.config-files` -- and with that set, Trino ignores its default path
+#: (measured on 483), so a file left there by an older Apchi is never read.
+LISTENER_DIR: Final = f"{CONFIG_DIR}/apchi"
+LISTENER_FILE: Final = "event-listener.properties"
+LISTENER_PATH: Final = f"{LISTENER_DIR}/{LISTENER_FILE}"
+#: Where Trino reads a listener from when nothing names one, and where the Event Listeners
+#: Section mounted it before it became the Admin's. A Raw File there is refused: Trino would
+#: read it while no listener is configured, and silently drop it once one is.
+DEFAULT_LISTENER_PATH: Final = f"{CONFIG_DIR}/{LISTENER_FILE}"
+LISTENER_NAME_KEY: Final = "event-listener.name"
+LISTENER_FILES_KEY: Final = "event-listener.config-files"
 
 #: The workers' access-control rules. Theirs alone: the coordinator's are the Operator's
 #: Permissions, which workers never read -- authorization happens on the coordinator.
@@ -109,6 +126,7 @@ WIRING: Final[dict[str, dict[str, str]]] = {
         "query.max-memory": _SIZING.format(role="coordinator"),
         "query.max-memory-per-node": _SIZING.format(role="coordinator"),
         "memory.heap-headroom-per-node": _SIZING.format(role="coordinator"),
+        LISTENER_FILES_KEY: "event-listener.properties: Apchi points Trino at it",
     },
     "node.properties": _NODE_WIRING,
     "log.properties": {},
@@ -251,6 +269,43 @@ class CoordinatorFiles(_RoleFiles):
 
     role: ClassVar[Role] = "coordinator"
 
+    event_listener_properties: dict[str, str] = Field(
+        default_factory=dict,
+        alias=LISTENER_FILE,
+        description=(
+            "The Event Listener: where Trino sends query events. Empty is none. "
+            f"`{LISTENER_NAME_KEY}` names the plugin, and the rest are its own properties: "
+            '{"event-listener.name": "http", "http-event-listener.connect-ingest-uri": '
+            '"http://audit:8080/events"}. Loaded once per process, so a change restarts '
+            "the coordinator."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _refuse_a_listener_trino_would_not_load(self) -> "CoordinatorFiles":
+        listener = self.event_listener_properties
+        if not listener:
+            return self
+        problems: list[str] = []
+        if len(listener) > MAX_PROPERTIES_PER_FILE:
+            problems.append(f"{LISTENER_FILE}: more than {MAX_PROPERTIES_PER_FILE} properties")
+        for key, value in listener.items():
+            for problem in (_check_key(key), _check_value(key, value)):
+                if problem:
+                    problems.append(f"{LISTENER_FILE}: {problem}")
+        plugin = listener.get(LISTENER_NAME_KEY)
+        if not plugin:
+            # Trino refuses a listener file without it at startup, so it would only ever be
+            # found on the probe -- and is cheaper to name here.
+            problems.append(
+                f"{LISTENER_FILE}: {LISTENER_NAME_KEY} is required: it names the plugin"
+            )
+        elif not problems:
+            problems.extend(_curated_problems(plugin, listener))
+        if problems:
+            raise ValueError("; ".join(problems))
+        return self
+
 
 class WorkerFiles(_RoleFiles):
     """The Admin's properties for every worker: one set, because the workers are one
@@ -269,6 +324,31 @@ class ServerConfiguration(BaseModel):
 
     def of(self, role: Role) -> _RoleFiles:
         return self.coordinator if role == "coordinator" else self.worker
+
+
+def _curated_problems(plugin: str, listener: dict[str, str]) -> list[str]:
+    """The listeners Apchi has a schema for are checked against it: a misspelled property is a
+    coordinator that will not start, and the schema can name the one meant. Any other plugin
+    is Trino's to judge, on the probe."""
+    # Imported here: the schemas import the Section property helpers, whose base imports the
+    # Admin values this module is part of.
+    from app.sections.event_listeners.types import PropertyProblem, validate_properties
+
+    rest = {key: value for key, value in listener.items() if key != LISTENER_NAME_KEY}
+    try:
+        validate_properties(plugin, rest)
+    except PropertyProblem as exc:
+        return [
+            f"{LISTENER_FILE}: {problem.get('property', '')}: {problem.get('problem', '')}"
+            for problem in exc.problems
+        ]
+    return []
+
+
+def render_listener(listener: dict[str, str]) -> str:
+    """The plugin's name first, as Trino's own examples have it, then the rest sorted."""
+    rest = sorted((k, v) for k, v in listener.items() if k != LISTENER_NAME_KEY)
+    return _properties([(LISTENER_NAME_KEY, listener[LISTENER_NAME_KEY]), *rest])
 
 
 def _properties(lines: list[tuple[str, str]]) -> str:
@@ -407,9 +487,13 @@ def role_secret(role: Role, admin: ServerConfiguration, settings: Settings) -> d
 def render_coordinator(admin: ServerConfiguration, settings: Settings) -> dict[str, str]:
     """Every file the coordinator reads from `/etc/trino` that no Section renders."""
     files = admin.coordinator.by_file()
-    return {
+    listener = admin.coordinator.event_listener_properties
+    wiring = config_wiring(settings)
+    if listener:
+        wiring.append((LISTENER_FILES_KEY, LISTENER_PATH))
+    rendered = {
         CONFIG_PROPERTIES: _properties(
-            _with_admin("config.properties", config_wiring(settings), files["config.properties"])
+            _with_admin("config.properties", wiring, files["config.properties"])
         ),
         NODE_PROPERTIES: _properties(
             _with_admin("node.properties", _node_wiring(settings), files["node.properties"])
@@ -426,6 +510,9 @@ def render_coordinator(admin: ServerConfiguration, settings: Settings) -> dict[s
             ]
         ),
     }
+    if listener:
+        rendered[LISTENER_PATH] = render_listener(listener)
+    return rendered
 
 
 def secret_key(path: str) -> str:

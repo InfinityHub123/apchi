@@ -19,19 +19,25 @@ from app.config import Settings
 from app.main import create_app
 from app.pipeline.applies import TERMINAL
 from app.pipeline.auto_rollback import INCIDENT_MESSAGE
-from app.sections.event_listeners.generator import FILE_KEY, MOUNT_PATH
-from tests.conftest import FakeKubernetes, container_url
+from app.sections.resource_groups.generator import MANAGER_PATH, RULES_KEY
+from tests.conftest import (
+    RESTART_SECRET,
+    FakeKubernetes,
+    change_the_restart,
+    container_url,
+    stage_a_restart,
+    unstage_the_restart,
+)
 
-LISTENER_SECRET = "trino-event-listener"
-VOLUME = "apchi-event-listener"
 KEPT = {"name": "kept", "connector": "memory", "properties": {}}
 ADDED = {"name": "added", "connector": "memory", "properties": {}}
-FIRST = {
-    "name": "audit",
-    "type": "http",
-    "properties": {"http-event-listener.connect-ingest-uri": "http://first:8080/e"},
-}
-SECOND_URI = "http://second:9090/e"
+#: The resource group's limit in Snapshot 1, and the one each test then tries to apply.
+FIRST = '"hardConcurrencyLimit": 10'
+SECOND = '"hardConcurrencyLimit": 20'
+
+
+def _rules(kubernetes: FakeKubernetes) -> str:
+    return kubernetes.secrets[RESTART_SECRET][RULES_KEY]
 
 
 async def _settled(client: AsyncClient, apply_id: str, timeout: float = 120.0) -> dict:
@@ -77,31 +83,28 @@ async def _running(
 
 @pytest.fixture
 async def snapshot_one(applying_client: AsyncClient) -> AsyncClient:
-    """A Cluster running one Catalog and one Event Listener, verified and committed."""
+    """A Cluster running one Catalog and one resource group, verified and committed."""
     await applying_client.post("/api/v1/catalogs", json=KEPT)
-    await applying_client.post("/api/v1/event-listeners", json=FIRST)
+    await stage_a_restart(applying_client)
     record = await _apply(applying_client)
     assert record["stage"] == "succeeded", record.get("failure_reason")
     return applying_client
 
 
-async def test_a_failure_after_the_rollout_restores_the_listener_and_restarts_again(
+async def test_a_failure_after_the_rollout_restores_the_groups_and_restarts_again(
     snapshot_one: AsyncClient, fake_kubernetes: FakeKubernetes
 ) -> None:
     fake_kubernetes.restarts.clear()
     fake_kubernetes.report_a_missing_worker_once = True
-    await snapshot_one.patch(
-        "/api/v1/event-listeners/audit",
-        json={"properties": {"http-event-listener.connect-ingest-uri": SECOND_URI}},
-    )
+    await change_the_restart(snapshot_one)
 
     record = await _apply(snapshot_one)
 
     assert record["stage"] == "failed"
     assert record["rollback"] == "succeeded"
-    restored = fake_kubernetes.secrets[LISTENER_SECRET][FILE_KEY]
-    assert "http://first:8080/e" in restored, "the Snapshot's listener is back"
-    assert SECOND_URI not in restored
+    restored = _rules(fake_kubernetes)
+    assert FIRST in restored, "the Snapshot's groups are back"
+    assert SECOND not in restored
     assert len(fake_kubernetes.restarts) == 2, "one to apply the change, one to undo it"
 
 
@@ -112,10 +115,7 @@ async def test_both_sections_are_restored_together_in_one_attempt(
     fake_kubernetes.restarts.clear()
     fake_kubernetes.report_a_missing_worker_once = True
     await snapshot_one.post("/api/v1/catalogs", json=ADDED)
-    await snapshot_one.patch(
-        "/api/v1/event-listeners/audit",
-        json={"properties": {"http-event-listener.connect-ingest-uri": SECOND_URI}},
-    )
+    await change_the_restart(snapshot_one)
 
     record = await _apply(snapshot_one)
 
@@ -123,7 +123,7 @@ async def test_both_sections_are_restored_together_in_one_attempt(
     live = await Trino(url=container_url(trino_cluster)).catalogs()
     assert "kept" in live
     assert "added" not in live
-    assert "http://first:8080/e" in fake_kubernetes.secrets[LISTENER_SECRET][FILE_KEY]
+    assert FIRST in _rules(fake_kubernetes)
     assert len(fake_kubernetes.restarts) == 2
 
 
@@ -131,10 +131,7 @@ async def test_the_rollback_creates_no_snapshot(
     snapshot_one: AsyncClient, fake_kubernetes: FakeKubernetes
 ) -> None:
     fake_kubernetes.report_a_missing_worker_once = True
-    await snapshot_one.patch(
-        "/api/v1/event-listeners/audit",
-        json={"properties": {"http-event-listener.connect-ingest-uri": SECOND_URI}},
-    )
+    await change_the_restart(snapshot_one)
 
     await _apply(snapshot_one)
 
@@ -142,10 +139,10 @@ async def test_the_rollback_creates_no_snapshot(
     assert [snapshot["number"] for snapshot in snapshots] == [1]
 
 
-async def test_a_rollback_with_no_listener_change_does_not_restart(
+async def test_a_rollback_with_no_group_change_does_not_restart(
     snapshot_one: AsyncClient, fake_kubernetes: FakeKubernetes
 ) -> None:
-    """The Cluster has a listener, and it is not what went wrong. Restarting to undo a
+    """The Cluster has resource groups, and they are not what went wrong. Restarting to undo a
     catalog would cost every running query for nothing."""
     fake_kubernetes.restarts.clear()
     fake_kubernetes.report_a_missing_worker_once = True
@@ -157,19 +154,19 @@ async def test_a_rollback_with_no_listener_change_does_not_restart(
     assert fake_kubernetes.restarts == []
 
 
-async def test_removing_a_listener_is_undone_by_putting_it_back(
+async def test_emptying_the_groups_is_undone_by_putting_them_back(
     snapshot_one: AsyncClient, fake_kubernetes: FakeKubernetes
 ) -> None:
     """The mount is the meaning: undoing a removal has to remount, or the coordinator comes
-    back with no listener at all."""
+    back with no resource groups at all."""
     fake_kubernetes.report_a_missing_worker_once = True
-    await snapshot_one.delete("/api/v1/event-listeners/audit")
+    await unstage_the_restart(snapshot_one)
 
     record = await _apply(snapshot_one)
 
     assert record["rollback"] == "succeeded", record.get("failure_reason")
-    assert MOUNT_PATH in fake_kubernetes.mounts
-    assert "http://first:8080/e" in fake_kubernetes.secrets[LISTENER_SECRET][FILE_KEY]
+    assert MANAGER_PATH in fake_kubernetes.mounts
+    assert FIRST in _rules(fake_kubernetes)
 
 
 async def test_a_rollback_whose_own_rollout_stalls_ends_in_an_incident(
@@ -183,7 +180,7 @@ async def test_a_rollback_whose_own_rollout_stalls_ends_in_an_incident(
     quick = settings.model_copy(update={"rollout_timeout_seconds": 1.0})
 
     async with _running(quick, fake_kubernetes, trino_cluster, trino_validation) as client:
-        await client.post("/api/v1/event-listeners", json=FIRST)
+        await stage_a_restart(client)
         # The Apply's rollout is the first; every one after it stalls.
         fake_kubernetes.stall_rollout_from = 2
         fake_kubernetes.report_a_missing_worker_once = True

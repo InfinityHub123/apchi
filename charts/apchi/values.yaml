@@ -532,6 +532,8 @@ mongodb:
 secrets:
   catalogSeed: trino-catalog-seed
   accessControl: trino-access-control
+  # Where the Event Listener was before it became the Admin's, in Server Configuration.
+  # Apchi no longer writes it; read only to take the old mount off the coordinator.
   eventListener: trino-event-listener
   certificateMapping: trino-user-mapping
   clientCertificates: trino-client-certificates
@@ -550,6 +552,8 @@ secrets:
 # fills it (#93). The coordinator still names a volume for it, below, because something has
 # to mount it -- but Apchi does not need to know that name.
 volumes:
+  # The Event Listener's old mount, which Apchi removes at the first Admin Apply after
+  # upgrading. Nothing mounts it any more.
   eventListener: apchi-event-listener
   resourceGroups: apchi-resource-groups
   # Mounted by the coordinator itself rather than by Apchi, because Trino is configured to

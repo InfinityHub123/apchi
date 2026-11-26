@@ -1,9 +1,14 @@
-"""The rollout Apply engine against a real cluster.
+"""The rollout Apply engine against a real cluster, with the Admin's Event Listener.
 
-Only a real Kubernetes and a real Trino can prove the thing slice 2 exists to prove: that
-the pod template patch Apchi makes produces a coordinator which comes back, and that the
-listener file it delivered is actually loaded. Adoption is read from the coordinator's log,
-because nothing functional can tell Apchi whether an event listener loaded.
+Only a real Kubernetes and a real Trino can prove what this exists to prove: that a restart
+Apchi makes produces a coordinator which comes back, and that the listener it delivered is
+actually loaded. Adoption is read from the coordinator's log, because nothing functional can
+tell Apchi whether an event listener loaded.
+
+The listener is the Admin's since #269: a file in the coordinator's Server Configuration
+Secret, which the chart mounts whole at /etc/trino/apchi, named by `event-listener.config-files`
+only when there is one. So what is proved here too is that Apchi never touches the
+Deployment's volumes for it -- the restart is the only change to the pod template.
 """
 
 import asyncio
@@ -14,31 +19,25 @@ from httpx import AsyncClient
 from app.adapters.kubernetes import RealKubernetes
 from app.adapters.trino import Trino
 from app.pipeline.applies import TERMINAL
-from app.sections.event_listeners.generator import FILE_KEY
 from tests.tier2.conftest import (
-    EVENT_LISTENER_SECRET,
-    ForwardedKubernetes,
+    SERVER_CONFIG_SECRET,
     PortForward,
     coordinator_log,
 )
 
 pytestmark = pytest.mark.tier2
 
+SERVER_CONFIGURATION = "/api/v1/admin/server-configuration"
 HTTP = {
-    "name": "audit",
-    "type": "http",
-    "properties": {
-        "http-event-listener.connect-ingest-uri": "http://collector.invalid:8080/events",
-        "http-event-listener.log-completed": "true",
-    },
+    "event-listener.name": "http",
+    "http-event-listener.connect-ingest-uri": "http://collector.invalid:8080/events",
+    "http-event-listener.log-completed": "true",
 }
+LOADED = "-- Loaded event listener /etc/trino/apchi/event-listener.properties --"
 CATALOG = {"name": "kept", "connector": "memory", "properties": {}}
 
 
-async def _apply(client: AsyncClient, timeout: float = 900.0) -> dict:
-    started = await client.post("/api/v1/applies")
-    assert started.status_code == 202, started.json()
-    apply_id = started.json()["id"]
+async def _settled(client: AsyncClient, apply_id: str, timeout: float = 900.0) -> dict:
     deadline = asyncio.get_running_loop().time() + timeout
     record: dict = {}
     while asyncio.get_running_loop().time() < deadline:
@@ -49,33 +48,51 @@ async def _apply(client: AsyncClient, timeout: float = 900.0) -> dict:
     raise AssertionError(f"Apply never settled; last={record.get('stage')}")
 
 
-async def test_an_apply_rolls_out_the_coordinator_and_trino_loads_the_listener(
-    e2e_client: AsyncClient,
-    forward: PortForward,
-    real_kubernetes: RealKubernetes,
-    forwarded_kubernetes: ForwardedKubernetes,
-) -> None:
-    """The tracer bullet for the engine. The coordinator is replaced, comes back, and is
-    running the configuration Apchi delivered."""
-    await e2e_client.post("/api/v1/event-listeners", json=HTTP)
+async def _apply(client: AsyncClient) -> dict:
+    started = await client.post("/api/v1/applies")
+    assert started.status_code == 202, started.json()
+    return await _settled(client, started.json()["id"])
 
-    record = await _apply(e2e_client)
+
+async def _admin_apply(client: AsyncClient, listener: dict[str, str] | None) -> dict:
+    coordinator = {"event-listener.properties": listener} if listener else {}
+    written = await client.put(SERVER_CONFIGURATION, json={"coordinator": coordinator})
+    assert written.status_code == 200, written.text
+    started = await client.post("/api/v1/admin/applies", json={})
+    assert started.status_code == 202, started.text
+    return await _settled(client, started.json()["id"])
+
+
+def _volumes_and_mounts(spec: dict) -> tuple[list[str], list[str]]:
+    container = next(c for c in spec["containers"] if c["name"] == "trino")
+    return (
+        sorted(volume["name"] for volume in spec["volumes"]),
+        sorted(mount["mountPath"] for mount in container["volumeMounts"]),
+    )
+
+
+async def test_an_admin_apply_restarts_the_coordinator_and_trino_loads_the_listener(
+    e2e_client: AsyncClient, forward: PortForward, real_kubernetes: RealKubernetes
+) -> None:
+    """The tracer bullet. The coordinator is replaced, comes back, and is running the
+    listener -- read from where the chart mounts it, with nothing mounted for it by Apchi."""
+    before = _volumes_and_mounts(await real_kubernetes.deployment_pod_spec("trino-coordinator"))
+
+    record = await _admin_apply(e2e_client, HTTP)
 
     assert record["stage"] == "succeeded", record.get("failure_reason")
     assert "rolling_out" in [event["stage"] for event in record["history"]]
-    assert record["snapshot"] == 1
+    delivered = await real_kubernetes.read_secret(SERVER_CONFIG_SECRET)
+    assert delivered["event-listener.properties"].startswith("event-listener.name=http\n")
+    assert (
+        "event-listener.config-files=/etc/trino/apchi/event-listener.properties"
+        in delivered["config.properties"]
+    )
+    after = _volumes_and_mounts(await real_kubernetes.deployment_pod_spec("trino-coordinator"))
+    assert after == before, "Apchi changed the coordinator's volumes for a listener"
 
-    delivered = await real_kubernetes.read_secret(EVENT_LISTENER_SECRET)
-    assert "event-listener.name=http" in delivered[FILE_KEY]
-
-    # Apchi owns exactly one volume on the pod template, and only while a listener exists.
-    spec = await real_kubernetes.deployment_pod_spec("trino-coordinator")
-    assert "apchi-event-listener" in [volume["name"] for volume in spec["volumes"]]
-
-    # Adoption, read from the coordinator itself.
     forward.restart()
-    log = coordinator_log()
-    assert "http-event-listener" in log
+    assert LOADED in coordinator_log(2000)
 
 
 async def test_the_coordinator_serves_queries_after_the_rollout(
@@ -84,9 +101,9 @@ async def test_the_coordinator_serves_queries_after_the_rollout(
     """Verification already asserts this, but only by a query Apchi itself ran. This checks
     the Cluster an End User would find."""
     await e2e_client.post("/api/v1/catalogs", json=CATALOG)
-    await e2e_client.post("/api/v1/event-listeners", json=HTTP)
+    assert (await _apply(e2e_client))["stage"] == "succeeded"
 
-    record = await _apply(e2e_client)
+    record = await _admin_apply(e2e_client, HTTP)
     assert record["stage"] == "succeeded", record.get("failure_reason")
 
     forward.restart()
@@ -96,27 +113,23 @@ async def test_the_coordinator_serves_queries_after_the_rollout(
     assert await trino.query("SELECT 1 FROM system.runtime.nodes LIMIT 1")
 
 
-async def test_removing_the_listener_unmounts_it_and_the_coordinator_still_starts(
+async def test_removing_the_listener_brings_the_coordinator_back_without_it(
     e2e_client: AsyncClient, forward: PortForward, real_kubernetes: RealKubernetes
 ) -> None:
-    """The case that decided the delivery mechanism. A Secret with no key becomes a
-    directory under a subPath mount and Trino dies on it, so removing the last listener has
-    to remove the mount -- and the coordinator has to come back without it."""
-    await e2e_client.post("/api/v1/event-listeners", json=HTTP)
-    await _apply(e2e_client)
+    """The case that decided the old delivery: an empty Secret key under a subPath mount is a
+    directory Trino dies on. Here no mount names the key, and the pointer goes with it -- so
+    the coordinator comes back with no listener and nothing missing."""
+    assert (await _admin_apply(e2e_client, HTTP))["stage"] == "succeeded"
 
-    await e2e_client.delete("/api/v1/event-listeners/audit")
-    record = await _apply(e2e_client)
+    record = await _admin_apply(e2e_client, None)
 
     assert record["stage"] == "succeeded", record.get("failure_reason")
-    spec = await real_kubernetes.deployment_pod_spec("trino-coordinator")
-    assert "apchi-event-listener" not in [volume["name"] for volume in spec["volumes"]]
-    assert "/etc/trino/event-listener.properties" not in [
-        mount["mountPath"] for mount in spec["containers"][0]["volumeMounts"]
-    ]
-
+    delivered = await real_kubernetes.read_secret(SERVER_CONFIG_SECRET)
+    assert "event-listener.properties" not in delivered
+    assert "event-listener.config-files" not in delivered["config.properties"]
     forward.restart()
     assert await Trino(url=f"http://127.0.0.1:{forward.port}").is_starting() is False
+    assert LOADED not in coordinator_log(2000)
 
 
 async def test_a_catalogs_only_apply_does_not_restart_the_coordinator(

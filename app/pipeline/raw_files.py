@@ -35,7 +35,11 @@ from app.sections.admin import AdminValues
 from app.sections.base import CoordinatorDirectory, CoordinatorFile
 from app.sections.raw_files import CONFIG_DIR, MAX_FILES, normalised, within_config_dir
 from app.sections.registry import REGISTERED
-from app.sections.server_configuration import RENDERED_PATHS
+from app.sections.server_configuration import (
+    DEFAULT_LISTENER_PATH,
+    LISTENER_DIR,
+    RENDERED_PATHS,
+)
 
 if TYPE_CHECKING:  # a Cluster carries the adapters and the Admin values together
     from app.sections.base import Cluster
@@ -65,6 +69,12 @@ def _owner_of(path: str, settings: Settings) -> str | None:
     candidate = PurePosixPath(path)
     if str(candidate) in RENDERED_PATHS:
         return "Server Configuration"
+    # The directory the coordinator's Secret is mounted whole at: a raw file inside it would be
+    # a mount inside another mount. And Trino's default listener path, which Trino reads while
+    # no listener is configured and ignores once one is -- a raw file there would be a listener
+    # that silently stops when the Admin sets the real one.
+    if candidate.is_relative_to(LISTENER_DIR) or str(candidate) == DEFAULT_LISTENER_PATH:
+        return "Server Configuration (event-listener.properties)"
     for section in REGISTERED:
         for spec in section.coordinator_files(settings):
             declared = PurePosixPath(spec.path)
@@ -253,8 +263,8 @@ async def deliver(cluster: "Cluster") -> None:
 
     So this mirrors `files.deliver` rather than reusing it: one Secret, and a `subPath` mount
     per file on one volume Apchi owns. The volume arrives with the first raw file and leaves
-    with the last, which is the same arrangement §13.6 already needs for the Event Listener
-    and for the same reason -- "no raw files" can only be expressed by the mounts not being
+    with the last, which is the same arrangement Resource Groups needs, and for the same
+    reason -- "no raw files" can only be expressed by the mounts not being
     there, since Kubernetes turns a subPath mount of an absent key into a directory Trino
     dies reading.
     """

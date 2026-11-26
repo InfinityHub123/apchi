@@ -156,7 +156,7 @@ class Settings(BaseSettings):
     #: cover files Apchi and the Admin own between them.
     raw_files_secret_name: str = "trino-admin-raw-files"
     #: The one volume those mounts name. Apchi adds it with the first raw file and removes it
-    #: with the last, the same way it owns the Event Listener volume (§13.6).
+    #: with the last, the same way it owns the Resource Groups volume.
     raw_files_volume_name: str = "apchi-admin-raw-files"
 
     #: Whether a Catalog the validation probe cannot connect to fails the Apply.
@@ -263,13 +263,11 @@ class Settings(BaseSettings):
     #: Holds the generated system access-control file. Mounted as a whole volume so the
     #: kubelet keeps it current; never with subPath (§16).
     access_control_secret_name: str = "trino-access-control"
-    #: Holds the generated Event Listener configuration. Apchi mounts it on the
-    #: coordinator when a listener is configured and unmounts it when none is: Trino
-    #: refuses to start if the file it is told to read is missing, so the presence of the
-    #: mount is the only way to express "no listener".
+    #: Where the Event Listeners Section kept its file, before the listener became the Admin's
+    #: (#269). Apchi no longer writes it. Read so that the volume Apchi mounted from it can be
+    #: taken off the coordinator, and so that the ninth precondition does not refuse that
+    #: mount as foreign before it has been.
     event_listener_secret_name: str = "trino-event-listener"
-    #: The one volume Apchi owns on the coordinator's pod template. Everything else there
-    #: belongs to the Admin.
     event_listener_volume_name: str = "apchi-event-listener"
     #: Holds the generated user-mapping file. Always present once Apchi has applied: the
     #: authenticator reading it refuses to start when it is missing, so "no pattern" is a

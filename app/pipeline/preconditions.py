@@ -26,7 +26,10 @@ from app.pipeline.coordinator import Container, PodSpec, Volume, VolumeMount, co
 from app.pipeline.files import admin_mounted_secrets, credential_secrets, owned_paths
 from app.sections.permissions.generator import PROPERTIES_PATH, REFRESH_PERIOD
 from app.sections.registry import REGISTERED
-from app.sections.server_configuration import ROLE_PATHS, Role, secret_name
+from app.sections.server_configuration import (
+    CONFIG_PROPERTIES as _CONFIG_PROPERTIES,
+)
+from app.sections.server_configuration import LISTENER_DIR, ROLE_PATHS, Role, secret_name
 
 __all__ = [
     "Container",
@@ -53,8 +56,6 @@ class PreconditionFailed(Exception):
 #: either it or the file.
 _PROPERTIES_DIR = str(PurePosixPath(PROPERTIES_PATH).parent)
 
-#: Where `event-listener.config-files` lives when a deployment sets it.
-_CONFIG_PROPERTIES = "/etc/trino/config.properties"
 _CONFIG_DIR = "/etc/trino"
 
 
@@ -205,6 +206,21 @@ def _unmounted_rendered_files(spec: PodSpec, settings: Settings, role: Role) -> 
             mount.mount_path.rstrip("/"): volumes.get(mount.name)
             for mount in container.volume_mounts
         }
+        if role == "coordinator":
+            whole = {
+                mount.mount_path.rstrip("/"): volumes.get(mount.name)
+                for mount in container.volume_mounts
+                if not mount.sub_path
+            }
+            volume = whole.get(LISTENER_DIR)
+            if volume is None or volume.secret_name != ours:
+                problems.append(
+                    f"The coordinator does not mount Secret {ours!r} whole at {LISTENER_DIR}, "
+                    "where Trino reads the Event Listener from when the Admin configures one. "
+                    "A listener applied there would be named in config.properties and missing "
+                    "on disk, and the coordinator would not start. Mount the Secret there as a "
+                    "directory, as the chart does."
+                )
         for path in ROLE_PATHS[role]:
             volume = mounted.get(path)
             if volume is None or volume.secret_name != ours:
@@ -225,6 +241,9 @@ def apchi_secrets(settings: Settings) -> set[str]:
         settings.server_configuration_secret_name,
         settings.worker_server_configuration_secret_name,
         settings.raw_files_secret_name,
+        # Not written any more, but an older Apchi mounted it under /etc/trino, and it stays
+        # there until the first Admin Apply takes it off (#269).
+        settings.event_listener_secret_name,
     }
 
 

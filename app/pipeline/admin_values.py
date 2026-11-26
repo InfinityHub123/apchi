@@ -87,6 +87,50 @@ class AdminStore:
         await self._record(before.model_dump(mode="json"), dumped)
         return values
 
+    async def carry_over_listener(self, listener: dict[str, str]) -> None:
+        """Put an Event Listener the retired Section held into the Admin values (#269).
+
+        Into every copy that exists -- the current values, the pre-image and what the last
+        Apply delivered -- not through `save`: the Cluster already runs this listener, so it is
+        part of each of those states, and a rollback restoring one without it would remove a
+        listener nobody removed. Through the model rather than a `$set`, because the file names
+        are keys with dots in them, which a MongoDB update path cannot address.
+        """
+        for document_id in (_DOCUMENT_ID, _PREVIOUS_ID, _APPLIED_ID):
+            stored = await self._collection.find_one({"_id": document_id})
+            if stored is None and document_id != _DOCUMENT_ID:
+                continue
+            values = _as_values(stored)
+            coordinator = values.server_configuration.coordinator.model_copy(
+                update={"event_listener_properties": dict(listener)}
+            )
+            carried = values.model_copy(
+                update={
+                    "server_configuration": values.server_configuration.model_copy(
+                        update={"coordinator": coordinator}
+                    )
+                }
+            )
+            await self._collection.replace_one(
+                {"_id": document_id},
+                {"_id": document_id, **carried.model_dump(mode="json")},
+                upsert=True,
+            )
+        who = actor()
+        await self._audit.record_each(
+            who.subject,
+            who.via,
+            [
+                Entry(
+                    category="admin",
+                    action="updated",
+                    resource="server_configuration",
+                    detail="carried the Event Listener over from the retired Section",
+                )
+            ],
+            token_id=who.token_id,
+        )
+
     async def _keep(self, previous: AdminValues) -> None:
         """Remember the document this write replaced, for exactly one step back.
 

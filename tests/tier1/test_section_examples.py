@@ -100,26 +100,6 @@ async def _set_mapping(client: AsyncClient, example: Example) -> Response:
     return await client.put("/api/v1/certificate-mapping", json=example)
 
 
-async def _create_listener(client: AsyncClient, example: Example) -> Response:
-    return await client.post("/api/v1/event-listeners", json=example)
-
-
-async def _patch_listener(client: AsyncClient, example: Example) -> Response:
-    created = await client.post(
-        "/api/v1/event-listeners",
-        json={
-            "name": "audit_sink",
-            "type": "http",
-            "properties": {
-                "http-event-listener.connect-ingest-uri": "http://audit.svc.cluster.local:8080/t",
-                "http-event-listener.log-completed": "true",
-            },
-        },
-    )
-    assert created.status_code == 201, created.text
-    return await client.patch("/api/v1/event-listeners/audit_sink", json=example)
-
-
 async def _add_grant(client: AsyncClient, example: Example) -> Response:
     return await client.post("/api/v1/permissions", json=example)
 
@@ -169,8 +149,6 @@ LOADERS: dict[tuple[str, str], Loader] = {
     ("POST", "/api/v1/catalogs"): _create_catalog,
     ("PATCH", "/api/v1/catalogs/{name}"): _patch_catalog,
     ("PUT", "/api/v1/certificate-mapping"): _set_mapping,
-    ("POST", "/api/v1/event-listeners"): _create_listener,
-    ("PATCH", "/api/v1/event-listeners/{name}"): _patch_listener,
     ("POST", "/api/v1/permissions"): _add_grant,
     ("PUT", "/api/v1/permissions/{key}"): _set_privileges,
     ("POST", "/api/v1/resource-groups"): _add_group,
@@ -213,7 +191,6 @@ def test_every_section_has_examples() -> None:
     for section in (
         "catalogs",
         "certificate-mapping",
-        "event-listeners",
         "permissions",
         "resource-groups",
     ):
@@ -239,14 +216,12 @@ async def test_the_documented_example_is_accepted(
 
 
 #: The examples that build one configuration rather than showing alternatives. The others
-#: are one-of by nature -- a second Event Listener is refused because Trino reads a single
-#: listener file, and the Certificate Mapping Pattern is one rule -- so they cannot all be
-#: staged at once and are proved one at a time by the test above.
+#: are one-of by nature -- the Certificate Mapping Pattern is one rule -- so they cannot all
+#: be staged at once and are proved one at a time by the test above.
 TOGETHER: list[tuple[str, Example | None]] = [
     ("POST /api/v1/catalogs", {"example": "postgresql"}),
     ("POST /api/v1/catalogs", {"example": "uncurated"}),
     ("PUT /api/v1/certificate-mapping", {"example": "folded"}),
-    ("POST /api/v1/event-listeners", {"example": "http"}),
     ("POST /api/v1/permissions", {"example": "one-table"}),
     ("POST /api/v1/permissions", {"example": "one-schema"}),
     ("POST /api/v1/permissions", {"example": "whole-catalog"}),

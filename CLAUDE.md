@@ -30,7 +30,8 @@ event listeners. §24.
 app/
   pipeline/   candidate, review, validate, apply, verify, commit, auto_rollback
   sections/   catalogs, client_certificates, certificate_mapping, permissions,
-              resource_groups, event_listeners, and raw_files -- which is the Admin's and
+              resource_groups, server_configuration -- the Admin's, Event Listener
+              included -- and raw_files, which is the Admin's too and
               deliberately not a Section, because it never enters a Snapshot
   adapters/   kubernetes, trino, mongo
   auth/       identity, passwords, users, sessions, tokens, oidc, logins
@@ -118,8 +119,9 @@ rather than a scheduler (#196). See §18, #193.
 
 One: **file-by-file**, which the chart's Trino and `deploy/trino-dev` use. Each file in
 `/etc/trino` is its own mount, so Apchi can add single-file mounts inside it -- which it does
-for `resource-groups.properties` and `event-listener.properties`, the two files Trino pins to
-that directory.
+for `resource-groups.properties`, which Trino pins to that directory. The Event Listener is
+not one: the chart mounts the coordinator's Server Configuration Secret whole at
+`/etc/trino/apchi`, and `config.properties` names the file there only when there is one.
 
 A coordinator that mounts the whole of `/etc/trino` as one ConfigMap, as the official
 `trinodb/charts` chart does, is **not supported** (ADR-0008). Kubernetes will not place a

@@ -95,3 +95,4 @@ nav:
           - adr/0008-one-deployment-shape.md
           - adr/0009-adoption-leaves-apchi.md
           - adr/0010-apchi-renders-every-trino-file.md
+          - adr/0011-the-event-listener-is-the-admins.md

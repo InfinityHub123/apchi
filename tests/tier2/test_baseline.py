@@ -31,7 +31,7 @@ def test_the_manifests_are_the_baseline(settings: Settings) -> None:
 
     assert CATALOG_SEED_SECRET in secrets
     assert sorted(secrets[CATALOG_SEED_SECRET]) == ["tpch.properties"]
-    assert secrets["trino-event-listener"] == {}, "empty, and not absent"
+    assert "trino-event-listener" not in secrets, "the listener is the Admin's now (#269)"
 
 
 def test_the_suite_starts_from_what_the_manifests_ship(settings: Settings) -> None:

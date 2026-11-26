@@ -398,10 +398,10 @@ class RealKubernetes:
 
         The file is restricted to the owning group **only where the deployment declares an
         `fsGroup`**, and that condition is the whole care here. These files can carry
-        credentials -- an Event Listener's properties will hold a password in a JDBC URL --
-        so a world-readable one is worth closing. But a Secret file is root-owned, so 0640
-        without a group that Trino belongs to is a file Trino cannot read, and
-        `event-listener.properties` unreadable is a coordinator that will not start. On a
+        credentials -- a raw file can hold anything an Admin writes into it -- so a
+        world-readable one is worth closing. But a Secret file is root-owned, so 0640 without a
+        group that Trino belongs to is a file Trino cannot read, and a configuration file Trino
+        cannot read is a coordinator that will not start. On a
         deployment with no `fsGroup` the mode is left alone: Apchi does not own that pod
         template, and hardening a file into an outage is worse than the exposure.
         """

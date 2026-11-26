@@ -22,21 +22,16 @@ from app.adapters.trino import Trino
 from app.config import Settings
 from app.pipeline.applies import TERMINAL
 from app.pipeline.auto_rollback import INCIDENT_MESSAGE
-from app.sections.event_listeners.generator import FILE_KEY
+from app.sections.resource_groups.generator import MANAGER_KEY
+from tests.conftest import stage_a_restart
 from tests.tier2.conftest import (
-    EVENT_LISTENER_SECRET,
+    RESOURCE_GROUPS_SECRET,
     ForwardedKubernetes,
     PortForward,
     running_apchi,
 )
 
 pytestmark = pytest.mark.tier2
-
-HTTP = {
-    "name": "audit",
-    "type": "http",
-    "properties": {"http-event-listener.connect-ingest-uri": "http://collector.invalid:8080/e"},
-}
 
 
 async def _settled(client: AsyncClient, apply_id: str, timeout: float = 900.0) -> dict:
@@ -60,7 +55,7 @@ async def test_a_rollout_that_exceeds_its_timeout_puts_the_configuration_back(
     impatient = settings.model_copy(update={"rollout_timeout_seconds": 1.0})
 
     async with running_apchi(impatient, forwarded_kubernetes, forward) as client:
-        await client.post("/api/v1/event-listeners", json=HTTP)
+        await stage_a_restart(client)
         started = await client.post("/api/v1/applies")
         record = await _settled(client, started.json()["id"])
 
@@ -75,11 +70,11 @@ async def test_a_rollout_that_exceeds_its_timeout_puts_the_configuration_back(
             await client.post("/api/v1/catalogs", json={"name": "blocked", "connector": "memory"})
         ).status_code == 409
 
-    # The durable half is back where the Snapshot left it: no listener was ever committed,
-    # so the rollback removed the one the failed Apply delivered.
-    assert FILE_KEY not in await real_kubernetes.read_secret(EVENT_LISTENER_SECRET)
+    # The durable half is back where the Snapshot left it: no resource group was ever
+    # committed, so the rollback removed the ones the failed Apply delivered.
+    assert MANAGER_KEY not in await real_kubernetes.read_secret(RESOURCE_GROUPS_SECRET)
     spec = await real_kubernetes.deployment_pod_spec("trino-coordinator")
-    assert "apchi-event-listener" not in [volume["name"] for volume in spec["volumes"]]
+    assert "apchi-resource-groups" not in [volume["name"] for volume in spec["volumes"]]
 
     assert (await e2e_client.get("/api/v1/snapshots")).json()["items"] == [], (
         "no Snapshot was created"
@@ -93,11 +88,11 @@ async def test_the_coordinator_comes_back_on_the_restored_configuration(
     forward: PortForward,
 ) -> None:
     """The timeout was Apchi giving up, not the Cluster failing. Once the rollouts settle,
-    the coordinator is serving what the Snapshot said -- which here is no listener at all."""
+    the coordinator is serving what the Snapshot said -- which here is no resource groups."""
     impatient = settings.model_copy(update={"rollout_timeout_seconds": 1.0})
 
     async with running_apchi(impatient, forwarded_kubernetes, forward) as client:
-        await client.post("/api/v1/event-listeners", json=HTTP)
+        await stage_a_restart(client)
         started = await client.post("/api/v1/applies")
         await _settled(client, started.json()["id"])
 
