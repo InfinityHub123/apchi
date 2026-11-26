@@ -78,6 +78,31 @@ async def test_worker_wiring_is_refused_and_names_what_owns_it(
     assert WORKER_WIRING[file][key] in response.text
 
 
+@pytest.mark.parametrize("key", ["management.user", "management.user.https-enabled"])
+async def test_a_fixed_management_user_is_refused_on_the_workers(
+    applying_client: AsyncClient, key: str
+) -> None:
+    """It replaces the identity of the drain Apchi sends a worker, which Trino then refuses
+    (measured on 483: 403), so every worker replacement would end its running tasks."""
+    response = await _put(applying_client, worker={"config.properties": {key: "metrics"}})
+
+    assert response.status_code == 422, response.text
+    assert f"{key} cannot be set on the workers" in response.text
+    assert "drain" in response.text
+
+
+async def test_a_fixed_management_user_is_the_coordinators_to_set(
+    applying_client: AsyncClient,
+) -> None:
+    """The coordinator is not drained, so nothing of Apchi's depends on its management
+    identity."""
+    response = await _put(
+        applying_client, coordinator={"config.properties": {"management.user": "metrics"}}
+    )
+
+    assert response.status_code == 200, response.text
+
+
 async def test_the_shutdown_grace_period_is_the_charts_because_it_must_fit_the_pods(
     applying_client: AsyncClient,
 ) -> None:
@@ -148,14 +173,20 @@ def test_a_workers_files_are_wiring_then_the_admins_keys() -> None:
     )
 
 
-def test_the_drain_rule_grants_apchis_identity_one_thing() -> None:
+def test_the_drain_is_apchis_alone_and_metrics_are_anyones() -> None:
     """Measured on 483: a worker with no rules refuses the drain request for every identity;
-    with this one it accepts Apchi's and refuses everyone else's, and runs queries as before."""
+    with these it accepts Apchi's and refuses everyone else's, and runs queries as before.
+    Read is what `/metrics` checks, and a worker is not exposed outside the cluster (#285)."""
     import json
 
     rules = json.loads(worker_rules(_plain()))
 
-    assert rules == {"system_information": [{"user": "^apchi$", "allow": ["write"]}]}
+    assert rules == {
+        "system_information": [
+            {"user": "^apchi$", "allow": ["read", "write"]},
+            {"allow": ["read"]},
+        ]
+    }
 
 
 def test_the_drain_rule_matches_the_identity_exactly_and_only_it() -> None:
@@ -265,6 +296,26 @@ async def test_a_worker_secret_edited_by_hand_is_put_back_with_a_worker_restart(
 
     await _apply(applying_client, "/api/v1/applies")
 
+    assert fake_kubernetes.secrets[WORKER_CONFIG_SECRET] == held
+    assert fake_kubernetes.restarted == [WORKER]
+
+
+async def test_an_upgraded_cluster_gets_the_metrics_rule_at_its_next_apply(
+    applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
+) -> None:
+    """Apchi never rewrites a Secret at startup, so a Cluster upgraded from 0.4 keeps the
+    rules that refused every scrape until an Apply delivers these (#285)."""
+    held = dict(fake_kubernetes.secrets[WORKER_CONFIG_SECRET])
+    fake_kubernetes.secrets[WORKER_CONFIG_SECRET] = {
+        **held,
+        WORKER_RULES_PATH: '{"system_information": [{"user": "^apchi$", "allow": ["write"]}]}\n',
+    }
+
+    review = (await applying_client.get("/api/v1/review")).json()
+    await _apply(applying_client, "/api/v1/applies")
+
+    assert review["cost"]["restarts_workers"] is True
+    assert review["cost"]["restarts_coordinator"] is False
     assert fake_kubernetes.secrets[WORKER_CONFIG_SECRET] == held
     assert fake_kubernetes.restarted == [WORKER]
 
