@@ -1,7 +1,7 @@
 import { test, expect, type Route } from "@playwright/test";
 import { CLUSTER, GRANTS, REVIEW_STAGED, SELECTORS, stubApi } from "./fixtures";
 
-/** Permissions, Resource groups and Event listeners. */
+/** Permissions and Resource groups. */
 
 test("permissions say plainly that grants do nothing while enforcement is off", async ({ page }) => {
   await stubApi(page);
@@ -107,20 +107,4 @@ test("a staged selector move is shown with where it was", async ({ page }) => {
   await expect(page.getByRole("row", { name: /was 4 global\.etl\.batch/ })).toBeVisible();
   await page.goto("/review");
   await expect(page.getByRole("region", { name: "Resource groups selectors" })).toContainText("position 4");
-});
-
-test("an event listener is edited with its type's rules, and costs a Rollout", async ({ page }) => {
-  let sent: unknown = null;
-  await stubApi(page, {
-    "PATCH /api/v1/event-listeners/*": (route: Route) => {
-      sent = route.request().postDataJSON();
-      return {};
-    },
-  });
-  await page.goto("/event-listeners");
-  await expect(page.getByRole("row", { name: /events_kafka/ })).toContainText("Rollout");
-  await page.getByRole("link", { name: "events_kafka" }).click();
-  await page.getByRole("textbox", { name: "kafka-event-listener.broker-endpoints", exact: true }).fill("broker-1:9092,broker-2:9092");
-  await page.getByRole("button", { name: "Stage changes" }).click();
-  await expect.poll(() => sent).toEqual({ properties: { "kafka-event-listener.broker-endpoints": "broker-1:9092,broker-2:9092" } });
 });

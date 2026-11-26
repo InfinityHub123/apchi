@@ -17,9 +17,6 @@ type Rules = S["PropertyRules"];
  * form shows only what this Catalog uses. A connector with no rules is pass-through: name and
  * value pairs, checked by Trino at Validation.
  */
-/** The two kinds of resource whose settings are a connector-style property map. */
-export type Target = "catalog" | "listener";
-
 export type PropertyResource = {
   name: string;
   properties?: Record<string, string>;
@@ -27,14 +24,12 @@ export type PropertyResource = {
 };
 
 export function CatalogForm({
-  target = "catalog",
   rules,
   connector,
   initial,
   onStaged,
   onCancel,
 }: {
-  target?: Target;
   rules: Rules | null;
   connector: string;
   initial?: PropertyResource;
@@ -93,20 +88,6 @@ export function CatalogForm({
     mutationFn: async () => {
       const properties = body();
       const cert = certificate === "" ? null : certificate;
-      const kind = rules === null ? customConnector : connector;
-      if (target === "listener") {
-        if (editing) {
-          await api
-            .PATCH("/api/v1/event-listeners/{name}", {
-              params: { path: { name: initial.name } },
-              body: { properties, type: rules === null ? customConnector : undefined },
-            })
-            .then(unwrap);
-          return initial.name;
-        }
-        await api.POST("/api/v1/event-listeners", { body: { name, type: kind, properties } }).then(unwrap);
-        return name;
-      }
       if (editing) {
         await api
           .PATCH("/api/v1/catalogs/{name}", {
@@ -138,7 +119,7 @@ export function CatalogForm({
 
   const preview = JSON.stringify(
     {
-      ...(editing ? {} : { name: name || "…", [target === "catalog" ? "connector" : "type"]: rules === null ? customConnector || "…" : connector }),
+      ...(editing ? {} : { name: name || "…", connector: rules === null ? customConnector || "…" : connector }),
       properties: Object.fromEntries(Object.entries(body()).map(([k, v]) => [k, secret(k) ? "••••••••" : v])),
       ...(certificate !== "" ? { certificate } : {}),
     },
@@ -157,7 +138,7 @@ export function CatalogForm({
       >
         <section className="card">
           <div className="chd">
-            <span className="ct">{target === "catalog" ? "Catalog" : "Event listener"}</span>
+            <span className="ct">Catalog</span>
           </div>
           <div className="cp" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             {!editing && (
@@ -166,29 +147,23 @@ export function CatalogForm({
                 <input
                   className="inp mono"
                   required
-                  pattern={target === "catalog" ? "[a-z][a-z0-9_]*" : undefined}
+                  pattern="[a-z][a-z0-9_]*"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder={target === "catalog" ? "finance_pg" : "events_kafka"}
+                  placeholder="finance_pg"
                 />
-                {target === "catalog" ? (
-                  <span className="hint">
-                    Lowercase letters, digits and _ · queried as <span className="mono">{name || "name"}.schema.table</span> ·
-                    can't be renamed later (a rename is a drop and a create)
-                  </span>
-                ) : (
-                  <span className="hint">Can't be renamed later.</span>
-                )}
+                <span className="hint">
+                  Lowercase letters, digits and _ · queried as <span className="mono">{name || "name"}.schema.table</span> ·
+                  can't be renamed later (a rename is a drop and a create)
+                </span>
               </label>
             )}
             {rules === null && (
               <label className="fl">
-                {target === "catalog" ? "Connector name" : "Listener type"}
-                <input className="inp mono" required value={customConnector} onChange={(e) => setCustomConnector(e.target.value)} placeholder={target === "catalog" ? "e.g. clickhouse" : "e.g. openlineage"} />
+                Connector name
+                <input className="inp mono" required value={customConnector} onChange={(e) => setCustomConnector(e.target.value)} placeholder="e.g. clickhouse" />
                 <span className="hint">
-                  {target === "catalog"
-                    ? "A connector installed on your Trino. A near miss of a known name is caught (“did you mean postgresql?”)."
-                    : "An event listener plugin installed on your Trino. Its settings pass through unchecked."}
+                  A connector installed on your Trino. A near miss of a known name is caught (“did you mean postgresql?”).
                 </span>
               </label>
             )}
@@ -200,8 +175,8 @@ export function CatalogForm({
 
         <section className="card">
           <div className="chd">
-            <span className="ct">{target === "catalog" ? "Connection" : "Settings"}</span>
-            {target === "catalog" ? <span className="pill g">Applies without restart</span> : <span className="pill a">Needs a Rollout</span>}
+            <span className="ct">Connection</span>
+            <span className="pill g">Applies without restart</span>
           </div>
           <div className="cp" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 14 }}>
             {shown.map((k) => {
@@ -268,7 +243,7 @@ export function CatalogForm({
                 </span>
               </div>
             )}
-            {target === "catalog" && WIRES_CERTIFICATE.has(connector) && (
+            {WIRES_CERTIFICATE.has(connector) && (
               <label className="fl" style={{ gridColumn: "1 / -1" }}>
                 Client certificate <span className="hint">Optional — Apchi wires the certificate and key in for you</span>
                 <select className="inp" value={certificate} onChange={(e) => setCertificate(e.target.value)}>
@@ -307,7 +282,7 @@ export function CatalogForm({
           </button>
           <span className="sp" />
           <button type="submit" className="btn pri" disabled={stage.isPending}>
-            {stage.isPending ? "Staging…" : editing ? "Stage changes" : target === "catalog" ? "Stage catalog" : "Stage listener"}
+            {stage.isPending ? "Staging…" : editing ? "Stage changes" : "Stage catalog"}
           </button>
         </div>
       </form>
@@ -322,11 +297,11 @@ export function CatalogForm({
             </span>
             <span className="pill x">2</span>
             <span>
-              <b>Validate</b> to check {target === "catalog" ? "it connects" : "Trino loads it"} (1–5 min).{target === "catalog" ? " There is no quicker per-catalog test." : ""}
+              <b>Validate</b> to check it connects (1–5 min). There is no quicker per-catalog test.
             </span>
             <span className="pill x">3</span>
             <span>
-              <b>Apply</b> {editing ? "changes it" : "creates it"} on the running cluster{target === "catalog" ? ", no restart" : " — with a Rollout: running queries will be terminated"}
+              <b>Apply</b> {editing ? "changes it" : "creates it"} on the running cluster, no restart
             </span>
           </div>
         </section>
@@ -335,7 +310,7 @@ export function CatalogForm({
             <span className="lab">API request</span>
             <span className="sp" />
             <span className="mono sm muted">
-              {editing ? "PATCH" : "POST"} /api/v1/{target === "catalog" ? "catalogs" : "event-listeners"}
+              {editing ? "PATCH" : "POST"} /api/v1/catalogs
               {editing ? `/${initial.name}` : ""}
             </span>
           </div>

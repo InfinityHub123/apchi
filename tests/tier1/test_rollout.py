@@ -20,17 +20,19 @@ from app.adapters.trino import Trino
 from app.config import Settings
 from app.main import create_app
 from app.pipeline.applies import TERMINAL
-from app.sections.event_listeners.generator import FILE_KEY, MOUNT_PATH
-from tests.conftest import FakeKubernetes, container_url
+from app.sections.resource_groups.generator import MANAGER_FILE, MANAGER_KEY, MANAGER_PATH
+from tests.conftest import (
+    RESTART_SECRET,
+    RESTART_SECTION,
+    RESTART_VOLUME,
+    FakeKubernetes,
+    change_the_restart,
+    container_url,
+    stage_a_restart,
+    unstage_the_restart,
+)
 
-LISTENER_SECRET = "trino-event-listener"
-VOLUME = "apchi-event-listener"
 CATALOG = {"name": "scratch", "connector": "memory", "properties": {}}
-HTTP = {
-    "name": "audit",
-    "type": "http",
-    "properties": {"http-event-listener.connect-ingest-uri": "http://collector:8080/events"},
-}
 
 
 async def _settled(client: AsyncClient, apply_id: str, timeout: float = 120.0) -> dict:
@@ -74,36 +76,33 @@ async def _running(
             await app.state.trino.drop_catalog(name)
 
 
-async def test_applying_a_listener_delivers_the_file_and_rolls_out(
+async def test_applying_a_restart_section_delivers_the_file_and_rolls_out(
     applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
 ) -> None:
-    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+    await stage_a_restart(applying_client)
 
     record = await _apply(applying_client)
 
     assert record["stage"] == "succeeded", record.get("failure_reason")
-    delivered = fake_kubernetes.secrets[LISTENER_SECRET][FILE_KEY]
-    assert "event-listener.name=http" in delivered
-    assert "http-event-listener.connect-ingest-uri=http://collector:8080/events" in delivered
+    assert fake_kubernetes.secrets[RESTART_SECRET][MANAGER_KEY] == MANAGER_FILE
     assert len(fake_kubernetes.restarts) == 1
 
 
-async def test_the_listener_file_is_mounted_when_one_is_configured(
+async def test_the_file_is_mounted_when_the_section_is_configured(
     applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
 ) -> None:
     """Trino refuses to start if a file it was told to read is missing, so the presence of
-    the mount is what says there is a listener at all."""
-    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+    the mount is what says the Section is configured at all."""
+    await stage_a_restart(applying_client)
 
     await _apply(applying_client)
 
-    assert fake_kubernetes.mounts[MOUNT_PATH] == {
-        "volume": VOLUME,
-        "secret": LISTENER_SECRET,
-        "key": FILE_KEY,
-        # Restricted, because an Event Listener's properties can carry a password in a
-        # JDBC URL -- and restricted only because this pod declares an fsGroup. See
-        # tests/tier1/test_credential_permissions.py for both halves of that.
+    assert fake_kubernetes.mounts[MANAGER_PATH] == {
+        "volume": RESTART_VOLUME,
+        "secret": RESTART_SECRET,
+        "key": MANAGER_KEY,
+        # Restricted only because this pod declares an fsGroup; see
+        # tests/tier1/test_credential_permissions.py for why that condition exists.
         "mode": CREDENTIAL_FILE_MODE,
     }
 
@@ -119,15 +118,15 @@ async def test_a_mount_apchi_adds_is_on_the_pod_spec_apchi_reads(
     invisible to Apchi -- a Cluster that cannot exist, because the API server has no way to
     accept a mount and not show it.
     """
-    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+    await stage_a_restart(applying_client)
 
     await _apply(applying_client)
 
     spec = await fake_kubernetes.deployment_pod_spec("trino-coordinator")
     container = next(c for c in spec["containers"] if c["name"] == "trino")
     mounted = {mount["mountPath"]: mount["name"] for mount in container["volumeMounts"]}
-    assert mounted.get(MOUNT_PATH) == VOLUME
-    assert any(volume["name"] == VOLUME for volume in spec["volumes"]), (
+    assert mounted.get(MANAGER_PATH) == RESTART_VOLUME
+    assert any(volume["name"] == RESTART_VOLUME for volume in spec["volumes"]), (
         "a mount naming a volume the pod template does not declare is one the API server "
         "would reject outright"
     )
@@ -138,32 +137,32 @@ async def test_unmounting_takes_the_mount_off_the_pod_spec_too(
 ) -> None:
     """The other half: a stale mount left on the template would make a removed Section look
     configured to the preconditions, which is the same failure facing the other way."""
-    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+    await stage_a_restart(applying_client)
     await _apply(applying_client)
 
-    await applying_client.delete("/api/v1/event-listeners/audit")
+    await unstage_the_restart(applying_client)
     await _apply(applying_client)
 
     spec = await fake_kubernetes.deployment_pod_spec("trino-coordinator")
     container = next(c for c in spec["containers"] if c["name"] == "trino")
-    assert MOUNT_PATH not in {mount["mountPath"] for mount in container["volumeMounts"]}
-    assert not any(volume["name"] == VOLUME for volume in spec["volumes"])
+    assert MANAGER_PATH not in {mount["mountPath"] for mount in container["volumeMounts"]}
+    assert not any(volume["name"] == RESTART_VOLUME for volume in spec["volumes"])
 
 
-async def test_removing_the_listener_unmounts_the_file(
+async def test_emptying_the_section_unmounts_the_file(
     applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
 ) -> None:
     """A Secret with no key becomes a *directory* under a subPath mount, and Trino dies on
     it with "Is a directory". Absence has to be the mount being gone."""
-    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+    await stage_a_restart(applying_client)
     await _apply(applying_client)
 
-    await applying_client.delete("/api/v1/event-listeners/audit")
+    await unstage_the_restart(applying_client)
     record = await _apply(applying_client)
 
     assert record["stage"] == "succeeded", record.get("failure_reason")
-    assert MOUNT_PATH not in fake_kubernetes.mounts
-    assert fake_kubernetes.secrets[LISTENER_SECRET] == {}
+    assert MANAGER_PATH not in fake_kubernetes.mounts
+    assert fake_kubernetes.secrets[RESTART_SECRET] == {}
 
 
 async def test_a_catalogs_only_apply_restarts_nothing(
@@ -184,7 +183,7 @@ async def test_a_candidate_touching_both_restarts_once(
     applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
 ) -> None:
     await applying_client.post("/api/v1/catalogs", json=CATALOG)
-    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+    await stage_a_restart(applying_client)
 
     record = await _apply(applying_client)
 
@@ -192,12 +191,12 @@ async def test_a_candidate_touching_both_restarts_once(
     assert len(fake_kubernetes.restarts) == 1
 
 
-async def test_an_unchanged_listener_restarts_nothing(
+async def test_an_unchanged_section_restarts_nothing(
     applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
 ) -> None:
-    """Otherwise every Apply on a Cluster that has a listener would terminate every
+    """Otherwise every Apply on a Cluster that has resource groups would terminate every
     running query for nothing."""
-    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+    await stage_a_restart(applying_client)
     await _apply(applying_client)
     fake_kubernetes.restarts.clear()
 
@@ -216,23 +215,23 @@ async def test_the_record_says_whether_this_apply_restarted_trino(
     await applying_client.post("/api/v1/catalogs", json=CATALOG)
     quiet = await _apply(applying_client)
 
-    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+    await stage_a_restart(applying_client)
     noisy = await _apply(applying_client)
 
     assert quiet["rolled_out"] is False
     assert noisy["rolled_out"] is True
 
 
-async def test_removing_the_only_listener_is_a_change_and_restarts(
+async def test_emptying_the_section_is_a_change_and_restarts(
     applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
 ) -> None:
-    """Taking the listener away has to reach Trino just as adding it did -- the file is
+    """Taking the groups away has to reach Trino just as adding them did -- the file is
     read once per process, so the pod that still has it keeps using it."""
-    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+    await stage_a_restart(applying_client)
     await _apply(applying_client)
     fake_kubernetes.restarts.clear()
 
-    await applying_client.delete("/api/v1/event-listeners/audit")
+    await unstage_the_restart(applying_client)
     record = await _apply(applying_client)
 
     assert record["stage"] == "succeeded", record.get("failure_reason")
@@ -240,18 +239,15 @@ async def test_removing_the_only_listener_is_a_change_and_restarts(
     assert len(fake_kubernetes.restarts) == 1
 
 
-async def test_editing_a_listener_in_place_restarts(
+async def test_editing_a_group_in_place_restarts(
     applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
 ) -> None:
     """The decision is what changed, not whether the Section gained or lost a resource."""
-    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+    await stage_a_restart(applying_client)
     await _apply(applying_client)
     fake_kubernetes.restarts.clear()
 
-    await applying_client.patch(
-        "/api/v1/event-listeners/audit",
-        json={"properties": {"http-event-listener.connect-ingest-uri": "http://other:9090/e"}},
-    )
+    await change_the_restart(applying_client)
     record = await _apply(applying_client)
 
     assert record["rolled_out"] is True
@@ -262,7 +258,7 @@ async def test_the_rollout_is_its_own_stage_in_the_history(
     applying_client: AsyncClient,
 ) -> None:
     """So a client watching the stream sees the restart rather than a long silence."""
-    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+    await stage_a_restart(applying_client)
 
     record = await _apply(applying_client)
 
@@ -281,25 +277,25 @@ async def test_the_restart_reason_names_the_apply_and_the_section(
 ) -> None:
     """An Admin looking at why the coordinator restarted should find the answer on the
     Deployment rather than in Apchi's logs."""
-    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+    await stage_a_restart(applying_client)
 
     record = await _apply(applying_client)
 
     assert record["id"] in fake_kubernetes.restarts[0]
-    assert "event_listeners" in fake_kubernetes.restarts[0]
+    assert RESTART_SECTION in fake_kubernetes.restarts[0]
 
 
 async def test_a_verified_apply_commits_a_snapshot_holding_both_sections(
     applying_client: AsyncClient,
 ) -> None:
     await applying_client.post("/api/v1/catalogs", json=CATALOG)
-    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+    await stage_a_restart(applying_client)
 
     record = await _apply(applying_client)
 
     snapshot = (await applying_client.get(f"/api/v1/snapshots/{record['snapshot']}")).json()
     assert list(snapshot["sections"]["catalogs"]) == ["scratch"]
-    assert list(snapshot["sections"]["event_listeners"]) == ["audit"]
+    assert "global" in snapshot["sections"][RESTART_SECTION]
 
 
 async def test_verification_runs_through_a_coordinator_that_really_restarts(
@@ -316,7 +312,7 @@ async def test_verification_runs_through_a_coordinator_that_really_restarts(
     fake_kubernetes.restarts_for_real = True
 
     async with _running(settings, fake_kubernetes, trino_cluster, trino_validation) as client:
-        await client.post("/api/v1/event-listeners", json=HTTP)
+        await stage_a_restart(client)
 
         record = await _apply(client)
 
@@ -335,7 +331,7 @@ async def test_a_coordinator_that_never_comes_back_fails_the_apply(
     quick = settings.model_copy(update={"rollout_timeout_seconds": 1.0})
 
     async with _running(quick, fake_kubernetes, trino_cluster, trino_validation) as client:
-        await client.post("/api/v1/event-listeners", json=HTTP)
+        await stage_a_restart(client)
 
         record = await _apply(client)
 
@@ -356,7 +352,7 @@ async def test_a_rollout_failure_is_rolled_back(
     quick = settings.model_copy(update={"rollout_timeout_seconds": 1.0})
 
     async with _running(quick, fake_kubernetes, trino_cluster, trino_validation) as client:
-        await client.post("/api/v1/event-listeners", json=HTTP)
+        await stage_a_restart(client)
 
         record = await _apply(client)
 
@@ -378,7 +374,7 @@ async def _snapshots(
 async def test_the_rollout_stage_is_streamed(applying_client: AsyncClient, stage: str) -> None:
     """The stream is a view over the durable record, so a client that reconnects sees the
     rollout it missed."""
-    await applying_client.post("/api/v1/event-listeners", json=HTTP)
+    await stage_a_restart(applying_client)
     started = await applying_client.post("/api/v1/applies")
     apply_id = started.json()["id"]
     await _settled(applying_client, apply_id)

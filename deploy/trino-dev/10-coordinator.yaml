@@ -114,6 +114,12 @@ spec:
             - {name: server-config, mountPath: /etc/trino/log.properties, subPath: log.properties}
             - {name: server-config, mountPath: /etc/trino/catalog-store.properties, subPath: catalog-store.properties}
             - {name: server-config, mountPath: /etc/trino/access-control.properties, subPath: access-control.properties}
+            # The same Secret, whole, for the one file of it that is optional: the Event
+            # Listener, which config.properties names when the Admin configures one. A subPath
+            # mount of a key the Secret does not hold is a pod that cannot start, where a
+            # directory without the file is simply no listener. Fixed, like the rest: Apchi
+            # never adds or removes a mount for it.
+            - {name: server-config, mountPath: /etc/trino/apchi, readOnly: true}
             # Apchi-managed. Whole volume, never subPath: a subPath mount is frozen at pod
             # creation, so the kubelet would never project a rewritten rules file and a
             # permission change would be reported as applied and never arrive (§16).
@@ -157,10 +163,9 @@ spec:
         # it and creates `etc`, a symlink to /etc/trino, at its root -- so the whole data
         # directory has to be writable, not only var/. The image's own belongs to uid 1000.
         - {name: data, emptyDir: {}}
-        # No volume for the resource-groups or event-listener Secrets. For both of them the
-        # absence of the mount is how "none configured" is expressed -- Trino refuses to
-        # start if a file it was told to read is missing -- so Apchi adds and removes those
-        # volumes itself. They are the only part of this pod template Apchi writes.
+        # No volume for the resource-groups Secret. The absence of the mount is how "none
+        # configured" is expressed -- Trino refuses to start if a file it was told to read is
+        # missing -- so Apchi adds and removes that volume itself, with the Admin's Raw Files.
 ---
 # One Service, selecting the coordinator only. It is both the client endpoint and the
 # discovery URI every node registers with, so a worker that restarts finds the coordinator

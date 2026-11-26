@@ -46,16 +46,34 @@ export async function sendRawFile(method: "PUT" | "DELETE", path: string, conten
 export type ServerConfiguration = S["ServerConfiguration"];
 export type Role = "coordinator" | "worker";
 export const FILES = ["config.properties", "node.properties", "log.properties"] as const;
-export type FileName = (typeof FILES)[number];
-export type RoleFiles = Record<FileName, Record<string, string>>;
+/**
+ * The coordinator's Event Listener: where Trino sends query events (#269). A file of the
+ * coordinator's only -- a worker sends none -- and empty means no listener.
+ */
+export const LISTENER_FILE = "event-listener.properties";
+export const LISTENER_NAME = "event-listener.name";
+export type FileName = (typeof FILES)[number] | typeof LISTENER_FILE;
+export type RoleFiles = Partial<Record<FileName, Record<string, string>>>;
+
+/** The files each role has, in the order the screen shows them. */
+export const filesOf = (role: Role): FileName[] => (role === "coordinator" ? [...FILES, LISTENER_FILE] : [...FILES]);
 
 /** Every role and file present, empty where nothing is set -- the shape the screen edits. */
 export function filled(configuration: ServerConfiguration | undefined): Record<Role, RoleFiles> {
   const role = (r: Role): RoleFiles => {
-    const files = (configuration?.[r] ?? {}) as Partial<Record<FileName, Record<string, string>>>;
-    return Object.fromEntries(FILES.map((f) => [f, { ...(files[f] ?? {}) }])) as RoleFiles;
+    const files = (configuration?.[r] ?? {}) as RoleFiles;
+    return Object.fromEntries(filesOf(r).map((f) => [f, { ...(files[f] ?? {}) }])) as RoleFiles;
   };
   return { coordinator: role("coordinator"), worker: role("worker") };
+}
+
+/** What each curated listener accepts, so the form suggests the properties Apchi requires. */
+export function useEventListenerTypes() {
+  return useQuery({
+    queryKey: ["admin", "server-configuration", "event-listener-types"],
+    queryFn: () => api.GET("/api/v1/admin/server-configuration/event-listener-types").then(unwrap),
+    staleTime: Infinity,
+  });
 }
 
 export function useServerConfiguration() {
@@ -74,5 +92,5 @@ export function useRenderedFiles() {
 
 /** Replaces every property of both roles, as the PUT does. */
 export function saveServerConfiguration(configuration: Record<Role, RoleFiles>) {
-  return api.PUT("/api/v1/admin/server-configuration", { body: configuration }).then(unwrap);
+  return api.PUT("/api/v1/admin/server-configuration", { body: configuration as ServerConfiguration }).then(unwrap);
 }

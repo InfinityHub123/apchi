@@ -192,7 +192,7 @@ class Engine:
 
         Both halves matter. A Section that needs no restart never causes one, and a
         rollout-required Section that did not change does not either -- otherwise every
-        Apply on a Cluster with an Event Listener configured would terminate every running
+        Apply on a Cluster with resource groups configured would terminate every running
         query for nothing.
         """
         return (

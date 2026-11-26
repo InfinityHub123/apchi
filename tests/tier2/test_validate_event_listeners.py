@@ -1,12 +1,12 @@
-"""Validating Event Listeners against a real ephemeral coordinator.
+"""Validating the Admin's Event Listener against a real ephemeral coordinator (#269).
 
-Tier 1 proves Apchi asks for the right pod. Only a real Trino proves the asking works: that
-a listener configuration it will not accept becomes a pod that will not start, and that
-Apchi turns that into a Validation failure rather than a coordinator that never comes back.
+Tier 1 proves Apchi puts the listener in front of the probe. Only a real Trino proves that a
+listener it will not load becomes a probe that will not start, and that an Admin Apply turns
+that into a refusal rather than a coordinator that never comes back.
 
-The Kafka listener is the instrument. `terminate-on-initialization-failure` defaults to
-true, so brokers that cannot be reached make Trino refuse to start -- which needs no Kafka
-and no extra infrastructure to arrange.
+The Kafka listener is the instrument. `terminate-on-initialization-failure` defaults to true,
+so brokers that cannot be reached make Trino refuse to start -- which needs no Kafka and no
+extra infrastructure to arrange.
 """
 
 import asyncio
@@ -21,81 +21,58 @@ from tests.tier2.conftest import ForwardedKubernetes
 
 pytestmark = pytest.mark.tier2
 
+SERVER_CONFIGURATION = "/api/v1/admin/server-configuration"
 UNREACHABLE_KAFKA = {
-    "name": "pipeline",
-    "type": "kafka",
-    "properties": {
-        "kafka-event-listener.broker-endpoints": "nowhere.invalid:9093",
-        "kafka-event-listener.created-event.topic": "created",
-        "kafka-event-listener.completed-event.topic": "completed",
-        "kafka-event-listener.client-id": "apchi-tier2",
-    },
+    "event-listener.name": "kafka",
+    "kafka-event-listener.broker-endpoints": "nowhere.invalid:9093",
+    "kafka-event-listener.created-event.topic": "created",
+    "kafka-event-listener.completed-event.topic": "completed",
+    "kafka-event-listener.client-id": "apchi-tier2",
 }
 HTTP = {
-    "name": "audit",
-    "type": "http",
-    "properties": {"http-event-listener.connect-ingest-uri": "http://collector.invalid:8080/e"},
+    "event-listener.name": "http",
+    "http-event-listener.connect-ingest-uri": "http://collector.invalid:8080/e",
 }
 
 
-async def _validation(client: AsyncClient, timeout: float = 600.0) -> dict:
-    started = await client.post("/api/v1/validations")
-    assert started.status_code == 202
-    deadline = asyncio.get_running_loop().time() + timeout
+async def _admin_apply(client: AsyncClient, listener: dict[str, str]) -> dict:
+    written = await client.put(
+        SERVER_CONFIGURATION, json={"coordinator": {"event-listener.properties": listener}}
+    )
+    assert written.status_code == 200, written.text
+    started = await client.post("/api/v1/admin/applies", json={})
+    assert started.status_code == 202, started.text
+    deadline = asyncio.get_running_loop().time() + 900
     record: dict = {}
     while asyncio.get_running_loop().time() < deadline:
-        record = (await client.get(f"/api/v1/validations/{started.json()['id']}")).json()
-        if record["outcome"] != "running":
+        record = (await client.get(f"/api/v1/applies/{started.json()['id']}")).json()
+        if record["stage"] in TERMINAL:
             return record
         await asyncio.sleep(1)
-    raise AssertionError("Validation never finished")
+    raise AssertionError(f"Apply never settled; last={record.get('stage')}")
 
 
-async def test_a_listener_a_real_trino_accepts_passes_validation(
+async def test_a_listener_a_real_trino_accepts_is_probed_and_applied(
     e2e_client: AsyncClient, forwarded_kubernetes: ForwardedKubernetes
 ) -> None:
     """The probe starts with the listener file in place, and starting is the check."""
-    await e2e_client.post("/api/v1/event-listeners", json=HTTP)
+    record = await _admin_apply(e2e_client, HTTP)
 
-    verdict = await _validation(e2e_client)
-
-    assert verdict["outcome"] == "passed", verdict["failures"]
-    assert len(forwarded_kubernetes.created_pods) == 1
+    assert record["stage"] == "succeeded", record.get("failure_reason")
+    assert forwarded_kubernetes.created_pods, "the listener was never probed"
 
 
-async def test_a_kafka_listener_with_unreachable_brokers_fails_validation(
-    e2e_client: AsyncClient,
-) -> None:
-    """The failure this whole mode exists to catch. Without it the Apply would restart the
-    coordinator, and the coordinator would not come back."""
-    await e2e_client.post("/api/v1/event-listeners", json=UNREACHABLE_KAFKA)
-
-    verdict = await _validation(e2e_client)
-
-    assert verdict["outcome"] == "failed"
-    failure = verdict["failures"][0]
-    assert failure["resource"] == "pipeline", "the Operator is told which listener"
-    assert failure["reason"], "and given the reason, which exists only in the pod's log"
-
-
-async def test_an_apply_with_a_rejected_listener_never_touches_the_cluster(
+async def test_a_kafka_listener_with_unreachable_brokers_never_reaches_the_cluster(
     e2e_client: AsyncClient, real_kubernetes: RealKubernetes
 ) -> None:
-    """Validation runs before anything is touched, so the coordinator is never restarted for
-    a configuration Trino would have refused."""
+    """The failure this exists to catch. Without the probe the Apply would restart the
+    coordinator, and the coordinator would not come back."""
     before = await real_kubernetes.rollout_state("trino-coordinator")
-    await e2e_client.post("/api/v1/event-listeners", json=UNREACHABLE_KAFKA)
 
-    started = await e2e_client.post("/api/v1/applies")
-    deadline = asyncio.get_running_loop().time() + 600
-    record: dict = {}
-    while asyncio.get_running_loop().time() < deadline:
-        record = (await e2e_client.get(f"/api/v1/applies/{started.json()['id']}")).json()
-        if record["stage"] in TERMINAL:
-            break
-        await asyncio.sleep(1)
+    record = await _admin_apply(e2e_client, UNREACHABLE_KAFKA)
 
-    assert record["stage"] == "failed"
+    assert record["stage"] == "failed", record
+    assert record["failure_reason"], "the reason exists only in the probe's log"
     assert record["rollback"] is None, "nothing was touched, so nothing is owed"
     after = await real_kubernetes.rollout_state("trino-coordinator")
     assert after.generation == before.generation, "the pod template was never patched"
@@ -104,10 +81,8 @@ async def test_an_apply_with_a_rejected_listener_never_touches_the_cluster(
 async def test_the_probe_and_its_secret_are_both_gone_afterwards(
     e2e_client: AsyncClient, real_kubernetes: RealKubernetes
 ) -> None:
-    """A probe now brings a Secret with it, and an orphan of either kind is a leak."""
-    await e2e_client.post("/api/v1/event-listeners", json=HTTP)
-
-    await _validation(e2e_client)
+    """A probe brings a Secret with it, and an orphan of either kind is a leak."""
+    await _admin_apply(e2e_client, HTTP)
 
     leftover = await real_kubernetes.delete_secrets(VALIDATION_SELECTOR)
     assert leftover == [], f"validation Secrets left behind: {leftover}"

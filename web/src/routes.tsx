@@ -17,7 +17,6 @@ const screen = (load: () => Promise<object>, name: string): Pick<RouteObject, "l
 
 const overview = screen(() => import("./screens/Overview"), "OverviewScreen");
 const catalogs = screen(() => import("./screens/Catalogs"), "CatalogsScreen");
-const listeners = screen(() => import("./screens/EventListeners"), "EventListenersScreen");
 const applies = screen(() => import("./screens/Applies"), "AppliesScreen");
 
 export const routes: RouteObject[] = [
@@ -31,8 +30,6 @@ export const routes: RouteObject[] = [
   { path: "certificate-mapping", ...screen(() => import("./screens/CertMapping"), "CertMappingScreen") },
   { path: "permissions", ...screen(() => import("./screens/Permissions"), "PermissionsScreen") },
   { path: "resource-groups", ...screen(() => import("./screens/ResourceGroups"), "ResourceGroupsScreen") },
-  { path: "event-listeners", ...listeners },
-  { path: "event-listeners/:name", ...listeners },
   { path: "snapshots", ...screen(() => import("./screens/Snapshots"), "SnapshotsScreen") },
   { path: "drift", ...screen(() => import("./screens/Drift"), "DriftScreen") },
   { path: "applies", ...applies },

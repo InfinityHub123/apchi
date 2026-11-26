@@ -25,7 +25,6 @@ from httpx import AsyncClient
 from tests.certificates import bundle
 
 CATALOGS = "/api/v1/catalogs"
-LISTENERS = "/api/v1/event-listeners"
 
 #: TLS on the connection, because a client certificate does nothing without it and the
 #: Section refuses the pair otherwise -- which is correct, and not what this file is about.
@@ -161,35 +160,3 @@ async def test_the_name_is_immutable(client: AsyncClient) -> None:
     response = await client.patch(f"{CATALOGS}/finance_pg", json={"name": "something_else"})
 
     assert response.status_code == 422, response.text
-
-
-# --- the consistency §19 asked for --------------------------------------------------------
-
-
-async def test_both_patch_endpoints_agree(client: AsyncClient) -> None:
-    """§19 asks for semantics *consistent across every endpoint*, which is a different and
-    weaker-to-forget promise than each one being correct on its own.
-
-    Event Listeners have no clearable field, so what is checked is the shape of the rules:
-    omitted leaves alone, present replaces wholesale, null on an unclearable field is refused
-    the same way with the same detail.
-    """
-    created = await client.post(
-        LISTENERS,
-        json={
-            "name": "audit_http",
-            "type": "http",
-            "properties": {"http-event-listener.connect-ingest-uri": "http://sink.internal"},
-        },
-    )
-    assert created.status_code == 201, created.text
-
-    unchanged = await client.patch(f"{LISTENERS}/audit_http", json={})
-    refused = await client.patch(f"{LISTENERS}/audit_http", json={"type": None})
-    cleared = await client.patch(f"{LISTENERS}/audit_http", json={"properties": None})
-
-    assert unchanged.status_code == 200, unchanged.text
-    assert unchanged.json() == created.json()
-    assert refused.status_code == 422, refused.text
-    assert refused.json()["details"] == [{"property": "type", "problem": "cannot be cleared"}]
-    assert cleared.json()["details"] == [{"property": "properties", "problem": "cannot be cleared"}]

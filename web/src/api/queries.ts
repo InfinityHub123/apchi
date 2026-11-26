@@ -126,10 +126,5 @@ export function useSchemas() {
     queryFn: () => api.GET("/api/v1/catalogs/connectors").then(unwrap),
     staleTime: Infinity,
   });
-  const listeners = useQuery({
-    queryKey: ["schemas", "listeners"],
-    queryFn: () => api.GET("/api/v1/event-listeners/types").then(unwrap),
-    staleTime: Infinity,
-  });
-  return { connectors: connectors.data, listeners: listeners.data };
+  return { connectors: connectors.data };
 }

@@ -163,13 +163,13 @@ async def test_every_problem_is_reported_not_just_the_first(client: AsyncClient)
         CANDIDATE,
         json=_document(
             catalogs={"no_connector": {"properties": {}}, "not_an_object": "a string"},
-            event_listeners={"empty": {}},
+            resource_groups={"global": {"hard_concurrency_limit": "lots"}},
         ),
     )
 
     assert response.status_code == 422, response.json()
     resources = {d["resource"] for d in response.json()["details"]}
-    assert resources == {"no_connector", "not_an_object", "empty"}
+    assert resources == {"no_connector", "not_an_object", "global"}
 
 
 async def test_nothing_is_stored_when_anything_is_wrong(client: AsyncClient) -> None:

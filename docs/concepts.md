@@ -155,7 +155,9 @@ configuration — never about when your edit takes effect. Everything waits for 
 | Client certificates | A new file in a directory Trino already has mounted | None |
 | Certificate mapping | A file read once, when the authenticator is built | **Coordinator restart** |
 | Resource groups | A file read once, at startup | **Coordinator restart** |
-| Event listeners | A file read once, at startup | **Coordinator restart** |
+
+The Event Listener is not a Section: it is the Admin's, part of the coordinator's Server
+Configuration (ADR-0011), and restarts the coordinator the same way.
 
 A single apply mixing both kinds restarts once, at the end, after everything is delivered.
 

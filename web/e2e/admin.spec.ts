@@ -156,6 +156,7 @@ test("saving sends both roles whole, and a refusal says why in Apchi's words", a
       "config.properties": { "query.max-execution-time": "2h", "internal-communication.shared-secret": "s3cret-shared" },
       "node.properties": {},
       "log.properties": {},
+      "event-listener.properties": {},
     },
     worker: {
       "config.properties": { "task.concurrency": "16" },
@@ -209,4 +210,55 @@ test("admin values counts the properties set on each role and links to them", as
   await expect(page.getByText("coordinator: 2 · workers: 1")).toBeVisible();
   await page.locator('a[href="/admin/server-configuration"]').filter({ hasText: "Manage" }).click();
   await expect(page).toHaveURL(/\/admin\/server-configuration$/);
+});
+
+test("an event listener is the Admin's: a plugin, the properties it requires, and the pointer Apchi writes", async ({ page }) => {
+  type Sent = { coordinator: Record<string, unknown>; worker: Record<string, unknown> };
+  let sent = null as Sent | null;
+  await stubApi(page, {
+    ...ADMIN_STUBS,
+    "PUT /api/v1/admin/server-configuration": (route: Route) => {
+      sent = route.request().postDataJSON();
+      return sent;
+    },
+  });
+  await page.goto("/admin/server-configuration");
+  const card = page.getByRole("region", { name: "Event listener" });
+  await expect(card).toContainText("None is configured");
+  await expect(card).toContainText("Restarts the coordinator");
+
+  await card.getByLabel("Event listener plugin").selectOption("http");
+  await expect(card.getByRole("status")).toContainText("http-event-listener.connect-ingest-uri");
+  await card.getByRole("button", { name: "http-event-listener.connect-ingest-uri" }).click();
+  await card.getByLabel("event-listener.properties value").fill("http://collector:8080/events");
+  await card.getByRole("button", { name: "Add" }).click();
+  await expect(card.getByRole("status")).toHaveCount(0);
+  await page.getByRole("button", { name: "Save both roles" }).click();
+
+  await expect.poll(() => sent?.coordinator["event-listener.properties"]).toEqual({
+    "event-listener.name": "http",
+    "http-event-listener.connect-ingest-uri": "http://collector:8080/events",
+  });
+  expect(sent?.worker).not.toHaveProperty("event-listener.properties");
+});
+
+test("a workers' tab has no event listener: a worker sends no query events", async ({ page }) => {
+  await stubApi(page, ADMIN_STUBS);
+  await page.goto("/admin/server-configuration");
+  await page.getByRole("tab", { name: "Workers" }).click();
+
+  await expect(page.getByRole("region", { name: "Event listener" })).toHaveCount(0);
+});
+
+test("a plugin Apchi has no schema for is named by hand and left to Trino", async ({ page }) => {
+  await stubApi(page, ADMIN_STUBS);
+  await page.goto("/admin/server-configuration");
+  const card = page.getByRole("region", { name: "Event listener" });
+
+  await card.getByLabel("Event listener plugin").selectOption("__other");
+  await card.getByLabel("Event listener plugin name").fill("openlineage");
+
+  await expect(card).toContainText("checked by Trino at the next Apply");
+  await card.getByRole("button", { name: "Remove the listener" }).click();
+  await expect(card).toContainText("None is configured");
 });

@@ -224,7 +224,6 @@ async def test_an_import_is_one_act(as_operator: AsyncClient) -> None:
             "certificate_mapping": {},
             "permissions": {},
             "resource_groups": {},
-            "event_listeners": {},
         },
         "admin": None,
     }

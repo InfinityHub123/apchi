@@ -9,9 +9,9 @@ test("each change names its author from the audit, or says it does not know", as
 
   await expect(page.getByRole("region", { name: "Catalog finance_pg" })).toContainText("staged by jo");
   await expect(page.getByRole("region", { name: "Resource groups global.etl.batch" })).toContainText("staged by you");
-  const kafka = page.getByRole("region", { name: "Event listener events_kafka" });
-  await expect(kafka).toContainText("author not known");
-  await expect(kafka).toContainText("Apchi does not guess");
+  const unknown = page.getByRole("region", { name: "Resource groups global.adhoc" });
+  await expect(unknown).toContainText("author not known");
+  await expect(unknown).toContainText("Apchi does not guess");
 });
 
 test("a change that arrived with a Section Revert is credited to the revert", async ({ page }) => {
@@ -54,7 +54,7 @@ test("Reset on one change sends just that resource", async ({ page }) => {
 test("the Rollout card names a Section that is in it with nothing staged", async ({ page }) => {
   await stubApi(page);
   await page.goto("/review");
-  await expect(page.getByText("The Rollout is for 3 Sections")).toBeVisible();
+  await expect(page.getByText("The Rollout is for 2 Sections")).toBeVisible();
   await expect(page.getByText("Nothing is staged here.")).toBeVisible();
   await expect(page.getByRole("link", { name: "Check drift" })).toBeVisible();
 });
@@ -64,10 +64,10 @@ test("the filters narrow to Rollout changes and to the caller's own", async ({ p
   await page.goto("/review");
   await page.getByRole("button", { name: /^Rollout/ }).click();
   await expect(page.getByRole("region", { name: /^Catalog / })).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Event listener events_kafka" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Resource groups global.adhoc" })).toBeVisible();
   await page.getByRole("button", { name: /^Staged by you/ }).click();
   await expect(page.getByRole("region", { name: "Resource groups global.etl.batch" })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Event listener events_kafka" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Resource groups global.adhoc" })).toHaveCount(0);
 });
 
 test("the Candidate's size is shown against the limit the API reports", async ({ page }) => {

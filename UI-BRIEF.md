@@ -64,7 +64,7 @@ failed request, because the refusal is deliberately identical in `password` and 
   degrades on the way: a signature that does not verify, a claim that is unacceptable, a
   callback replayed from somebody's logs are all plain refusals, never a partial sign-in. The
   role comes from a group claim, and a mapping that matches nothing yields **Operator** — the
-  safe failure being a person who can configure the six Sections but not reach `/admin/*`.
+  safe failure being a person who can configure the five Sections but not reach `/admin/*`.
 
 ### What the interface actually knows about a person
 
@@ -177,9 +177,9 @@ mean different things. Only the words are fixed; nothing about how they are pres
 
 ---
 
-## 5. The six Sections, and what each costs
+## 5. The five Sections, and what each costs
 
-The Candidate is divided into six Sections. **The critical property is that they do not cost
+The Candidate is divided into five Sections. **The critical property is that they do not cost
 the same to apply.** Three can be applied to a running cluster with no interruption; three
 require restarting the coordinator, which kills every query in flight.
 
@@ -190,7 +190,6 @@ require restarting the coordinator, which kills every query in flight.
 | **Permissions** | Who may do what: a Trino Identity, a catalog, optionally a schema and table, and a set of privileges: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `OWNERSHIP`, `GRANT_SELECT`. Operators never see the underlying authorization JSON. | **No restart.** |
 | **Certificate mapping** | A single regular expression that turns the certificate a caller presents into a Trino Identity. One controlled pattern, not a per-user table. | **Rollout.** Read only at coordinator start-up. |
 | **Resource groups** | A tree of groups with CPU, memory and concurrency limits, plus an *ordered* list of selectors that route queries into them. First matching selector wins, so order is meaningful. | **Rollout.** The file is parsed once at start-up. |
-| **Event listeners** | Where Trino sends query events — an HTTP endpoint, a Kafka topic. Typed with pass-through properties. | **Rollout.** |
 
 The API reports which Sections an Apply's restart is actually for, so this does not have to be
 read off the table above. A Section can also appear there with **nothing staged in it**, which
@@ -244,7 +243,6 @@ needs to know that three of their six edits are free and one costs every running
   inside a configurable window (default 30 days) and is recomputed on every read.
 - **A certificate mapping** is one regular expression, a replacement template (`$1` refers to a
   capture group), and a case-folding choice.
-- **An event listener** has a name, a type, and a property bag.
 
 ---
 
@@ -298,18 +296,18 @@ Two questions have to be answerable, and they are different questions:
   tell anyone whether a broker address moved or the entire topic list was replaced, and an
   operator about to apply needs to know which.
 
-A Candidate can hold anything from one change to several dozen across all six Sections, and the
+A Candidate can hold anything from one change to several dozen across all five Sections, and the
 second question is only asked about a few of them. Whether that is one view or two, and how a
 person moves between them, is open.
 
 One content rule rather than a layout one: a diff is read to find what changed, so fields
 identical on both sides are noise.
 
-### 6.3 Editing each of the six Sections
+### 6.3 Editing each of the five Sections
 
 Create, edit and delete for each, shaped by the data in §5. What each one demands:
 
-- **Catalogs and event listeners** carry an open-ended property bag. Some types have a schema
+- **Catalogs** carry an open-ended property bag. Some types have a schema
   Apchi knows and validates; others accept arbitrary keys and pass them through unchecked. Both
   cases have to be editable, and a person should be able to tell which one they are in.
 - **Resource group selectors are ordered, and the order is the logic** — first match wins. A
@@ -514,7 +512,7 @@ produced, and a detail.
 
 Nine facts about that data shape any view of it:
 
-- **Categories** are the six Sections plus `admin`, `pipeline` and `audit`. Admin changes are
+- **Categories** are the five Sections plus `admin`, `pipeline` and `audit` -- and `event_listeners`, for events recorded before the listener became the Admin's. Admin changes are
   audited and are not a Section; the pipeline's own acts — an Apply, a rollback — are neither;
   and `audit` is an act on the trail itself, which changes no configuration at all.
 - **Actions are a closed set of fourteen**, not free text: attempted, created, updated, removed,
@@ -614,6 +612,12 @@ Visible only to Admins; an Operator should not see them at all.
   a coordinator change ends every running query at the next Apply, a worker-only change drains
   the workers one at a time and loses none. The files as the next Apply would write them,
   wiring included, can be read beside the editor.
+- **The Event Listener** -- where Trino sends query events, an HTTP collector or a Kafka topic --
+  is part of the coordinator's Server Configuration, not an Operator Section (ADR-0011). One
+  listener: a plugin, chosen from the ones Apchi has a schema for or named by hand, and its
+  properties. For a curated plugin the form names the properties Apchi will refuse it without;
+  any other is left to Trino at the next Apply. None until one is chosen, and the workers have
+  none. Any change restarts the coordinator.
 - **Raw files** — arbitrary Trino config files written directly. Listed by path and size; the
   **content is deliberately not readable back**, so this is not a round trip and the interface
   must not pretend it is.
@@ -745,7 +749,6 @@ design against and worth checking before anything depends on them.
   by identity matters.
 - **Resource groups:** 5–30 groups, 5–50 selectors.
 - **Client certificates:** a handful to a few dozen.
-- **Event listeners:** 1–5.
 - **Certificate mapping:** exactly one pattern.
 - **Snapshots:** grows forever, one per successful Apply. Hundreds over a cluster's life.
 - **Audit:** grows fastest; paginated, with filters.

@@ -68,10 +68,10 @@ async def test_a_file_apchi_mounts_is_restricted_where_the_pod_has_a_group() -> 
     await kubernetes.mount_secret_file(
         "trino-coordinator",
         "trino",
-        "event-listener",
-        "trino-event-listener",
-        "/etc/trino/event-listener.properties",
-        "event-listener.properties",
+        "resource-groups",
+        "trino-resource-groups",
+        "/etc/trino/resource-groups.properties",
+        "resource-groups.properties",
     )
 
     assert _mounted_volume(kubernetes)["secret"]["defaultMode"] == CREDENTIAL_FILE_MODE
@@ -80,7 +80,7 @@ async def test_a_file_apchi_mounts_is_restricted_where_the_pod_has_a_group() -> 
 async def test_a_file_is_left_alone_where_the_pod_has_no_group() -> None:
     """The careful half. Apchi does not own the Admin's pod template, and a root-owned 0640
     file with no group Trino belongs to is a file it cannot read -- which for
-    `event-listener.properties` is a coordinator that will not start. Hardening a file into
+    `resource-groups.properties` is a coordinator that will not start. Hardening a file into
     an outage is worse than the exposure, so the mode is left to the kubelet's default and
     the deployment is the thing to fix."""
     kubernetes = _Patched(fs_group=None)
@@ -88,10 +88,10 @@ async def test_a_file_is_left_alone_where_the_pod_has_no_group() -> None:
     await kubernetes.mount_secret_file(
         "trino-coordinator",
         "trino",
-        "event-listener",
-        "trino-event-listener",
-        "/etc/trino/event-listener.properties",
-        "event-listener.properties",
+        "resource-groups",
+        "trino-resource-groups",
+        "/etc/trino/resource-groups.properties",
+        "resource-groups.properties",
     )
 
     assert "defaultMode" not in _mounted_volume(kubernetes)["secret"]
@@ -234,7 +234,10 @@ async def test_a_volume_apchi_mounts_itself_is_not_refused_for_its_mode(
     """The deadlock this precondition has to avoid. Apchi sets the mode on its own mounts
     during Apply, so refusing one here would refuse the only thing that could fix it --
     and an upgrade from a version that mounted them bare would never get past this check.
-    The `fsGroup` is what makes the next Apply restrict it, and that is checked above."""
+    The `fsGroup` is what makes the next Apply restrict it, and that is checked above.
+
+    The one such volume is the Event Listener's, which an older Apchi mounted and the first
+    Admin Apply after upgrading takes off (#269) -- so it has to get past this check first."""
     spec = healthy_pod_spec()
     spec["volumes"].append(
         {
@@ -272,7 +275,6 @@ def test_only_the_sections_that_render_a_secret_declare_one(settings: Settings) 
     and one that stops is noticed here."""
     assert credential_secrets(REGISTERED, settings) == {
         settings.client_certificate_secret_name,
-        settings.event_listener_secret_name,
     }
 
 
@@ -365,15 +367,18 @@ async def test_nothing_on_a_worker_is_exempt_as_apchis_own(
     assert fake_kubernetes.worker_pod_spec is not None
     fake_kubernetes.worker_pod_spec["volumes"].append(
         {
-            "name": settings.event_listener_volume_name,
-            "secret": {"secretName": settings.event_listener_secret_name, "defaultMode": 0o644},
+            "name": settings.resource_groups_volume_name,
+            "secret": {
+                "secretName": settings.client_certificate_secret_name,
+                "defaultMode": 0o644,
+            },
         }
     )
 
     with pytest.raises(PreconditionFailed) as raised:
         await check(fake_kubernetes, pod_spec(healthy_pod_spec()), settings)
 
-    assert settings.event_listener_volume_name in str(raised.value)
+    assert settings.resource_groups_volume_name in str(raised.value)
 
 
 # --- Restricted pod security: OpenShift's restricted-v2 -------------------------------------

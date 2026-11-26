@@ -14,7 +14,8 @@ from app.sections.event_listeners.schemas import CURATED_SCHEMAS as LISTENER_TYP
 from app.sections.properties import SCHEMA_FIELDS, PropertyRules
 
 CONNECTOR_RULES = "/api/v1/catalogs/connectors"
-LISTENER_RULES = "/api/v1/event-listeners/types"
+#: The Admin's, since the listener moved into the Server Configuration (#269).
+LISTENER_RULES = "/api/v1/admin/server-configuration/event-listener-types"
 
 
 async def test_every_curated_connector_is_listed(client: AsyncClient) -> None:

@@ -32,9 +32,9 @@ import yaml
 
 from app.adapters.kubernetes import FORBIDDEN_CREDENTIAL_BITS, TRINO_GROUP
 from app.config import Settings
+from app.pipeline.bootstrap import desired_secrets
 from app.pipeline.preconditions import PodSpec, PreconditionFailed, check
 from app.sections.admin import AdminValues
-from app.sections.server_configuration import role_secret, secret_name
 
 ROOT = Path(__file__).resolve().parents[1]
 CHART = ROOT / "charts" / "apchi"
@@ -106,6 +106,10 @@ def _rendered(chart: Path, *values: str) -> list[dict[str, Any]]:
     return [document for document in yaml.safe_load_all(completed.stdout) if document]
 
 
+def _apchi_secrets(settings: Settings) -> dict[str, dict[str, str]]:
+    return desired_secrets(settings, {}, AdminValues())
+
+
 #: Volumes holding what the operator names in values rather than what the chart creates: what
 #: every pod trusts, and the certificate Trino serves HTTPS with. Their Secrets are the
 #: operator's, so they are not expected among the chart's own.
@@ -113,17 +117,16 @@ OPERATORS_OWN = ("ca-bundle", "java-truststore", "https-source")
 
 
 def _name_disagreements(documents: list[dict[str, Any]]) -> list[str]:
-    """Where the coordinator mounts a Secret the chart does not create.
+    """Where the coordinator mounts a Secret neither the chart nor Apchi creates.
 
     Compared through what the chart renders rather than by reading values, because a default
     that is overridden in a template is the kind of disagreement reading values would miss.
     """
     written = {d["metadata"]["name"] for d in documents if d["kind"] == "Secret"}
-    # Apchi writes this one itself, on its first start: its content is rendered from the Admin
-    # values in MongoDB, which no chart can read (ADR-0010). It must still be the Secret the
-    # Apchi this chart renders is told to write, or the coordinator waits for it forever.
-    written.add(_apchi_settings(documents).server_configuration_secret_name)
-    written.add(_apchi_settings(documents).worker_server_configuration_secret_name)
+    # Apchi writes its own on its first start -- the chart creates none of them, because Argo
+    # CD recreated a chart-created one on every sync. Each must still be the Secret the Apchi
+    # this chart renders is told to write, or the coordinator waits for it forever.
+    written |= set(_apchi_secrets(_apchi_settings(documents)))
     coordinator = _coordinator(documents)
     spec = PodSpec.model_validate(coordinator["spec"]["template"]["spec"])
     mounted = {
@@ -134,11 +137,11 @@ def _name_disagreements(documents: list[dict[str, Any]]) -> list[str]:
 
     problems = [
         f"the coordinator mounts Secret {secret!r} (as volume {volume!r}) that the chart "
-        "does not create"
+        "creates, and Apchi does not write"
         for secret, volume in sorted(mounted.items())
         if secret not in written
     ]
-    # The reverse is not a problem: Apchi writes two Secrets the coordinator never mounts,
+    # The reverse is not a problem: Apchi writes Secrets the coordinator never mounts,
     # because Apchi adds those volumes to the pod template itself when something is
     # configured -- the absence of the mount is how "none configured" is expressed.
     return problems
@@ -279,20 +282,9 @@ def _check(values: tuple[str, ...]) -> int:
             for d in documents
             if d["kind"] == "ConfigMap"
         },
-        {
-            d["metadata"]["name"]: (d.get("stringData") or {})
-            for d in documents
-            if d["kind"] == "Secret"
-        }
-        # And the one Apchi writes itself, as the Apchi this chart configures would write it
-        # on its first start: the files the preconditions read, config.properties and
-        # access-control.properties among them, are in it.
-        | {
-            secret_name(role, settings): role_secret(
-                role, AdminValues().server_configuration, settings
-            )
-            for role in ("coordinator", "worker")
-        },
+        # As the Apchi this chart configures writes them on its first start: the files the
+        # preconditions read, config.properties and access-control.properties among them.
+        _apchi_secrets(settings),
         {
             d["metadata"]["name"]: d["spec"]["template"]["spec"]
             for d in documents
@@ -309,7 +301,7 @@ def _check(values: tuple[str, ...]) -> int:
     print(
         f"charts/apchi's Trino satisfies every precondition of the Apchi it configures "
         f"({len(spec.volumes)} volumes), restricts {len(CREDENTIAL_VOLUMES)} credential "
-        "volumes, and mounts only Secrets the chart creates"
+        "volumes, and mounts only Secrets Apchi writes or the operator names"
     )
     return 0
 

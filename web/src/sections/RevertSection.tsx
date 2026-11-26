@@ -13,8 +13,7 @@ type RevertPath =
   | "/api/v1/certificates/revert"
   | "/api/v1/certificate-mapping/revert"
   | "/api/v1/permissions/revert"
-  | "/api/v1/resource-groups/revert"
-  | "/api/v1/event-listeners/revert";
+  | "/api/v1/resource-groups/revert";
 
 /**
  * Section Revert: one Section back to an older Snapshot, every other left where it is.

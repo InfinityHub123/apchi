@@ -20,10 +20,6 @@ from app.sections.permissions.generator import RULES_KEY, render_rules
 ROOT = Path(__file__).resolve().parent.parent
 #: The reference deployment's Secret, manifest and all.
 TARGET = ROOT / "deploy" / "trino-dev" / "05-access-control.yaml"
-#: The same rules as a bare file, for the Apchi chart's pre-install hook to read with
-#: `.Files.Get`. Two consumers, one generator -- a second hand-maintained copy is the
-#: thing this script exists to prevent.
-CHART_TARGET = ROOT / "charts" / "apchi" / "files" / "rules.json"
 
 
 def rules() -> str:
@@ -49,7 +45,7 @@ stringData:
 
 
 def main() -> int:
-    outputs = {TARGET: render(), CHART_TARGET: rules()}
+    outputs = {TARGET: render()}
     if "--check" in sys.argv:
         for target, expected in outputs.items():
             if not target.exists():
