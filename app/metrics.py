@@ -152,4 +152,3 @@ def _present(state: bool | None) -> float:
 
 def _seconds(start: datetime, end: datetime) -> float:
     return max((end - start).total_seconds(), 0.0)
-
