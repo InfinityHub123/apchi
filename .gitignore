@@ -233,8 +233,10 @@ docs/reference/openapi.json
 .impeccable/mocks/
 .impeccable/live/
 
-# The UI build and browser-test output.
-web/node_modules/
+# The UI build and browser-test output. No trailing slash on node_modules: a symlink to a
+# shared install is a file, and `node_modules/` would let it be committed -- which broke
+# `npm ci` in the image build once.
+web/node_modules
 web/dist/
 web/test-results/
 web/playwright-report/
