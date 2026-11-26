@@ -37,12 +37,14 @@ Each is a **Section** of the configuration:
 - Certificate Mapping
 - Permissions
 - Resource Groups
-- Event Listeners
+
+The Event Listener was a seventh until #269 made it part of the Admin's Server Configuration
+(§13.6).
 
 # 3. Roles
 
 **Operators** are the platform staff at the organisation Apchi is operated for. They are the
-primary Apchi users and own all six Sections.
+primary Apchi users and own all five Sections.
 
 **Admins** provide and operate the underlying platform. In addition to everything Operators
 can do, they can inject arbitrary low-level Trino configuration values and can freeze
@@ -176,7 +178,7 @@ reverts it (§4).
 | Certificate Mapping | Apchi | fully typed, no escape hatch |
 | Resource Groups | Trino, but a fixed documented schema | fully typed, no escape hatch |
 | Catalogs | Trino **plugins** | curated per connector, pass-through for the rest (§13.1) |
-| Event Listeners | Trino **plugins** | curated per listener type, pass-through for the rest (§13.6) |
+| Event Listener (Admin's, §14) | Trino **plugins** | curated per listener type, pass-through for the rest (§13.6) |
 | Client Certificates | — | not a schema problem: parse the archive, match cert to key, read CN and expiry |
 | Admin arbitrary config | nobody | untyped by design; only the ephemeral pod can validate it (§14) |
 
@@ -225,8 +227,8 @@ get wrong:
 
 **Validation has two modes**, because Apply does:
 
-- **File-based Sections** (permissions, resource groups, event listeners, certificate
-  mapping) — start the pod with the Candidate's generated file in place and confirm it
+- **File-based Sections** (permissions, resource groups, certificate mapping) and the
+  Admin's files, the Event Listener among them — start the pod with the Candidate's generated file in place and confirm it
   reaches ready. **Starting is the check**: a file Trino will not accept becomes a pod that
   will not start, which is the same failure the Cluster would have suffered, paid for by a
   pod nobody was using.
@@ -349,7 +351,7 @@ There are **three Apply engines**, distinguished by how a change reaches Trino:
 |---|---|
 | DDL (§7.1) | Catalogs |
 | File, no restart (§7.2) | Permissions, Client Certificates |
-| File, with rollout (§7.3) | Certificate Mapping, Resource Groups, Event Listeners |
+| File, with rollout (§7.3) | Certificate Mapping, Resource Groups |
 
 Only the third restarts Trino. §7.4 says which nodes.
 
@@ -366,7 +368,7 @@ mount is read-only, so that one directory alone is delivered differently:
 | Directory | Written by | Delivery |
 |---|---|---|
 | Catalog `.properties` | **Trino** | Secret at a seed path → initContainer copy → writable container filesystem |
-| `rules.json`, certificates, user mapping, resource groups, event listeners | Apchi | Secret or ConfigMap mounted directly; the kubelet keeps it current |
+| `rules.json`, certificates, user mapping, resource groups | Apchi | Secret or ConfigMap mounted directly; the kubelet keeps it current |
 
 ```
                     Apchi patches
@@ -424,10 +426,20 @@ catalog DDL open to everyone.
 
 **The file cannot be absent at startup.** Trino reads `security.config-file` while loading the
 system access control and refuses to boot without it — "Configuration is invalid", with the pod
-going to `Failed`. A Cluster therefore cannot wait for Apchi to write the file before starting, so
-the bootstrap copy is **committed as generated output** with a CI drift check, the same pattern
-`openapi.json` uses: nothing is hand-maintained, nothing can drift from what Apchi produces, and
-the Cluster still comes up on its own, and that committed copy stands in until the first Apply.
+going to `Failed`. So **Apchi writes it on its first start**, with every other Secret it owns that
+is missing, rendered from the latest Snapshot and the Admin values -- on a new install, the empty
+configuration -- and Trino's pods wait in `ContainerCreating` until it appears. One that exists is
+never rewritten at startup: it is what the running pods started with, and rewriting is an Apply's.
+
+The chart used to create these Secrets as Helm `pre-install` hooks, from a committed copy of this
+file. That was wrong under Argo CD, which does not run Helm: it runs a chart's hooks as sync hooks
+on **every** sync, deleting and recreating each Secret with the chart's starting contents. Measured
+on kind with automated sync, one sync for an unrelated pod annotation emptied the catalog seed,
+reset these rules to the defaults, and emptied the Event Listener and Resource Groups Secrets while
+Apchi's mounts still read from them, so the restarted coordinator crash-looped. The chart now
+creates none of them, and `tests/argo` runs that sync against a real Argo CD in CI.
+`deploy/trino-dev`, which is applied with `kubectl` and never by Argo CD, still ships the generated
+copy, with the drift check.
 
 `security.refresh-period` must be set for the whole-volume mount to be worth anything. Without it
 Trino reads the rules once at startup, and a Secret the kubelet faithfully keeps current is never
@@ -449,7 +461,7 @@ opened. Neither needs the pod restarted, so neither destroys a running query.
 
 What this costs instead is that the change is **not immediate** — see §7.5.
 
-## 7.3 File apply, with rollout — certificate mapping, resource groups, event listeners
+## 7.3 File apply, with rollout — certificate mapping, resource groups
 
 Apchi writes the generated configuration to a ConfigMap or Secret and triggers a Deployment
 rollout by patching `spec.template.metadata.annotations` — which is all `kubectl rollout
@@ -485,7 +497,7 @@ Apchi restarts only what the Candidate's changes require:
 | Permissions | no restart (timed reload) | no |
 | Certificate Mapping | restart | no |
 | Resource Groups | restart | no |
-| Event Listeners | restart | none — proven, see below |
+| Event Listener (Admin's) | restart | none — proven, see below |
 
 Resource groups: "The JSON file only needs to be present on the coordinator." Access
 control: "Access control must be configured on the coordinator."
@@ -502,7 +514,7 @@ losing events rather than failing visibly, and an absence of documentation is no
 This saves rollout time, not queries. The coordinator restart is what kills queries.
 
 The decision is made from **what changed**, not from which Sections exist or which are
-non-empty. A Cluster that has an Event Listener configured must not pay a restart on every
+non-empty. A Cluster that has resource groups configured must not pay a restart on every
 Apply that leaves it alone; adding, editing and removing one all count as changes, and removal
 counts because the file is read once per process, so a pod that still has it keeps using it.
 
@@ -1440,15 +1452,19 @@ CPU limit at all requires a top-level `cpuQuotaPeriod`. The first two are within
 Apchi refuses them at request time; the quota period governs the whole file, so it is the
 Section's own setting and the check spans the Candidate.
 
-## 13.6 Event Listeners
+## 13.6 The Event Listener
 
-Operators configure event listeners by type. Like catalogs, the properties are defined by
-whichever plugin implements the listener, so the same curated-plus-pass-through rule applies
-(§13.1).
+**The Admin's, as `event-listener.properties` in the coordinator's Server Configuration** (§14,
+#269). It was an Operator Section until then. Where query events go -- an audit or cost
+pipeline, Kafka, an HTTP collector -- is set once by the platform rather than changed day to
+day, and delivering it as a Section meant Apchi adding and removing a volume on the coordinator
+Deployment, which is the chart's object and which Argo CD reconciles. Not the chart's either:
+the file is under `/etc/trino`, which ADR-0010 gives to Apchi; its properties usually carry
+credentials, which would sit in Git; and a listener the chart rendered would never be validated.
 
-The selector is `event-listener.name` in `etc/event-listener.properties`; every other property
-is prefixed by the listener type (`http-event-listener.*`, `kafka-event-listener.*`). Verified
-against the Trino 483 documentation.
+The Admin writes it as a map, like the other files: `event-listener.name` names the plugin and
+the rest are its own properties, prefixed by the listener type (`http-event-listener.*`,
+`kafka-event-listener.*`). Empty is no listener.
 
 **Trino's built-in listeners, and which are curated:**
 
@@ -1459,77 +1475,53 @@ against the Trino 483 documentation.
 | MySQL | `mysql` | not yet; passes through |
 | OpenLineage | `openlineage` | not yet; passes through |
 
-Custom listener plugins, and the two uncurated built-ins, pass through as key-value properties
-and are validated only by the ephemeral pod at Apply. As with connectors, the supported Trino
-range (§8) is what bounds the maintenance on these schemas.
+A curated listener's properties are checked against its schema when the Admin writes them, so a
+misspelled `connect-ingest-uri` is refused with the name meant rather than found as a
+coordinator that will not start. Custom plugins and the uncurated built-ins pass through and are
+judged by Trino on the validation probe. The HTTP listener's documented `http-event-listener.*`
+escape hatch is deliberately not modelled as a prefix: it would accept that same typo. A
+missing `event-listener.name` is refused outright -- Trino refuses the file without it.
 
-The HTTP listener documents `http-event-listener.*` as an escape hatch passing arbitrary
-configuration to its HTTP client. That is deliberately **not** modelled as a prefix: allowing
-any name under `http-event-listener.` would accept a typo of `connect-ingest-uri`, which is the
-exact thing curation exists to catch. An Operator needing a client-tuning property gets a schema
-update rather than a silent pass.
+**Delivered without touching the Deployment.** The listener is optional, and neither of Trino's
+ways of reading one can express that on its own -- both verified:
 
-**At most one Event Listener.** Trino reads a single `etc/event-listener.properties` by default;
-configuring more than one requires `event-listener.config-files` in `config.properties`, which is
-Admin-owned Trino configuration Apchi does not write (§14). The Candidate therefore holds one
-listener and refuses a second, saying why. The Section is still modelled as a set of resources, so
-lifting the limit later changes the limit and not the model.
+- `event-listener.config-files` makes Trino refuse to start when the file it names is missing.
+- A `subPath` mount of an absent Secret key makes Kubernetes create an empty **directory** at
+  that path, and Trino dies reading it (*"Is a directory"*).
 
-**The limit stays an Operator limit, even once an Admin can write `config.properties` raw**
-(§14). An Admin who sets `event-listener.config-files` gets what they asked for: Trino reads
-their listener files, Apchi keeps managing the one it mounts, and the Section still holds one.
-So a Cluster can be running listeners Apchi cannot see, and `GET /event-listeners` reports
-only Apchi's.
+So the chart mounts the coordinator's Server Configuration Secret a second time, **whole**, at
+`/etc/trino/apchi`, and that mount never changes. With a listener, Apchi renders the file into
+the Secret -- it appears as `/etc/trino/apchi/event-listener.properties` -- and adds
+`event-listener.config-files` naming it to `config.properties`. Without one, it renders neither,
+and Trino is told to read nothing. Measured on Trino 483: a file named there in a subdirectory
+loads (*"Loaded event listener /etc/trino/apchi/event-listener.properties"*); a broken one stops
+startup with numbered reasons the probe quotes; and with `event-listener.config-files` set,
+Trino ignores a file at its default path.
 
-That is accepted rather than overlooked, and it is the same shape as §17: Apchi does not detect
-drift, and this is drift an Admin created deliberately. The two alternatives are both worse.
-Refusing `config.properties` would remove the file most incident fixes need. Reading it, so the
-Section could permit as many listeners as the Admin configured, would have Apchi parsing a raw
-file it promised not to understand — the "no schema, if it works it works" contract of §14 does
-not survive Apchi making decisions from the contents.
+`event-listener.config-files` is therefore wiring: Apchi writes it, and an Admin's
+`config.properties` may not. A Raw File at `/etc/trino/event-listener.properties` is refused --
+Trino would read it while no listener is configured and silently drop it once one is -- and so
+is one anywhere under `/etc/trino/apchi`. The ninth precondition (§16) refuses a coordinator
+that does not mount the Secret whole there.
 
-The precondition rejecting anything else mounted at `/etc/trino/event-listener.properties`
-stays, so an Admin's extra listeners live at other paths and the two never fight over the one
-file Apchi owns.
+**Restart-required.** `EventListenerManager.loadEventListeners()` is guarded by a
+`compareAndSet` that permits exactly one call per process lifetime, and there is no reload path
+(483 source). A listener change is a coordinator file change, so the Admin Apply restarts the
+coordinator and not the workers, and the validation probe starts with the listener in place.
 
-**Rollout-required.** `EventListenerManager.loadEventListeners()` is guarded by a
-`compareAndSet` that permits exactly one call per process lifetime. There is no reload path.
-Confirmed against the 483 source, not taken from this document.
+**One listener**, as before. `event-listener.config-files` takes a list, so more is a change to
+the model, not to delivery.
 
-**Apchi owns a volume on the coordinator's pod template for this Section**, which it adds and
-removes itself. It is not the only one — Resource Groups has the same arrangement for the same
-reason, and §14's raw files have a third — but this is the Section the argument is clearest
-for, because Event Listeners must be optional and neither delivery mechanism can express that
-on its own:
-
-- `event-listener.config-files` makes Trino **refuse to start** when the file it names is missing
-  — verified: *"Invalid configuration property with prefix '': file does not exist"*.
-- A `subPath` mount of an absent Secret key makes Kubernetes create an empty **directory** at that
-  path, and Trino dies reading it — verified: *"FileNotFoundException: etc/event-listener.properties
-  (Is a directory)"*.
-
-So "no Event Listener" has to mean no mount at all, which only something that edits the pod
-template can arrange. Apchi adds a distinctively named volume and its `subPath` mount at
-`/etc/trino/event-listener.properties` when a listener is configured and removes both when none is;
-everything else on that template belongs to the Admin, and a precondition rejects anything else
-mounted at that path so the two never fight over one file.
-
-`subPath` is safe here, and only here. §16's rule exists because a `subPath` mount never receives
-updates, so Apchi would write a file and Trino would never see the change. That cannot happen for a
-Section adopted *only* by a new pod, which Apchi itself creates. The rule to state is therefore
-sharper than the one originally written: no Section adopted **without** a restart may be
-`subPath`-mounted.
-
-Safe is not the same as portable, and that is the limit this arrangement has. A deployment that
-mounts the whole of `/etc/trino` as one volume cannot accept a single-file mount inside it at
-all, so on such a deployment this Section has to take the other horn of the dilemma above: the
-Admin sets `event-listener.config-files`, Apchi writes into `/etc/trino/event-listener/`, and
-Event Listeners stop being optional. Emptying the Section is then refused, because there is no
-listener that does nothing to render in place of none — `http`, `mysql` and `kafka` each need a
-real sink. Which horn applies is the deployment's shape and so the Admin's to declare (§16).
-
-During editing the UI should say: *Event Listener changed — does not apply immediately, will
-apply during Apply, and will restart the cluster.*
+**Carried over once.** An install upgrading from the Section has its listener in the latest
+Snapshot. At startup Apchi copies it into the Admin values -- the current ones, the pre-image and
+what the last Apply delivered, because the Cluster already runs it and a rollback restoring a
+copy without it would remove a listener nobody removed -- unless an Admin has set one since. It
+changes nothing on the Cluster: the coordinator keeps reading the listener from the old mount
+until the next Admin Apply renders it the new way, takes that mount off the Deployment and
+deletes its Secret. That is the last time Apchi edits the Deployment for a listener. A listener
+that would not validate is left where it is and logged, rather than carried broken. Snapshots and
+Candidates still holding the retired Section are read without it; an import carrying a non-empty
+one is refused, naming where the listener goes now, rather than dropping it.
 
 # 14. Admin capabilities
 
@@ -1641,7 +1633,8 @@ what changes together, not which file a line sits in:
 | **Sizing**: heap, JVM flags, query memory | chart | environment variables on the pod |
 | Wiring: ports, paths, Services | chart | settings Apchi renders |
 | Every other Trino property | Admin, in Apchi | Apchi's Secrets |
-| Catalogs, rules, mapping, resource groups, event listeners | Operator, in Apchi | Sections, as today |
+| Catalogs, rules, mapping, resource groups | Operator, in Apchi | Sections, as today |
+| The Event Listener | Admin, in Apchi | the coordinator's Server Configuration (§13.6) |
 
 ### Sizing stays with the memory limit
 
@@ -2311,7 +2304,6 @@ The contract must be stable, because Operators automate against it.
 /api/v1/certificate-mapping
 /api/v1/permissions
 /api/v1/resource-groups
-/api/v1/event-listeners
 /api/v1/review
 /api/v1/applies
 /api/v1/validations
@@ -2721,7 +2713,7 @@ app/
     certificate_mapping/
     permissions/
     resource_groups/
-    event_listeners/
+    server_configuration   the Admin's -- Trino's own files, the Event Listener among them
   adapters/        kubernetes, trino, mongo
   api/             routers
 ```

@@ -58,7 +58,7 @@ Operator change lands here; nothing reaches the Cluster until Apply.
 
 **Section**:
 One managed area of a Configuration Candidate — catalogs, client certificates, certificate
-mapping, permissions, resource groups, event listeners. The unit of Section Revert.
+mapping, permissions, resource groups. The unit of Section Revert.
 
 **Raw File**:
 A path under Trino's configuration directory and the content to put there, written by an Admin

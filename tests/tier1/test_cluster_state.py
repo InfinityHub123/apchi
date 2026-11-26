@@ -19,17 +19,12 @@ from app.auth.identity import Identity
 from app.config import AuthMode, Settings
 from app.main import create_app
 from app.pipeline.applies import TERMINAL
-from tests.conftest import FakeKubernetes
+from tests.conftest import FakeKubernetes, stage_a_restart
 
 ADMIN = Identity(subject="root", role="admin", via="password")
 OPERATOR = Identity(subject="jo", role="operator", via="password")
 
 CATALOG = {"name": "scratch", "connector": "memory", "properties": {}}
-LISTENER = {
-    "name": "audit",
-    "type": "http",
-    "properties": {"http-event-listener.connect-ingest-uri": "http://collector:8080/e"},
-}
 STATE = "/api/v1/cluster"
 PROBE = "/api/v1/cluster/probe"
 
@@ -131,7 +126,7 @@ async def test_an_apply_that_never_reached_verification_reports_null_not_false(
     delivered and nothing was checked, which is not the same answer as "checked and
     unhealthy" -- and a design that renders both as a red light is lying about one."""
     fake_kubernetes.pod_problem = "the validation pod failed"
-    await applying_client.post("/api/v1/event-listeners", json=LISTENER)
+    await stage_a_restart(applying_client)
 
     record = await _applied(applying_client)
     assert record["stage"] == "failed", record

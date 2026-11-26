@@ -355,7 +355,6 @@ async def test_every_revert_endpoint_offers_the_dry_run(applying_client: AsyncCl
         "/api/v1/certificate-mapping/revert",
         "/api/v1/permissions/revert",
         "/api/v1/resource-groups/revert",
-        "/api/v1/event-listeners/revert",
         "/api/v1/candidate/rollback",
     ):
         response = await applying_client.post(path, json={"snapshot": 1, "dry_run": True})

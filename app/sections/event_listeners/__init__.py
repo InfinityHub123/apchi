@@ -1,9 +1,9 @@
-"""Event Listeners: where Trino sends query events, as Operators configure them.
+"""Event Listener property schemas, and the name of the Section that held listeners once.
 
-The Section's name lives here so neither the apply strategy nor the Section itself has to
-import the other.
+The listener is the Admin's now, as `event-listener.properties` in the coordinator's Server
+Configuration (#269). What is left here is what that still uses -- the schemas a curated
+listener's properties are checked against -- and the retired Section's name, which a Snapshot
+written before the move still holds.
 """
 
-from app.sections import SectionName
-
-SECTION: SectionName = "event_listeners"
+SECTION = "event_listeners"

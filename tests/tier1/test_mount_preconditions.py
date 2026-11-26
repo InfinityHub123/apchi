@@ -19,15 +19,13 @@ import pytest
 
 from app.config import Settings
 from app.pipeline.preconditions import PreconditionFailed, check, pod_spec
-from app.sections.event_listeners.generator import MOUNT_PATH as LISTENER_PATH
 from app.sections.resource_groups.generator import MANAGER_PATH, RULES_PATH
 from tests.conftest import FakeKubernetes, healthy_pod_spec
 
-#: Every path Apchi mounts a single file at. Only MAPPING_PATH is mounted unconditionally;
-#: the other three appear the first time an Operator configures their Section.
-#: Every path Apchi still mounts as a single file. The user-mapping file left this list
-#: when it became a directory (#93); the remaining three are what #125 is about.
-APCHI_FILES = (LISTENER_PATH, RULES_PATH, MANAGER_PATH)
+#: Every path Apchi still mounts as a single file, both of them Resource Groups'. The
+#: user-mapping file left this list when it became a directory (#93), and the Event Listener
+#: when it became part of the coordinator's Server Configuration (#269).
+APCHI_FILES = (RULES_PATH, MANAGER_PATH)
 
 
 def _with_mount(spec: dict[str, Any], mount: dict[str, Any], volume: dict[str, Any]) -> dict:

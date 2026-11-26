@@ -21,16 +21,7 @@ from pydantic import BaseModel
 
 import app.main  # noqa: F401 -- imported for the side effect of loading every model
 from app.sections.catalogs.connectors import validate_properties as catalog_properties
-from app.sections.event_listeners.schemas import CURATED_SCHEMAS as LISTENER_SCHEMAS
 from app.sections.properties import PropertyProblem
-from app.sections.properties import validate as validate_against
-
-
-def listener_properties(listener_type: str, properties: dict[str, Any]) -> dict[str, str]:
-    return validate_against(
-        LISTENER_SCHEMAS.get(listener_type), properties, listener_type, "listener"
-    )
-
 
 CONTRACT = Path(__file__).resolve().parents[2] / "openapi.json"
 
@@ -155,15 +146,13 @@ def test_the_route_example_is_a_body_the_model_accepts(
         ) from invalid
 
 
-#: The two Sections whose properties are checked against a curated schema, and the function
-#: that checks them. Pydantic typing is not that check -- `properties` is a `dict[str, Any]`
-#: in every one of these models -- so an example can satisfy the model and still be refused
-#: by the handler. Which is what happened: a `kafka` listener example was two required
-#: properties short, and every assertion above passed it.
-CURATED = (
-    ("catalogs", "connector", catalog_properties),
-    ("event listeners", "type", listener_properties),
-)
+#: The Section whose properties are checked against a curated schema, and the function that
+#: checks them. Pydantic typing is not that check -- `properties` is a `dict[str, Any]` -- so
+#: an example can satisfy the model and still be refused by the handler. Which is what
+#: happened: a `kafka` listener example was two required properties short, and every
+#: assertion above passed it. (The listener is no longer a Section; its schemas are checked
+#: with the Server Configuration, in test_event_listener.py.)
+CURATED = (("catalogs", "connector", catalog_properties),)
 
 
 def _property_examples() -> list[tuple[str, str, Any, Any]]:

@@ -29,17 +29,15 @@ from tests.tier2.conftest import PortForward, kubectl, trino_selector
 pytestmark = pytest.mark.tier2
 
 RECEIVER = "apchi-event-receiver"
+#: The Admin's, in the coordinator's Server Configuration (#269).
 LISTENER = {
-    "name": "audit",
-    "type": "http",
-    "properties": {
-        "http-event-listener.connect-ingest-uri": f"http://{RECEIVER}:8080/events",
-        "http-event-listener.log-completed": "true",
-        # nc serves one connection at a time and is restarted by the loop between them, so
-        # a retry covers the gap. Nothing about Trino requires this.
-        "http-event-listener.connect-retry-count": "5",
-        "http-event-listener.connect-retry-delay": "1s",
-    },
+    "event-listener.name": "http",
+    "http-event-listener.connect-ingest-uri": f"http://{RECEIVER}:8080/events",
+    "http-event-listener.log-completed": "true",
+    # nc serves one connection at a time and is restarted by the loop between them, so a
+    # retry covers the gap. Nothing about Trino requires this.
+    "http-event-listener.connect-retry-count": "5",
+    "http-event-listener.connect-retry-delay": "1s",
 }
 
 #: A bare 200 with no body. nc is not an HTTP server, so the response is written by hand.
@@ -119,8 +117,12 @@ async def test_events_arrive_while_the_workers_are_never_restarted(
     workers_before = _worker_pods()
     assert workers_before, "the fixture needs at least one worker to prove anything about"
 
-    await e2e_client.post("/api/v1/event-listeners", json=LISTENER)
-    started = await e2e_client.post("/api/v1/applies")
+    written = await e2e_client.put(
+        "/api/v1/admin/server-configuration",
+        json={"coordinator": {"event-listener.properties": LISTENER}},
+    )
+    assert written.status_code == 200, written.text
+    started = await e2e_client.post("/api/v1/admin/applies", json={})
     apply_id = started.json()["id"]
     deadline = asyncio.get_running_loop().time() + 900
     record: dict = {}

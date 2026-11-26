@@ -110,7 +110,8 @@ async def test_a_validation_failure_leaves_the_cluster_untouched(
 
     cluster = Trino(url=container_url(trino_cluster))
     assert "imaginary" not in await cluster.catalogs()
-    assert SECRET not in fake_kubernetes.secrets
+    # Exists, empty, from Apchi's start: nothing here may have written a catalog into it.
+    assert fake_kubernetes.secrets[SECRET] == {}
 
 
 async def test_the_failure_names_the_resource_and_the_reason(
@@ -224,7 +225,8 @@ async def test_the_validate_action_does_not_apply(
     assert verdict["failures"] == []
     cluster = Trino(url=container_url(trino_cluster))
     assert "scratch" not in await cluster.catalogs()
-    assert SECRET not in fake_kubernetes.secrets
+    # Exists, empty, from Apchi's start: nothing here may have written a catalog into it.
+    assert fake_kubernetes.secrets[SECRET] == {}
     assert (await applying_client.get("/api/v1/snapshots")).json()["items"] == []
 
 
@@ -343,3 +345,37 @@ async def test_the_probe_trusts_what_the_settings_name(
 
     spec = next(iter(fake_kubernetes.pod_manifests.values()))["spec"]
     assert {"ca-bundle", "java-truststore"} <= {v["name"] for v in spec["volumes"]}
+
+
+async def test_a_validation_that_blamed_a_retired_section_still_reads(
+    client: AsyncClient, settings: Settings
+) -> None:
+    """Stored while the Event Listeners Section existed (#269). One unreadable record would
+    fail the whole page of history it is on, not only itself."""
+    from datetime import UTC, datetime
+
+    from pymongo import AsyncMongoClient
+
+    now = datetime.now(UTC)
+    database = AsyncMongoClient(settings.mongo_uri)[settings.mongo_database]
+    await database["validations"].insert_one(
+        {
+            "_id": "val_before_the_move",
+            "id": "val_before_the_move",
+            "outcome": "failed",
+            "failures": [
+                {"section": "event_listeners", "resource": "audit", "reason": "would not load"}
+            ],
+            "warnings": [],
+            "base_snapshot": None,
+            "started_at": now,
+            "finished_at": now,
+        }
+    )
+
+    one = await client.get("/api/v1/validations/val_before_the_move")
+    page = await client.get("/api/v1/validations")
+
+    assert one.status_code == 200, one.text
+    assert one.json()["failures"][0]["section"] == "event_listeners"
+    assert page.status_code == 200, page.text

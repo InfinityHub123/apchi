@@ -37,20 +37,25 @@ from pymongo.asynchronous.database import AsyncDatabase
 
 from app.api.pages import BadCursor, Page, after, bounded, decode_cursor, encode_cursor
 from app.auth.identity import Via
-from app.sections import SectionName
+from app.sections import RetiredSectionName, SectionName
 
 logger = logging.getLogger(__name__)
 
-#: Where a change landed. The six Sections, plus the three things that are not Sections:
-#: `admin` for low-level configuration and the mutation freeze (§3, §14), `pipeline` for
-#: an Apply, which is about the whole Candidate rather than one Section, and `audit` for an
-#: act on the trail itself.
+#: Where a change landed. The Sections, plus the three things that are not Sections: `admin`
+#: for low-level configuration and the mutation freeze (§3, §14), `pipeline` for an Apply,
+#: which is about the whole Candidate rather than one Section, and `audit` for an act on the
+#: trail itself.
 #:
 #: That last one changes no configuration at all, and it is its own category rather than part
 #: of `admin` for the reason the category exists: "who has taken a copy of the trail" is a
 #: question somebody asks on its own, and filing it under `admin` would mix it in with
 #: Maintenance Mode and `jvm.config`.
-Category = SectionName | Literal["admin", "pipeline", "audit"]
+#:
+#: And every Section that has been retired, because the audit is history and outlives what it
+#: was about: an install that ran Event Listeners as a Section holds events in that category,
+#: and one unreadable event fails the whole page it is on (#272). Nothing records into it any
+#: more.
+Category = SectionName | RetiredSectionName | Literal["admin", "pipeline", "audit"]
 
 #: What was done. Past tense, because an event records something that already happened --
 #: writing one before the change lands would name an actor for something that never did.

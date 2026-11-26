@@ -90,10 +90,12 @@ idiomatic, and these manifests would then need different settings — Kubernetes
 a single file inside a read-only directory volume, and the container fails with
 `not a directory` and no Trino log at all.
 
-Apchi still mounts single files here — `resource-groups.properties`, the
-`resource-groups.json` beside it, and `event-listener.properties`. The two `.properties` are
-the reason: Trino pins both to its configuration directory and no property relocates either,
-so Apchi has to mount them where Trino looks. Everything else it writes goes into a directory
+Apchi still mounts single files here — `resource-groups.properties` and the
+`resource-groups.json` beside it. The `.properties` is the reason: Trino pins it to its
+configuration directory and no property relocates it, so Apchi has to mount it where Trino
+looks. The Event Listener needs no mount of its own: it is a key of the coordinator's Server
+Configuration Secret, which the coordinator mounts whole at `/etc/trino/apchi`, and
+`event-listener.config-files` names it there (#269). Everything else it writes goes into a directory
 the Admin mounts. This file-by-file shape is the only one Apchi supports (ADR-0008).
 
 ## What it proves

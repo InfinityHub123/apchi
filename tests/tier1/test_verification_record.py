@@ -13,14 +13,9 @@ from httpx import AsyncClient
 from app.pipeline.applies import TERMINAL
 from app.pipeline.verification import check_order
 from app.sections.registry import REGISTERED
-from tests.conftest import FakeKubernetes
+from tests.conftest import FakeKubernetes, stage_a_restart
 
 CATALOG = {"name": "scratch", "connector": "memory", "properties": {}}
-LISTENER = {
-    "name": "audit",
-    "type": "http",
-    "properties": {"http-event-listener.connect-ingest-uri": "http://collector:8080/e"},
-}
 
 
 async def _applied(client: AsyncClient) -> dict:
@@ -73,7 +68,7 @@ async def test_an_apply_that_never_reached_verification_records_no_checks(
     and nothing was checked, which is a different statement from "Verification started and
     stopped" -- the same distinction `last_apply.verified` draws with null."""
     fake_kubernetes.pod_problem = "the validation pod failed"
-    await applying_client.post("/api/v1/event-listeners", json=LISTENER)
+    await stage_a_restart(applying_client)
 
     record = await _applied(applying_client)
 

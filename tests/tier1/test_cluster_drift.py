@@ -20,16 +20,10 @@ from app.adapters.trino import Trino
 from app.config import AuthMode, Settings
 from app.main import create_app
 from app.pipeline.applies import TERMINAL
-from app.sections.event_listeners.generator import FILE_KEY
-from tests.conftest import FakeKubernetes
+from app.sections.resource_groups.generator import RULES_KEY
+from tests.conftest import RESTART_SECRET, RESTART_SECTION, FakeKubernetes, stage_a_restart
 
 CATALOG = {"name": "scratch", "connector": "memory", "properties": {}}
-LISTENER = {
-    "name": "audit",
-    "type": "http",
-    "properties": {"http-event-listener.connect-ingest-uri": "http://collector:8080/e"},
-}
-LISTENER_SECRET = "trino-event-listener"
 DRIFT = "/api/v1/cluster/drift"
 
 #: Registry order, which is the order the response promises.
@@ -37,7 +31,6 @@ SECTIONS = [
     "catalogs",
     "client_certificates",
     "certificate_mapping",
-    "event_listeners",
     "permissions",
     "resource_groups",
 ]
@@ -106,7 +99,6 @@ async def test_each_section_says_whether_reconciling_it_restarts_trino(
         "catalogs": False,
         "client_certificates": False,
         "certificate_mapping": True,
-        "event_listeners": True,
         "permissions": False,
         "resource_groups": True,
     }
@@ -134,14 +126,14 @@ async def test_catalogs_say_they_cannot_be_compared_rather_than_claiming_to_be_i
 async def test_a_cluster_apchi_just_applied_to_has_not_drifted(
     applying_client: AsyncClient,
 ) -> None:
-    await applying_client.post("/api/v1/event-listeners", json=LISTENER)
+    await stage_a_restart(applying_client)
     record = await _applied(applying_client)
     assert record["stage"] == "succeeded", record.get("failure_reason")
 
     drift = (await applying_client.get(DRIFT)).json()
 
     assert drift["diverged"] is False
-    assert _by_section(drift)["event_listeners"] == "in_sync"
+    assert _by_section(drift)[RESTART_SECTION] == "in_sync"
 
 
 async def test_a_secret_edited_by_hand_is_drift_with_nothing_staged(
@@ -149,18 +141,18 @@ async def test_a_secret_edited_by_hand_is_drift_with_nothing_staged(
 ) -> None:
     """The case Review can only hint at. Nothing is staged, the Candidate equals its
     Snapshot, and the Cluster is still running something Apchi did not put there."""
-    await applying_client.post("/api/v1/event-listeners", json=LISTENER)
+    await stage_a_restart(applying_client)
     record = await _applied(applying_client)
     assert record["stage"] == "succeeded", record.get("failure_reason")
 
-    fake_kubernetes.secrets[LISTENER_SECRET][FILE_KEY] = "event-listener.name=edited-by-hand"
+    fake_kubernetes.secrets[RESTART_SECRET][RULES_KEY] = '{"rootGroups": [], "selectors": []}\n'
 
     drift = (await applying_client.get(DRIFT)).json()
     review = (await applying_client.get("/api/v1/review")).json()
 
     assert review["has_changes"] is False, "nothing is staged"
     assert drift["diverged"] is True
-    assert _by_section(drift)["event_listeners"] == "diverged"
+    assert _by_section(drift)[RESTART_SECTION] == "diverged"
 
 
 async def test_an_admin_value_moving_drifts_a_section_nobody_touched(
@@ -205,7 +197,7 @@ async def test_a_section_that_could_not_be_read_is_unknown_not_clean(
     assert drift["snapshot"] == 1, "there is a Snapshot; it is the Cluster that is unreadable"
     assert drift["diverged"] is None
     statuses = _by_section(drift)
-    assert statuses["event_listeners"] == "unknown"
+    assert statuses[RESTART_SECTION] == "unknown"
     assert statuses["catalogs"] == "not_comparable", "still permanent, not a read failure"
 
 

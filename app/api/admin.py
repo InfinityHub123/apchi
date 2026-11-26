@@ -37,6 +37,8 @@ from app.sections import SectionName
 from app.sections.admin import MAX_PRESERVED_MAPPINGS, AdminValues
 from app.sections.certificate_mapping.model import CertificateMappingWrite
 from app.sections.certificate_mapping.section import validate_patterns
+from app.sections.event_listeners.schemas import CURATED_SCHEMAS
+from app.sections.properties import PropertyRules, describe
 from app.sections.raw_files import RawFile, RawFileWrite, normalised
 from app.sections.server_configuration import (
     RENDERED_PATHS,
@@ -250,6 +252,21 @@ async def set_server_configuration(
         },
     )
     return saved.server_configuration
+
+
+@router.get(
+    "/server-configuration/event-listener-types",
+    response_model=list[PropertyRules],
+    summary="What each curated Event Listener accepts",
+)
+async def list_event_listener_types() -> list[PropertyRules]:
+    """The rules a curated listener's properties are checked against when written, for the
+    same reason as `GET /catalogs/connectors`: a form that carries its own copy of them drifts.
+
+    The listener's own properties, without `event-listener.name`, which names the type. An
+    uncurated type is still accepted, and judged by Trino on the validation probe (§13.6).
+    """
+    return [describe(name, schema) for name, schema in sorted(CURATED_SCHEMAS.items())]
 
 
 @router.get(

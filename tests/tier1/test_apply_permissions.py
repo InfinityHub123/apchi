@@ -11,7 +11,7 @@ from httpx import AsyncClient
 
 from app.pipeline.applies import TERMINAL
 from app.sections.permissions.generator import RULES_KEY
-from tests.conftest import FakeKubernetes
+from tests.conftest import FakeKubernetes, stage_a_restart
 
 SECRET = "trino-access-control"
 GRANT = {
@@ -106,14 +106,7 @@ async def test_a_grant_that_changes_nothing_else_restarts_nothing(
 ) -> None:
     """A Candidate with a rollout-required Section untouched must not restart for a
     permission change."""
-    await applying_client.post(
-        "/api/v1/event-listeners",
-        json={
-            "name": "audit",
-            "type": "http",
-            "properties": {"http-event-listener.connect-ingest-uri": "http://c:8080/e"},
-        },
-    )
+    await stage_a_restart(applying_client)
     await _apply(applying_client)
     restarts = len(fake_kubernetes.restarts)
 
@@ -121,7 +114,7 @@ async def test_a_grant_that_changes_nothing_else_restarts_nothing(
     record = await _apply(applying_client)
 
     assert record["stage"] == "succeeded", record
-    assert len(fake_kubernetes.restarts) == restarts, "the listener did not change"
+    assert len(fake_kubernetes.restarts) == restarts, "the resource groups did not change"
 
 
 async def test_the_probe_is_given_the_rules_and_told_to_read_them(

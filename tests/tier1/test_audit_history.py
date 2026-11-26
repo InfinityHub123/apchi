@@ -845,3 +845,38 @@ async def test_the_export_carries_no_configuration_values(as_operator: AsyncClie
     exported = _lines((await as_operator.get(EXPORT)).text)
 
     assert all(set(event) == set(AuditEvent.model_fields) for event in exported)
+
+
+# --- events from a Section that no longer exists ------------------------------------------
+
+
+async def test_an_event_recorded_under_a_retired_section_still_reads(client: AsyncClient) -> None:
+    """The audit is history, and history outlives the Section it was about. An install that ran
+    the Event Listeners Section before #269 holds events in that category; refusing to read
+    them would break the whole audit log on upgrade, not just hide those events."""
+    await _store(client).record(
+        "jo",
+        "password",
+        "event_listeners",
+        "created",
+        resource="audit",  # type: ignore[arg-type]
+    )
+
+    listed = await client.get(AUDIT)
+    filtered = await client.get(AUDIT, params={"category": "event_listeners"})
+
+    assert listed.status_code == 200, listed.text
+    assert [e["category"] for e in listed.json()["items"]] == ["event_listeners"]
+    assert filtered.status_code == 200, filtered.text
+    assert [e["resource"] for e in filtered.json()["items"]] == ["audit"]
+
+
+def test_every_retired_section_is_still_an_audit_category() -> None:
+    """So the next Section retired cannot be forgotten here, and its events stop reading."""
+    from typing import get_args
+
+    from app.audit.events import Category
+    from app.sections import RETIRED_SECTIONS
+
+    categories = {arg for member in get_args(Category) for arg in get_args(member)}
+    assert set(RETIRED_SECTIONS) <= categories

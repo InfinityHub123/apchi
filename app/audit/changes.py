@@ -31,7 +31,6 @@ _SECTIONS: Final[tuple[SectionName, ...]] = (
     "certificate_mapping",
     "permissions",
     "resource_groups",
-    "event_listeners",
 )
 
 #: Tags that are not one of the six Sections. `pipeline` for the Candidate-wide operations,

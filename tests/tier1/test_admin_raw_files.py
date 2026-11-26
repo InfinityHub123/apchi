@@ -166,7 +166,9 @@ async def test_content_never_reaches_the_log(
     "path,why",
     [
         ("/etc/trino/resource-groups.json", "a file Apchi mounts itself"),
-        ("/etc/trino/event-listener.properties", "a file Apchi mounts itself"),
+        ("/etc/trino/event-listener.properties", "Server Configuration (event-listener"),
+        ("/etc/trino/apchi/event-listener.properties", "Server Configuration (event-listener"),
+        ("/etc/trino/apchi/anything.json", "Server Configuration (event-listener"),
         ("/etc/trino/access-control/rules.json", "inside a directory Apchi fills"),
         ("/etc/trino/certs/anything.pem", "inside a directory Apchi fills"),
     ],
