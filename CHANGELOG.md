@@ -20,9 +20,44 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
-Nothing yet.
+### Added
 
-## 0.3.0 — 2026-11-24
+- **Prometheus metrics** at `/metrics`, with no identity required (#280): Maintenance Mode,
+  an Apply in flight, Applies and Auto Rollbacks by outcome, Apply and stage durations, and
+  the expiry of every certificate Apchi loaded. `metrics.serviceMonitor.enabled` renders a
+  ServiceMonitor. See the Monitoring page.
+
+## 0.4.0 — 2026-11-26
+
+Apchi renders every Trino file and the chart renders none (ADR-0010); an Argo CD sync no longer
+resets what Apchi applied; the Event Listener is the Admin's (ADR-0011); workers drain before
+they restart.
+
+### Upgrading from 0.3
+
+In this order. The first two are lost if they are left until after the upgrade.
+
+1. **Move every Trino property the chart set into Apchi**, with
+   `PUT /api/v1/admin/server-configuration`: `trino.additionalCoordinatorProperties` under
+   `coordinator`, `trino.additionalWorkerProperties` under `worker`. The chart refuses both
+   values, and the first Apply after the upgrade renders the files without them.
+2. **Move any Raw File at a path Apchi now renders**: `config.properties`, `jvm.config`,
+   `node.properties`, `log.properties`, `catalog-store.properties`,
+   `access-control.properties` and `worker-rules.json` under `/etc/trino`, and
+   `/etc/trino/event-listener.properties` or anything under `/etc/trino/apchi`. One stored
+   there stops every Apply until it is moved and deleted.
+3. **Rewrite the chart values that moved, and delete the ones that are gone.** `trino.jvm`
+   becomes `trino.<role>.jvm` and `trino.<role>.memory`, and `bootstrap.catalogs` becomes
+   catalogs created through Apchi. `bootstrap.create` and `highWaterConfigMap` have no
+   replacement. Left in, each fails the render and says what to do.
+4. **Upgrade.** Apchi's own Secrets stay as they are, and Apchi writes any that are missing.
+   An Event Listener is carried into the Admin values when Apchi starts; the next Admin Apply
+   moves it to its new mount and removes the old one.
+5. **Delete what 0.3 left behind**: `kubectl delete configmap <release>-high-water`.
+
+If you install through Argo CD, upgrade before the next sync of 0.3: that chart's Secrets are
+recreated with their starting contents on every sync, which empties the catalog seed and resets
+the access-control rules.
 
 ### Breaking
 
@@ -38,8 +73,8 @@ Nothing yet.
   that is missing when it starts, from the latest Snapshot and the Admin values, and never
   rewrites one that exists. Created by the chart as Helm hooks, Argo CD recreated them with the
   chart's starting contents on every sync, wiping applied catalogs and grants.
-  `bootstrap.create` is gone, and `bootstrap.catalogs` fails the render: create catalogs
-  through Apchi. Upgrading needs nothing -- the existing Secrets stay as they are.
+  `bootstrap.create` and `bootstrap.catalogs` fail the render, the second saying to create
+  catalogs through Apchi. Upgrading needs nothing -- the existing Secrets stay as they are.
 - **Apchi renders the workers' own files too** (ADR-0010, stage 2): `config.properties`,
   `jvm.config`, `node.properties`, `log.properties` and their access control, into
   `trino-server-config-worker`. The chart's Trino ConfigMap is gone.
@@ -71,6 +106,17 @@ Nothing yet.
 - **A ninth precondition**: nothing under `/etc/trino` may be mounted from a volume Apchi does
   not write.
 
+- **Adoption is removed** (ADR-0009). Every `/api/v1/admin/adoption/*` endpoint is gone: the
+  discovery, the seed and the adopt step. To bring an existing Cluster's configuration under
+  Apchi, import it with `PUT /api/v1/admin/configuration`, which carries the Sections and
+  the Admin values, preserved rules and mapping patterns included. The first Apply after that
+  makes Snapshot 1.
+- **The high-water mark is removed.** The chart value `highWaterConfigMap` and the setting
+  `APCHI_HIGH_WATER_CONFIG_MAP` are gone: the value fails the render, and an Apchi started with
+  that variable refuses to start and names it. Apchi's Role now only reads ConfigMaps, where it could create and patch
+  them before. The ConfigMap an earlier release created (`<release>-high-water`) is left
+  behind; delete it with `kubectl delete configmap <release>-high-water`.
+
 ### Added
 
 - **Startup and liveness probes on both Trino roles**, Trino's own `health-check`. Liveness is
@@ -100,6 +146,16 @@ Nothing yet.
 - Apchi writes the coordinator's files on its first start when they do not exist, retrying
   until MongoDB and the API server answer. It never rewrites them at startup.
 
+- **Routes and Ingresses.** `expose.apchi.host` and `expose.trino.host` each create a Route
+  where the cluster serves `route.openshift.io/v1` and an Ingress elsewhere (`expose.kind:
+  auto`). Termination is `edge` unless set: `passthrough` and `reencrypt` reach Trino over TLS.
+- **Trino over HTTPS.** `trino.https` makes the coordinator serve HTTPS from a TLS Secret, which
+  `passthrough` and `reencrypt` need.
+- **The SSO redirect URL defaults from `expose.apchi.host`** when `auth.oidc.redirectUrl` is not
+  set.
+- **A CI job running the chart under a real Argo CD** (`tests/argo`), with automated sync, prune
+  and self-heal: an Apply, then an unrelated sync, and everything Apchi wrote must survive.
+
 ### Fixed
 
 - An Admin Apply interrupted by an Apchi restart is rolled back as an Admin Apply: its Admin
@@ -121,27 +177,9 @@ Nothing yet.
   between Applies, only the second was undone.
 - Review reports the coordinator restart that a staged Server Configuration or Raw File will
   cause at the next Apply, whoever starts it.
-
-- **Adoption is removed** (ADR-0009). Every `/api/v1/admin/adoption/*` endpoint is gone: the
-  discovery, the seed and the adopt step. To bring an existing Cluster's configuration under
-  Apchi, import it with `PUT /api/v1/admin/configuration`, which carries the six Sections and
-  the Admin values, preserved rules and mapping patterns included. The first Apply after that
-  makes Snapshot 1.
-- **The high-water mark is removed.** The chart value `highWaterConfigMap` and the setting
-  `APCHI_HIGH_WATER_CONFIG_MAP` are gone, and an Apchi started with that variable refuses to
-  start and names it. Apchi's Role now only reads ConfigMaps, where it could create and patch
-  them before. The ConfigMap an earlier release created (`<release>-high-water`) is left
-  behind; delete it with `kubectl delete configmap <release>-high-water`.
-
-### Added
-
-- **Routes and Ingresses.** `expose.apchi.host` and `expose.trino.host` each create a Route
-  where the cluster serves `route.openshift.io/v1` and an Ingress elsewhere (`expose.kind:
-  auto`). Termination is `edge` unless set: `passthrough` and `reencrypt` reach Trino over TLS.
-- **Trino over HTTPS.** `trino.https` makes the coordinator serve HTTPS from a TLS Secret, which
-  `passthrough` and `reencrypt` need.
-- **The SSO redirect URL defaults from `expose.apchi.host`** when `auth.oidc.redirectUrl` is not
-  set.
+- Audit events and validations recorded under the Event Listeners Section still read after it
+  was retired (#272). One such record used to fail the whole page of the audit log or the
+  validation history it was on.
 
 ## 0.3.0 — 2026-11-24
 
