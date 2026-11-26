@@ -21,13 +21,9 @@ from app.adapters.kubernetes import CREDENTIAL_FILE_MODE, PodState, RolloutState
 from app.adapters.trino import Trino
 from app.config import Settings
 from app.main import create_app
+from app.pipeline.bootstrap import desired_secrets
 from app.sections.admin import AdminValues
-from app.sections.certificate_mapping.generator import FILE_KEY as MAPPING_KEY
 from app.sections.certificate_mapping.generator import MOUNT_DIR as MAPPING_DIR
-from app.sections.certificate_mapping.generator import render_rules
-from app.sections.permissions.generator import RULES_KEY
-from app.sections.permissions.generator import render_rules as render_access_control
-from app.sections.server_configuration import coordinator_secret, role_secret
 
 # Pinned to match deploy/trino-dev and the supported range in section 8, so a
 # Trino upgrade breaks CI rather than production.
@@ -117,22 +113,15 @@ WORKER_CONFIG_FILES = (
 
 
 def bootstrap_secrets() -> dict[str, dict[str, str]]:
-    """What a Cluster holds before Apchi has ever applied to it.
+    """What a Cluster holds once Apchi has started on it and never applied.
 
-    Not empty, and for a reason that applies to both files here: the coordinator is
-    configured to read a user-mapping file and an access-control rules file, and refuses to
-    start when either is missing -- which is exactly why deploy/trino-dev ships the generated
-    default of each. A fake that started empty would make the first Apply look like a change
-    and restart a coordinator for nothing.
+    Apchi writes every Secret it owns that is missing when it starts (the chart creates none,
+    because Argo CD recreated them on every sync), so this is that write for the empty
+    configuration. Not empty, either: Trino refuses to start without the user-mapping file
+    and the access-control rules. A fake holding less would make Apchi's own startup look
+    like a change, and the first Apply restart a coordinator for nothing.
     """
-    return {
-        MAPPING_SECRET: {MAPPING_KEY: render_rules({}, _SETTINGS.trino_user)},
-        RULES_SECRET: {RULES_KEY: render_access_control(_SETTINGS.trino_user)},
-        # Trino's own files, as Apchi writes them on its first start with no Admin values --
-        # which is what a Cluster that has run Apchi once holds (ADR-0010).
-        SERVER_CONFIG_SECRET: coordinator_secret(AdminValues().server_configuration, _SETTINGS),
-        WORKER_CONFIG_SECRET: role_secret("worker", AdminValues().server_configuration, _SETTINGS),
-    }
+    return desired_secrets(_SETTINGS, {}, AdminValues())
 
 
 def container_url(container: DockerContainer, port: int = 8080) -> str:

@@ -117,8 +117,6 @@ does not create.
 | `certificates.maxBytes` | `1048576` | What a Kubernetes Secret may hold; a larger upload is refused with that reason |
 | `alertWebhookUrl` | `""` | Where a failed Auto Rollback is reported. Empty means log only |
 | `extraEnv` | `[]` | `APCHI_`-prefixed environment, for a setting newer than this chart. A name Apchi does not read stops it starting, naming the variable -- which is the point: a misspelt one would otherwise leave it running on a default |
-| `bootstrap.create` | `true` | Creates the six Secrets Apchi writes into, as a `pre-install` hook. `false` when they already exist |
-| `bootstrap.catalogs` | `{}` | Catalogs the Cluster comes up with before Apchi has applied. For a demo and nothing else: Apchi's first apply rewrites the seed, so anything here Apchi does not know about disappears at the following restart |
 | `rbac.create` | `true` | `false` to bind your own Role. Without an equivalent one every Apply fails at the API server |
 | `serviceAccount.create`, `.name`, `.annotations` | `true`, `""`, `{}` | |
 | `service.type`, `service.port` | `ClusterIP`, `8000` | |
@@ -151,23 +149,28 @@ cluster-scoped rule.
 | `pods`, `pods/log` | get, list, create, delete / get | The ephemeral validation coordinator. Its log is the only place a refusing Trino explains itself |
 | `deployments` | get, patch | A Rollout. Apchi never creates or deletes one: it does not own the Trino deployment |
 
-## The bootstrap, and why `helm upgrade` is safe
+## The Secrets Apchi writes, and why the chart creates none of them
 
-Trino reads the access-control rules and the user-mapping file while loading and refuses to
-boot without either, so the Cluster cannot wait for Apchi to write them. This chart creates
-all six Secrets Apchi writes into — but as a **`pre-install` hook**, which runs once and is
-not part of the release.
+Apchi writes into nine Secrets: the catalog seed, the access-control rules, the user-mapping
+file, the client certificates, Resource Groups, the Event Listener, the raw files, and Trino's
+own files for each role. **This chart creates none of them.** Apchi writes each one that is
+missing when it starts -- rendered from the latest Snapshot and the Admin values in force, which
+on a new install is the empty configuration -- and never rewrites one that exists. Trino's pods
+wait in `ContainerCreating` until they appear, which Kubernetes retries by itself.
 
-That is the whole design, and it matters: a Secret tracked in the release would be reverted
-by the next `helm upgrade`, so an unrelated chart bump would silently undo a permission
-change. Verified on a live cluster — after Apchi had applied catalogs, grants and resource
-groups, a `helm upgrade` that changed the worker count and then one that changed a chart's
-own volume list both left every Secret and Apchi's own pod-template volume exactly as Apchi
-had them.
+The chart used to create them as Helm `pre-install` hooks, which Helm runs once. **Argo CD does
+not run Helm**: it turns those hooks into sync hooks and runs them on every sync, deleting and
+recreating each Secret with the chart's starting contents. Measured on kind with automated sync:
+one sync for an unrelated pod annotation emptied the catalog seed, reset the access-control rules
+to fail-open, and left the coordinator crash-looping on emptied Secrets its mounts still read
+from. `tests/argo` runs that scenario in CI against the real chart and a real Argo CD.
 
-`helm uninstall` leaves those Secrets behind, which is also correct: they hold the Cluster's
-configuration and, for the catalog seed, its only durable copy. Remove them deliberately or
-not at all.
+Because no release owns them, `helm uninstall` and an Argo CD prune leave them behind, which is
+correct: they hold the Cluster's configuration and, for the catalog seed, its only durable copy.
+Remove them deliberately or not at all.
+
+**Upgrading from a chart that created them:** nothing to do. The Secrets already exist, so Apchi
+leaves them as they are, and a chart without the hooks no longer touches them.
 
 ## The Trino cluster
 

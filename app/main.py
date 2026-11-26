@@ -38,7 +38,7 @@ from app.auth.tokens import TokenStore
 from app.auth.users import UserStore, bootstrap
 from app.config import AuthMode, Settings, get_settings
 from app.logging import configure_logging
-from app.pipeline import server_configuration
+from app.pipeline import bootstrap as secrets_bootstrap
 from app.pipeline.admin_values import AdminStore
 from app.pipeline.applies import ApplyEngine, ApplyRunner, ApplyStore, recover_interrupted
 from app.pipeline.candidate import CandidateStore
@@ -174,12 +174,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.exception("could not prepare authentication storage; retried at the next start")
 
     # Trino cannot start without its own files, and on a new install nothing has written them:
-    # the coordinator waits in ContainerCreating until this Secret exists. Retried in the
+    # the coordinator waits in ContainerCreating until these Secrets exist. The chart creates
+    # none of them, because Argo CD recreates a chart-created Secret on every sync. Retried in the
     # background rather than tried once, because on that same install MongoDB is often still
     # starting -- and a coordinator waiting on a write that was attempted once and given up on
     # would wait until somebody restarted Apchi.
     app.state.server_configuration_writer = asyncio.create_task(
-        _write_server_configuration(app, settings)
+        _write_missing_secrets(app, settings)
     )
 
     # A crash mid-validation leaks an ephemeral coordinator, and leaked Trino pods
@@ -213,19 +214,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 _FIRST_WRITE_RETRY_SECONDS = 5.0
 
 
-async def _write_server_configuration(app: FastAPI, settings: Settings) -> None:
-    """Write the coordinator's server configuration if it does not exist, until that works.
+async def _write_missing_secrets(app: FastAPI, settings: Settings) -> None:
+    """Write every Secret Apchi owns that does not exist, until that works.
 
-    Never rewrites one that exists -- see `server_configuration.write_if_missing`.
+    Never rewrites one that exists -- see `app.pipeline.bootstrap.write_missing`.
     """
     while True:
         try:
-            await server_configuration.write_if_missing(
-                app.state.kubernetes, settings, await app.state.admin_store.load()
+            await secrets_bootstrap.write_missing(
+                app.state.kubernetes, settings, app.state.snapshot_store, app.state.admin_store
             )
         except Exception:
             logger.warning(
-                "could not check or write the coordinator's server configuration; retrying",
+                "could not check or write the Secrets Apchi owns; retrying",
                 exc_info=True,
             )
             await asyncio.sleep(_FIRST_WRITE_RETRY_SECONDS)

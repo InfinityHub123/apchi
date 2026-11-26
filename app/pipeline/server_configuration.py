@@ -14,9 +14,6 @@ worker-only change costs no query at all. A change to one role's files restarts 
 import logging
 from typing import TYPE_CHECKING, Final
 
-from app.adapters.kubernetes import KubernetesAdapter
-from app.config import Settings
-from app.sections.admin import AdminValues
 from app.sections.server_configuration import Role, role_secret, secret_name
 
 if TYPE_CHECKING:  # a Cluster carries the adapters and the Admin values together
@@ -56,29 +53,3 @@ async def changed_roles(cluster: "Cluster") -> set[Role]:
 async def changed(cluster: "Cluster") -> bool:
     """Whether delivering would change any role's files."""
     return bool(await changed_roles(cluster))
-
-
-async def write_if_missing(
-    kubernetes: KubernetesAdapter, settings: Settings, admin: AdminValues
-) -> list[Role]:
-    """At startup: write each role's Secret only if it does not exist. Returns the roles written.
-
-    Trino cannot start without its files, and on a new install nothing has written them yet --
-    the pods wait in ContainerCreating until the Secret appears, which Kubernetes retries by
-    itself (measured). An existing Secret is never rewritten here, even when the wiring has
-    moved: what is in it is what the running pods were started with, and restarting Apchi must
-    never end a query. The next Apply delivers the difference, and Review shows it before then.
-    """
-    written: list[Role] = []
-    for role in ROLES:
-        name = secret_name(role, settings)
-        if await kubernetes.read_secret_if_present(name) is not None:
-            continue
-        await kubernetes.write_secret(name, role_secret(role, admin.server_configuration, settings))
-        logger.warning(
-            "wrote the %s's server configuration, which did not exist",
-            role,
-            extra={"secret": name},
-        )
-        written.append(role)
-    return written
