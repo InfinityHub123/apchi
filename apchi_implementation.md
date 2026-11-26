@@ -496,7 +496,10 @@ checksum even when its Secrets match, which is what an Apply stopped between the
 template with no checksum, as on a fresh install, is judged by its Secrets alone. The time is
 still written beside it, because a Secret edited by hand and put back renders the checksum the
 pods already carry. After Verification, `apchi/verified-snapshot` goes on the Deployment's own
-metadata, which restarts nothing; it is for people, and Apchi decides nothing from it. Kubernetes
+metadata, which restarts nothing; it is for people, and Apchi decides nothing from it. It does
+bump the Deployment's `generation` -- Kubernetes copies a Deployment's annotations onto its
+ReplicaSets and counts that as a change -- so whether pods were replaced is read from the pod
+template, never from the generation. Kubernetes
 records nothing about which content of a Secret a pod mounted, so this is the standard answer
 (Helm's `checksum/config`); a restart outside Apchi in the middle of a stopped Apply costs one
 restart too many, never one too few (#290).
