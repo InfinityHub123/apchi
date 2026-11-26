@@ -24,6 +24,7 @@ from app.api.client_certificates import router as certificates_router
 from app.api.deps import AdminOnly, Authenticated
 from app.api.docs import install_docs
 from app.api.health import router as health_router
+from app.api.metrics import router as metrics_router
 from app.api.permissions import router as permissions_router
 from app.api.resource_groups import router as resource_groups_router
 from app.api.snapshots import router as snapshots_router
@@ -37,6 +38,7 @@ from app.auth.tokens import TokenStore
 from app.auth.users import UserStore, bootstrap
 from app.config import AuthMode, Settings, get_settings
 from app.logging import configure_logging
+from app.metrics import Metrics
 from app.pipeline import bootstrap as secrets_bootstrap
 from app.pipeline.admin_values import AdminStore
 from app.pipeline.applies import ApplyEngine, ApplyRunner, ApplyStore, recover_interrupted
@@ -115,9 +117,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     def build_admin_engine(apply_id: str) -> ApplyEngine:
         return build(AdminEngine, apply_id)
 
-    app.state.apply_runner = ApplyRunner(app.state.apply_store, build_engine, app.state.audit_store)
+    observe = app.state.metrics.observe
+    app.state.apply_runner = ApplyRunner(
+        app.state.apply_store, build_engine, app.state.audit_store, observe=observe
+    )
     app.state.admin_apply_runner = ApplyRunner(
-        app.state.apply_store, build_admin_engine, app.state.audit_store, category="admin"
+        app.state.apply_store,
+        build_admin_engine,
+        app.state.audit_store,
+        category="admin",
+        observe=observe,
     )
     app.state.validation_runner = ValidationRunner(app.state.validation_store, build_engine)
     logger.info("apchi starting")
@@ -138,6 +147,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             build_engine,
             app.state.audit_store,
             admin_engine_factory=build_admin_engine,
+            observe=observe,
         )
     except Exception:
         logger.exception(
@@ -253,6 +263,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     install_docs(app)
     app.state.settings = settings
+    app.state.metrics = Metrics()
     errors.install(app)
     # Documented on the contract rather than left to be discovered: these become reachable
     # the moment a mode other than `none` is configured, and the mode is runtime
@@ -272,6 +283,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # probe: a condition an Operator has to log in to clear would crashloop the pod they
     # need alive to reach it (see api/health.py).
     app.include_router(health_router, prefix="/api/v1")
+    # Ungated like /health, and for a similar reason: a scraper holds no Apchi identity, and
+    # nothing here names a resource, an identity or a credential (api/metrics.py).
+    if settings.metrics_enabled:
+        app.include_router(metrics_router)
     # Signing in cannot require being signed in. /auth/me carries no gate either: it answers
     # in every mode, so a UI asks it once rather than branching on the configured mode, and
     # in `none` mode it reports the anonymous Admin.
