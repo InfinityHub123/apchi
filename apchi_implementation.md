@@ -2829,18 +2829,6 @@ the same setting.
 and the decision taken. DEBUG carries the DDL issued with values redacted, poll results,
 Kubernetes API calls, and timings.
 
-**Metrics** (#280), at `/metrics` and ungated like `/health`, because a scraper holds no
-identity; what makes that safe is that nothing exported names a resource, an identity or a
-credential. Two kinds, kept apart because they answer differently across replicas and
-restarts. The Cluster's state -- Maintenance Mode, an Apply in flight -- is read from MongoDB
-at scrape time, so every replica agrees and a restart loses nothing; unreadable, it is `NaN`
-rather than a zero that would say Maintenance Mode is off. What happened to Applies is counted
-by the process that finished each one, from its finished record, so the pipeline and restart
-recovery cannot count the same Apply differently. The expiry of each certificate Apchi
-*loaded* is exported too, which is what closes #196's gap: a Cluster nobody applies to hears
-no expiry warning in the logs, but Prometheus alerts on the gauge without a scheduler in
-Apchi.
-
 **Failures reach the Operator, not only the logs.** The Apply record carries the failure
 reason, not just the stage it died at — otherwise diagnosing any failed Apply requires an
 engineer with log access, when the Operator who triggered it could often read the answer

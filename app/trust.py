@@ -266,15 +266,6 @@ def rotated() -> list[str]:
     return changed
 
 
-def expiries() -> dict[str, datetime]:
-    """When each certificate Apchi loaded expires, by the path it was loaded from."""
-    return {
-        path: material.expires
-        for path, material in list(_loaded.items())
-        if material.expires is not None
-    }
-
-
 def log_rotations() -> None:
     """Say so when a mounted certificate has changed under a running Apchi."""
     for path in rotated():
@@ -294,8 +285,9 @@ def log_expiring(within_days: int) -> None:
 
     A log line and not a refusal, and emitted where Apchi is already doing something rather
     than on a timer -- the codebase has no periodic task and this is not the feature to add
-    the first one for. A Cluster nobody applies to hears nothing here between restarts
-    (#196), which is what `expiries` is for: Prometheus scrapes it and alerts on it (#280).
+    the first one for. The limit is recorded rather than hidden (#196): a Cluster nobody
+    applies to hears nothing between restarts, and closing that needs a consumer Apchi does
+    not have yet.
     """
     now = datetime.now(UTC)
     for path, material in list(_loaded.items()):

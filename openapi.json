@@ -8209,24 +8209,6 @@
           "validations"
         ]
       }
-    },
-    "/metrics": {
-      "get": {
-        "description": "Answers while MongoDB is down, with the Cluster's state left out of it.\n\nA scrape that failed with MongoDB would lose the Apply counters and the certificate\nexpiries exactly when somebody is looking, and `/health` already reports MongoDB.",
-        "operationId": "metrics_metrics_get",
-        "responses": {
-          "200": {
-            "content": {
-              "text/plain; version=1.0.0; charset=utf-8": {}
-            },
-            "description": "The exposition."
-          }
-        },
-        "summary": "Prometheus metrics",
-        "tags": [
-          "health"
-        ]
-      }
     }
   }
 }
