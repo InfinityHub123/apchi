@@ -357,6 +357,8 @@ class Settings(BaseSettings):
     #: logger and line it came from. It never turns on a dependency's own debug output --
     #: see `configure_logging` for why that is not safe at any level of redaction.
     debug: bool = False
+    #: Serve Prometheus metrics at /metrics, with no identity required (#280).
+    metrics_enabled: bool = True
 
     @property
     def admin_groups(self) -> frozenset[str]:
