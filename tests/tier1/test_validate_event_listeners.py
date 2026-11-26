@@ -221,5 +221,6 @@ async def test_the_validate_action_covers_listeners_without_applying_them(
 
     assert verdict["outcome"] == "passed", verdict["failures"]
     assert fake_kubernetes.restarts == []
-    assert "trino-event-listener" not in fake_kubernetes.secrets
+    # Exists from Apchi's start, empty: validating must leave it as it was.
+    assert fake_kubernetes.secrets["trino-event-listener"] == {}
     assert (await applying_client.get("/api/v1/snapshots")).json()["items"] == []

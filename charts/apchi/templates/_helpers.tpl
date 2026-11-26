@@ -462,6 +462,9 @@ The values sizing replaced, refused by name so an upgrade says where each one we
 rendering a Trino that silently ignores it.
 */}}
 {{- define "trino.refuseMovedValues" -}}
+{{- if (.Values.bootstrap).catalogs -}}
+{{- fail "bootstrap.catalogs is gone: the chart no longer creates the catalog seed, because Argo CD recreated it on every sync. Create catalogs through Apchi (POST /api/v1/catalogs, or an import) and apply them" -}}
+{{- end -}}
 {{- if hasKey .Values.trino "jvm" -}}
 {{- fail "trino.jvm is gone: the heap and JVM flags are per role now, under trino.coordinator.jvm and trino.worker.jvm" -}}
 {{- end -}}

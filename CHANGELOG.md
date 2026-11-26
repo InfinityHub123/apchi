@@ -22,6 +22,12 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ### Breaking
 
+- **The chart creates none of the Secrets Apchi writes into** (#268). Apchi writes each one
+  that is missing when it starts, from the latest Snapshot and the Admin values, and never
+  rewrites one that exists. Created by the chart as Helm hooks, Argo CD recreated them with the
+  chart's starting contents on every sync, wiping applied catalogs and grants.
+  `bootstrap.create` is gone, and `bootstrap.catalogs` fails the render: create catalogs
+  through Apchi. Upgrading needs nothing -- the existing Secrets stay as they are.
 - **Apchi renders the workers' own files too** (ADR-0010, stage 2): `config.properties`,
   `jvm.config`, `node.properties`, `log.properties` and their access control, into
   `trino-server-config-worker`. The chart's Trino ConfigMap is gone.

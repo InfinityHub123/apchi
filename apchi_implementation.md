@@ -424,10 +424,20 @@ catalog DDL open to everyone.
 
 **The file cannot be absent at startup.** Trino reads `security.config-file` while loading the
 system access control and refuses to boot without it — "Configuration is invalid", with the pod
-going to `Failed`. A Cluster therefore cannot wait for Apchi to write the file before starting, so
-the bootstrap copy is **committed as generated output** with a CI drift check, the same pattern
-`openapi.json` uses: nothing is hand-maintained, nothing can drift from what Apchi produces, and
-the Cluster still comes up on its own, and that committed copy stands in until the first Apply.
+going to `Failed`. So **Apchi writes it on its first start**, with every other Secret it owns that
+is missing, rendered from the latest Snapshot and the Admin values -- on a new install, the empty
+configuration -- and Trino's pods wait in `ContainerCreating` until it appears. One that exists is
+never rewritten at startup: it is what the running pods started with, and rewriting is an Apply's.
+
+The chart used to create these Secrets as Helm `pre-install` hooks, from a committed copy of this
+file. That was wrong under Argo CD, which does not run Helm: it runs a chart's hooks as sync hooks
+on **every** sync, deleting and recreating each Secret with the chart's starting contents. Measured
+on kind with automated sync, one sync for an unrelated pod annotation emptied the catalog seed,
+reset these rules to the defaults, and emptied the Event Listener and Resource Groups Secrets while
+Apchi's mounts still read from them, so the restarted coordinator crash-looped. The chart now
+creates none of them, and `tests/argo` runs that sync against a real Argo CD in CI.
+`deploy/trino-dev`, which is applied with `kubectl` and never by Argo CD, still ships the generated
+copy, with the drift check.
 
 `security.refresh-period` must be set for the whole-volume mount to be worth anything. Without it
 Trino reads the rules once at startup, and a Secret the kubelet faithfully keeps current is never

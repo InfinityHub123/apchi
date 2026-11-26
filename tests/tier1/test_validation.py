@@ -105,7 +105,8 @@ async def test_a_validation_failure_leaves_the_cluster_untouched(
 
     cluster = Trino(url=container_url(trino_cluster))
     assert "imaginary" not in await cluster.catalogs()
-    assert SECRET not in fake_kubernetes.secrets
+    # Exists, empty, from Apchi's start: nothing here may have written a catalog into it.
+    assert fake_kubernetes.secrets[SECRET] == {}
 
 
 async def test_the_failure_names_the_resource_and_the_reason(
@@ -219,7 +220,8 @@ async def test_the_validate_action_does_not_apply(
     assert verdict["failures"] == []
     cluster = Trino(url=container_url(trino_cluster))
     assert "scratch" not in await cluster.catalogs()
-    assert SECRET not in fake_kubernetes.secrets
+    # Exists, empty, from Apchi's start: nothing here may have written a catalog into it.
+    assert fake_kubernetes.secrets[SECRET] == {}
     assert (await applying_client.get("/api/v1/snapshots")).json()["items"] == []
 
 

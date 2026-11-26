@@ -276,9 +276,8 @@ kubectl exec -n apchi deploy/trino-coordinator -c trino -- trino --execute "SHOW
 "system"
 ```
 
-The chart seeds no catalogs by default, so `sales` and `system` is the whole list. If
-you had seeded one with `bootstrap.catalogs`, or if you are pointing Apchi at a cluster that
-already has catalogs, there is a consequence worth understanding first: the durable copy of
+The chart seeds no catalogs, so `sales` and `system` is the whole list. If you are pointing
+Apchi at a cluster that already has catalogs, there is a consequence worth understanding first: the durable copy of
 every catalog is a Secret Apchi owns and rewrites, and the coordinator reseeds its catalog
 store from that Secret at every start. So a catalog Apchi does not hold survives the apply,
 survives the day, and **disappears at the next coordinator restart**.
