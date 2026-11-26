@@ -17,7 +17,7 @@ from httpx import AsyncClient
 from app.pipeline.applies import TERMINAL
 from app.sections.client_certificates.generator import MOUNT_DIR
 from tests.certificates import bundle
-from tests.tier2.conftest import file_appears
+from tests.tier2.conftest import file_appears, pod_template
 
 pytestmark = pytest.mark.tier2
 
@@ -45,7 +45,7 @@ async def test_a_catalog_and_the_certificate_it_presents_apply_together(
     e2e_client: AsyncClient, real_kubernetes
 ) -> None:
     """One Apply carries both, and neither needs the coordinator restarted."""
-    before = await real_kubernetes.rollout_state("trino-coordinator")
+    before = pod_template()
     uploaded = await e2e_client.post(
         "/api/v1/certificates",
         data={"name": "finance"},
@@ -58,8 +58,7 @@ async def test_a_catalog_and_the_certificate_it_presents_apply_together(
     record = await _apply(e2e_client)
 
     assert record["stage"] == "succeeded", record
-    after = await real_kubernetes.rollout_state("trino-coordinator")
-    assert after.generation == before.generation, "neither a catalog nor a certificate restarts"
+    assert pod_template() == before, "neither a catalog nor a certificate restarts"
 
     # The catalog really exists on the coordinator, with the rendered paths in it.
     seeded = await real_kubernetes.read_secret("trino-catalog-seed")

@@ -351,6 +351,15 @@ def coordinator_log(lines: int = 400) -> str:
     return kubectl("logs", f"deploy/{'trino-coordinator'}", "-c", "trino", f"--tail={lines}")
 
 
+def pod_template(deployment: str = COORDINATOR) -> dict[str, Any]:
+    """The Deployment's pod template: what changes when, and only when, its pods are replaced.
+
+    Not the Deployment's generation, which Kubernetes also bumps when the Deployment's own
+    annotations change -- it copies them onto the ReplicaSets -- and every committed Apply
+    writes one (#290)."""
+    return dict(json.loads(kubectl("get", deployment, "-o", "json"))["spec"]["template"])
+
+
 def template_checksum(deployment: str) -> str | None:
     """`deployment` in the `deploy/<name>` form `COORDINATOR` and `WORKER` are written in."""
     template = json.loads(kubectl("get", deployment, "-o", "json"))["spec"]["template"]
