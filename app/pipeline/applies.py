@@ -326,24 +326,6 @@ class NoOpEngine:
 EngineFactory = Callable[[str], ApplyEngine]
 
 
-#: Told about each Apply once it is over: the metrics (#280).
-Observer = Callable[[ApplyRecord], None]
-
-
-async def observed(store: ApplyStore, observe: Observer | None, apply_id: str) -> None:
-    """Hand the finished record to `observe`. Never fatal: the Apply is over, and a metric
-    that could not be counted must not turn it into a failure."""
-    if observe is None:
-        return
-    try:
-        record = await store.get(apply_id)
-    except PyMongoError:
-        logger.exception("could not read a finished apply to count it")
-        return
-    if record is not None:
-        observe(record)
-
-
 class ApplyRunner:
     """Drives an Apply through its stages, in the background."""
 
@@ -353,7 +335,6 @@ class ApplyRunner:
         engine_factory: EngineFactory,
         audit: AuditStore,
         category: Category = "pipeline",
-        observe: Observer | None = None,
     ) -> None:
         self._store = store
         self._engine_factory = engine_factory
@@ -362,7 +343,6 @@ class ApplyRunner:
         # is not a Section, and §14 gives it no Snapshot -- so the category is what tells the
         # two kinds of Apply apart in the trail, since both end in the same stages.
         self._category = category
-        self._observe = observe
         self._tasks: set[asyncio.Task[None]] = set()
 
     def start(self, record: ApplyRecord) -> None:
@@ -469,7 +449,6 @@ class ApplyRunner:
                 await self._store.fail(apply_id, reason)
         finally:
             apply_id_var.reset(token)
-        await observed(self._store, self._observe, apply_id)
 
     async def _roll_back(
         self, apply_id: str, engine: ApplyEngine, reason: str, who: Identity
@@ -523,7 +502,6 @@ async def recover_interrupted(
     engine_factory: EngineFactory,
     audit: AuditStore | None = None,
     admin_engine_factory: EngineFactory | None = None,
-    observe: Observer | None = None,
 ) -> list[str]:
     """Resolve Applies left in flight by a restart.
 
@@ -578,7 +556,6 @@ async def recover_interrupted(
                 else engine_factory
             )
             await _restore_after_interruption(store, factory, record.id)
-        await observed(store, observe, record.id)
     return recovered
 
 

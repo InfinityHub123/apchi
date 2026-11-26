@@ -192,37 +192,6 @@ async def test_the_record_says_it_was_interrupted_not_merely_failed(
     assert "Apchi restarted" in record["failure_reason"]
 
 
-async def test_the_recovering_process_counts_it_as_interrupted(
-    settings: Settings,
-    fake_kubernetes: FakeKubernetes,
-    trino_cluster: DockerContainer,
-    trino_validation: DockerContainer,
-) -> None:
-    """The process that ran it died before it could count it, so the one that recovers it
-    does (#280)."""
-    async with _apchi(settings, fake_kubernetes, trino_cluster, trino_validation) as first:
-        await first.post("/api/v1/catalogs", json=ADDED)
-        await _kill_mid_apply(first, fake_kubernetes, "added.properties")
-        metrics = first.app_under_test.state.metrics  # type: ignore[attr-defined]
-        assert (
-            metrics.registry.get_sample_value("apchi_applies_interrupted_total", {"kind": "apply"})
-            is None
-        ), "a cancelled runner must not count what it did not finish"
-
-    async with _apchi(settings, fake_kubernetes, trino_cluster, trino_validation) as restarted:
-        metrics = restarted.app_under_test.state.metrics  # type: ignore[attr-defined]
-
-    assert (
-        metrics.registry.get_sample_value("apchi_applies_interrupted_total", {"kind": "apply"}) == 1
-    )
-    assert (
-        metrics.registry.get_sample_value(
-            "apchi_auto_rollbacks_total", {"kind": "apply", "outcome": "succeeded"}
-        )
-        == 1
-    )
-
-
 async def test_the_candidate_is_unfrozen_after_recovery(
     settings: Settings,
     fake_kubernetes: FakeKubernetes,
