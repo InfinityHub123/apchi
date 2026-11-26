@@ -39,10 +39,10 @@ In this order. The first two are lost if they are left until after the upgrade.
    `access-control.properties` and `worker-rules.json` under `/etc/trino`, and
    `/etc/trino/event-listener.properties` or anything under `/etc/trino/apchi`. One stored
    there stops every Apply until it is moved and deleted.
-3. **Rewrite the chart values that moved.** `trino.jvm` becomes `trino.<role>.jvm` and
-   `trino.<role>.memory`, and `bootstrap.catalogs` becomes catalogs created through Apchi;
-   left in, each fails the render and names its replacement. `bootstrap.create` and
-   `highWaterConfigMap` are gone too, and are ignored: delete them.
+3. **Rewrite the chart values that moved, and delete the ones that are gone.** `trino.jvm`
+   becomes `trino.<role>.jvm` and `trino.<role>.memory`, and `bootstrap.catalogs` becomes
+   catalogs created through Apchi. `bootstrap.create` and `highWaterConfigMap` have no
+   replacement. Left in, each fails the render and says what to do.
 4. **Upgrade.** Apchi's own Secrets stay as they are, and Apchi writes any that are missing.
    An Event Listener is carried into the Admin values when Apchi starts; the next Admin Apply
    moves it to its new mount and removes the old one.
@@ -66,8 +66,8 @@ the access-control rules.
   that is missing when it starts, from the latest Snapshot and the Admin values, and never
   rewrites one that exists. Created by the chart as Helm hooks, Argo CD recreated them with the
   chart's starting contents on every sync, wiping applied catalogs and grants.
-  `bootstrap.create` is gone, and `bootstrap.catalogs` fails the render: create catalogs
-  through Apchi. Upgrading needs nothing -- the existing Secrets stay as they are.
+  `bootstrap.create` and `bootstrap.catalogs` fail the render, the second saying to create
+  catalogs through Apchi. Upgrading needs nothing -- the existing Secrets stay as they are.
 - **Apchi renders the workers' own files too** (ADR-0010, stage 2): `config.properties`,
   `jvm.config`, `node.properties`, `log.properties` and their access control, into
   `trino-server-config-worker`. The chart's Trino ConfigMap is gone.
@@ -105,8 +105,8 @@ the access-control rules.
   the Admin values, preserved rules and mapping patterns included. The first Apply after that
   makes Snapshot 1.
 - **The high-water mark is removed.** The chart value `highWaterConfigMap` and the setting
-  `APCHI_HIGH_WATER_CONFIG_MAP` are gone, and an Apchi started with that variable refuses to
-  start and names it. Apchi's Role now only reads ConfigMaps, where it could create and patch
+  `APCHI_HIGH_WATER_CONFIG_MAP` are gone: the value fails the render, and an Apchi started with
+  that variable refuses to start and names it. Apchi's Role now only reads ConfigMaps, where it could create and patch
   them before. The ConfigMap an earlier release created (`<release>-high-water`) is left
   behind; delete it with `kubectl delete configmap <release>-high-water`.
 
