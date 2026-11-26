@@ -179,20 +179,6 @@ logging:
   # timing. Never a payload, so it is safe in production; Apchi logs a warning while it is on.
   debug: false
 
-# Prometheus metrics at /metrics on Apchi's Service port, with no identity required: counts,
-# stages and certificate paths, never a resource name, an identity or a credential.
-metrics:
-  enabled: true
-  # A ServiceMonitor, which the Prometheus Operator and OpenShift's user-workload monitoring
-  # both read. Needs the monitoring.coreos.com CRDs installed.
-  serviceMonitor:
-    enabled: false
-    # Prometheus' own default when empty.
-    interval: ""
-    # What the Prometheus' serviceMonitorSelector matches on, e.g.
-    #   release: kube-prometheus-stack
-    labels: {}
-
 trino:
   # The coordinator, scheme included. Apchi issues catalog DDL and the Verification smoke
   # query through it.
