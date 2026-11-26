@@ -110,6 +110,9 @@ async def test_rules_changed_outside_apchi_are_corrected_by_the_next_apply(
     assert json.loads(fake_kubernetes.secrets[ACCESS_CONTROL_SECRET][RULES_KEY]) == json.loads(
         render_rules("apchi")
     )
+    # Trino re-reads them on its refresh period, which is also how a Cluster upgraded from a
+    # release whose rules refused every metrics scrape gets the open read without a restart.
+    assert fake_kubernetes.restarted == []
 
 
 async def test_the_dev_deployment_meets_every_precondition(
