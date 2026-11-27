@@ -95,38 +95,36 @@ there too; only a manifest rendered with no cluster needs `expose.kind: route`.
 ```yaml
 expose:
   apchi: {host: apchi.apps.example.com}
-  trino: {host: trino.apps.example.com}
-```
-
-Both are `edge` by default, on the router's certificate. For a Trino that presents its own,
-pass the connection through to it:
-
-```yaml
-expose:
   trino: {host: trino.apps.example.com, termination: passthrough}
 trino:
-  https: {enabled: true, existingSecret: trino-server-tls}
+  https: {existingSecret: trino-server-tls}
 ```
+
+Apchi's Route is `edge` by default, on the router's certificate. Trino's has to reach its HTTPS
+port, the default: `passthrough` carries a client's
+certificate to Trino, and `reencrypt` ends it at the router, which suits password sign-in only.
+`edge` is refused, because it would reach the HTTP port, which trusts the user name it is sent.
 
 The initContainer that joins the certificate and the key takes `trino.coordinator.seedResources`,
 the same limits as the one that seeds the catalog store.
 
 ## NetworkPolicy
 
-`networkPolicy.enabled: true` restricts who reaches Trino's pods: Trino itself, Apchi's API
-pods, and, when `expose.trino` is a Route, OpenShift's router. The router's namespace is
+On by default. Every pod in Trino's namespace reaches both roles -- Apchi, and a scraper such
+as Alloy. From outside it, with HTTPS, the default, only the coordinator's HTTPS port is open,
+to anyone, the router included, since it authenticates them. Without HTTPS the HTTP port also
+admits OpenShift's router when `expose.trino` is a Route. The router's namespace is
 selected by both labels in use, `policy-group.network.openshift.io/ingress: ""` (OVN-Kubernetes)
 and `network.openshift.io/policy-group: ingress` (OpenShift SDN), so nothing has to be set for
 it. Anything else that queries Trino directly, such as a Trino Gateway in its own namespace,
-goes in `networkPolicy.coordinator.from`:
+goes in `networkPolicy.coordinator.from` when Trino has no HTTPS:
 
 ```yaml
 networkPolicy:
-  enabled: true
   coordinator:
     from:
       - namespaceSelector:
           matchLabels: {kubernetes.io/metadata.name: trino-gateway}
 ```
 
-It is off by default because turning it on cuts off every client not listed.
+With HTTPS nothing has to be listed: such a client uses it.

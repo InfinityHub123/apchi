@@ -32,3 +32,9 @@ trino:
   # that a permission change reached the Cluster, and at 30s the suite would spend most of
   # its time asleep. Apchi only requires the property to be set, not what it is set to.
   securityRefreshPeriod: 1s
+
+  # Plain HTTP and the name a client sends: tier 2's Apchi runs on the test host and reaches
+  # Trino through a port-forward with no certificate. HTTPS, the chart's default, is what the
+  # Argo CD job installs.
+  https:
+    enabled: false

@@ -41,7 +41,15 @@ SHAPES = {
 
 def _render(*values: str) -> list[dict[str, Any]]:
     finished = subprocess.run(
-        ["helm", "template", "rel", str(CHART), "--set", "mongodb.deploy=true", *values],
+        [
+            "helm",
+            "template",
+            "rel",
+            str(CHART),
+            "--values",
+            str(CHART / "ci" / "https.yaml"),
+            *values,
+        ],
         capture_output=True,
         text=True,
         check=True,

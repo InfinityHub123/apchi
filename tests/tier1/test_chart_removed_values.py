@@ -16,7 +16,15 @@ CHART = Path(__file__).resolve().parents[2] / "charts" / "apchi"
 
 def _render(*values: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["helm", "template", "rel", str(CHART), "--set", "mongodb.deploy=true", *values],
+        [
+            "helm",
+            "template",
+            "rel",
+            str(CHART),
+            "--values",
+            str(CHART / "ci" / "https.yaml"),
+            *values,
+        ],
         capture_output=True,
         text=True,
     )

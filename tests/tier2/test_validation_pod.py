@@ -319,6 +319,13 @@ def _pods_the_chart_runs() -> list[dict]:
             "trino.https.enabled=true",
             "--set",
             "trino.https.existingSecret=tls",
+            # Certificate authentication, the default, requires Apchi's own certificate.
+            "--set",
+            "trino.tls.existingSecret=apchi-trino-client",
+            "--set",
+            "trino.tls.certificateKey=tls.crt",
+            "--set",
+            "trino.tls.keyKey=tls.key",
         ],
         capture_output=True,
         text=True,
