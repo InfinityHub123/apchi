@@ -296,6 +296,28 @@ def _apchi_volumes() -> set[str]:
     }
 
 
+def _template_annotations() -> dict[str, str]:
+    return dict(
+        json.loads(
+            kubectl(
+                "get",
+                "deploy",
+                "trino-coordinator",
+                "-o",
+                "jsonpath={.spec.template.metadata.annotations}",
+            )
+        )
+    )
+
+
+def _deployment_annotations() -> dict[str, str]:
+    return dict(
+        json.loads(
+            kubectl("get", "deploy", "trino-coordinator", "-o", "jsonpath={.metadata.annotations}")
+        )
+    )
+
+
 def test_an_argo_sync_keeps_everything_apchi_applied(argo: None) -> None:
     apchi = _Apchi()
     try:
@@ -341,6 +363,8 @@ def test_an_argo_sync_keeps_everything_apchi_applied(argo: None) -> None:
         "the listener was never written"
     )
     assert _apchi_volumes() == {"apchi-resource-groups", "apchi-admin-raw-files"}
+    checksum = _template_annotations()["apchi/rolled-out-checksum"]
+    verified = _deployment_annotations()["apchi/verified-snapshot"]
     syncs_before = len(_app()["status"].get("history", []))
 
     # An ordinary chart change: the kind of commit a platform team makes every week. It changes
@@ -366,16 +390,21 @@ def test_an_argo_sync_keeps_everything_apchi_applied(argo: None) -> None:
     _await("the chart to come back synced and healthy", _synced_and_healthy)
 
     assert _apchi_volumes() == {"apchi-resource-groups", "apchi-admin-raw-files"}
-    annotations = json.loads(
-        kubectl(
-            "get",
-            "deploy",
-            "trino-coordinator",
-            "-o",
-            "jsonpath={.spec.template.metadata.annotations}",
-        )
-    )
+    annotations = _template_annotations()
     assert annotations.get("apchi-argo-test") == "second", "the chart change never reached the pod"
+    # The chart renders neither, so the sync keeps both -- and the pods the chart change rolled
+    # out still carry the checksum of the files Apchi delivered, which did not change (#290).
+    assert annotations.get("apchi/rolled-out-checksum") == checksum, annotations
+    assert _deployment_annotations().get("apchi/verified-snapshot") == verified
+    pods = json.loads(
+        kubectl("get", "pods", "-l", "app.kubernetes.io/component=coordinator", "-o", "json")
+    )["items"]
+    carried = {
+        pod["metadata"].get("annotations", {}).get("apchi/rolled-out-checksum")
+        for pod in pods
+        if "deletionTimestamp" not in pod["metadata"]
+    }
+    assert carried == {checksum}, carried
     trino = kubectl(
         "exec",
         "deploy/trino-coordinator",

@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 from httpx import AsyncClient
 
+from app.adapters.kubernetes import ROLLED_OUT_CHECKSUM
 from app.adapters.trino import Trino
 from app.config import Settings
 from app.sections.admin import AdminValues
@@ -33,7 +34,9 @@ from tests.tier2.conftest import (
     _live_secret,
     coordinator_log,
     kubectl,
+    put_back_checksum,
     running_apchi,
+    template_checksum,
 )
 
 pytestmark = pytest.mark.tier2
@@ -401,6 +404,72 @@ async def test_the_coordinator_serves_its_metrics_to_any_named_user(
     coordinator = _serving(pods)[0]["metadata"]["name"]
 
     assert _metrics(coordinator, "-H", "X-Trino-User: prometheus") == "200"
+
+
+# --- what each Deployment was started from (#290) ------------------------------------------
+
+
+def _component_pods(component: str) -> list[dict[str, Any]]:
+    return _serving(
+        json.loads(
+            kubectl("get", "pods", "-l", f"app.kubernetes.io/component={component}", "-o", "json")
+        )["items"]
+    )
+
+
+def _replica_sets(component: str) -> set[str]:
+    listed = kubectl(
+        "get", "replicasets", "-l", f"app.kubernetes.io/component={component}", "-o", "name"
+    )
+    return set(listed.split())
+
+
+async def test_pods_carry_the_checksum_and_pods_started_from_other_files_are_restarted(
+    e2e_client: AsyncClient,
+) -> None:
+    """Kubernetes copies the template's annotations onto each pod it creates, so a pod says
+    what it was started from. A worker carrying another checksum -- an Apply stopped between
+    writing the Secret and the restart -- is restarted though its Secret already matches."""
+    await _set_role(e2e_client, "worker", {"config.properties": {"task.concurrency": "8"}})
+    assert (await _admin_apply(e2e_client))["stage"] == "succeeded"
+    written = template_checksum(WORKER)
+    carried = {
+        pod["metadata"].get("annotations", {}).get(ROLLED_OUT_CHECKSUM)
+        for pod in _component_pods("worker")
+    }
+
+    put_back_checksum(WORKER, "0" * 64)
+    review = (await e2e_client.get("/api/v1/review")).json()
+    started = await e2e_client.post("/api/v1/applies", json={})
+    assert started.status_code == 202, started.text
+    record = await _settled(e2e_client, started.json()["id"])
+
+    assert written is not None and carried == {written}
+    assert review["cost"]["restarts_workers"] is True, review["cost"]
+    assert record["stage"] == "succeeded", record
+    assert template_checksum(WORKER) == written
+
+
+async def test_recording_the_verified_snapshot_restarts_nothing(e2e_client: AsyncClient) -> None:
+    coordinator, workers = _coordinator_pod(), _replica_sets("worker")
+    replica_sets = _replica_sets("coordinator")
+    created = await e2e_client.post(
+        "/api/v1/catalogs", json={"name": "scratch", "connector": "memory", "properties": {}}
+    )
+    assert created.status_code in (200, 201), created.text
+    started = await e2e_client.post("/api/v1/applies", json={})
+    record = await _settled(e2e_client, started.json()["id"])
+
+    recorded = (
+        json.loads(kubectl("get", COORDINATOR, "-o", "json"))["metadata"]
+        .get("annotations", {})
+        .get("apchi/verified-snapshot")
+    )
+    assert record["stage"] == "succeeded", record
+    assert recorded == str(record["snapshot"])
+    assert _coordinator_pod() == coordinator
+    assert _replica_sets("coordinator") == replica_sets
+    assert _replica_sets("worker") == workers
 
 
 async def test_a_misspelled_worker_property_is_refused_on_the_probe(

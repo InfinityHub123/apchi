@@ -37,8 +37,8 @@ chart's starting contents each time. See
 
 - the volume and mount for `resource-groups.properties`;
 - the volumes and mounts for the Admin's Raw Files;
-- the `apchi.dev/restarted-at` and `apchi.dev/restarted-because` annotations on the pod
-  template.
+- the `apchi/rolled-out-checksum`, `apchi/restarted-at` and `apchi/restarted-because`
+  annotations on the pod template, and `apchi/verified-snapshot` on the Deployment itself.
 
 The chart renders none of these entries. Argo CD's diff therefore leaves them out: the
 Application stays `Synced` with them in place, and self-heal doesn't remove them. A sync for a
@@ -81,8 +81,8 @@ spec:
       jqPathExpressions:
         - '.spec.template.spec.volumes[] | select(.name | startswith("apchi-"))'
         - '.spec.template.spec.containers[].volumeMounts[] | select(.name | startswith("apchi-"))'
-        - '.spec.template.metadata.annotations["apchi.dev/restarted-at"]'
-        - '.spec.template.metadata.annotations["apchi.dev/restarted-because"]'
+        - '.spec.template.metadata.annotations | with_entries(select(.key | startswith("apchi/")))'
+        - '.metadata.annotations["apchi/verified-snapshot"]'
   syncPolicy:
     syncOptions: [RespectIgnoreDifferences=true]
 ```

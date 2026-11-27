@@ -14,7 +14,7 @@ from httpx import AsyncClient
 from app.pipeline.applies import TERMINAL
 from app.sections.client_certificates.generator import MOUNT_DIR
 from tests.certificates import bundle
-from tests.tier2.conftest import file_appears, kubectl
+from tests.tier2.conftest import file_appears, kubectl, pod_template
 
 pytestmark = pytest.mark.tier2
 
@@ -40,7 +40,7 @@ async def test_a_certificate_appears_on_a_pod_that_is_never_replaced(
 ) -> None:
     """The whole point of one Secret mounted once: the pod spec does not change, so no
     rollout, so no query dies for an upload."""
-    before = await real_kubernetes.rollout_state("trino-coordinator")
+    before = pod_template()
     uploaded = await e2e_client.post(
         "/api/v1/certificates",
         data={"name": "finance"},
@@ -51,8 +51,7 @@ async def test_a_certificate_appears_on_a_pod_that_is_never_replaced(
     record = await _apply(e2e_client)
 
     assert record["stage"] == "succeeded", record
-    after = await real_kubernetes.rollout_state("trino-coordinator")
-    assert after.generation == before.generation, "the pod template was never patched"
+    assert pod_template() == before, "the pod template was never patched"
     assert await file_appears(MOUNT_DIR, "finance.crt"), (
         "the certificate never reached the coordinator"
     )

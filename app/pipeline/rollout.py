@@ -29,7 +29,7 @@ class RolloutFailed(Exception):
 
 
 async def roll_out(
-    kubernetes: KubernetesAdapter, deployment: str, reason: str, timeout: float
+    kubernetes: KubernetesAdapter, deployment: str, reason: str, timeout: float, checksum: str
 ) -> None:
     """Restart `deployment` and return once every replica is running the new template.
 
@@ -37,7 +37,9 @@ async def roll_out(
     still serving, and Verification would then be asking the old configuration whether it
     had adopted the new one.
     """
-    await roll_out_all(kubernetes, [Restart(deployment, timeout, drains=False)], reason)
+    await roll_out_all(
+        kubernetes, [Restart(deployment, timeout, drains=False, checksum=checksum)], reason
+    )
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,8 @@ class Restart:
     timeout: float
     #: Workers drain their running tasks before they exit; the coordinator cannot (ADR-0003).
     drains: bool
+    #: Of the files the new pods start from, written onto the pod template (#290).
+    checksum: str
 
 
 async def roll_out_all(
@@ -60,7 +64,7 @@ async def roll_out_all(
     worker drain it would wait behind would only make that outage longer.
     """
     for restart in deployments:
-        await kubernetes.restart_deployment(restart.deployment, reason)
+        await kubernetes.restart_deployment(restart.deployment, reason, restart.checksum)
         logger.warning(
             "rolling out %s%s",
             restart.deployment,
