@@ -26,7 +26,7 @@ import pytest
 import yaml
 from httpx import ASGITransport, AsyncClient
 
-from app.adapters.kubernetes import PodState, RealKubernetes, RolloutState
+from app.adapters.kubernetes import ROLLED_OUT_CHECKSUM, PodState, RealKubernetes, RolloutState
 from app.adapters.mongo import Mongo
 from app.adapters.trino import Trino
 from app.audit.events import AuditStore
@@ -351,6 +351,38 @@ def coordinator_log(lines: int = 400) -> str:
     return kubectl("logs", f"deploy/{'trino-coordinator'}", "-c", "trino", f"--tail={lines}")
 
 
+def pod_template(deployment: str = COORDINATOR) -> dict[str, Any]:
+    """The Deployment's pod template: what changes when, and only when, its pods are replaced.
+
+    Not the Deployment's generation, which Kubernetes also bumps when the Deployment's own
+    annotations change -- it copies them onto the ReplicaSets -- and every committed Apply
+    writes one (#290)."""
+    return dict(json.loads(kubectl("get", deployment, "-o", "json"))["spec"]["template"])
+
+
+def template_checksum(deployment: str) -> str | None:
+    """`deployment` in the `deploy/<name>` form `COORDINATOR` and `WORKER` are written in."""
+    template = json.loads(kubectl("get", deployment, "-o", "json"))["spec"]["template"]
+    value = (template["metadata"].get("annotations") or {}).get(ROLLED_OUT_CHECKSUM)
+    return None if value is None else str(value)
+
+
+def put_back_checksum(deployment: str, checksum: str | None) -> bool:
+    """Put the pod template's checksum back to `checksum`, and wait for the rollout that is.
+
+    A test's Apply leaves the checksum of what it delivered on the template, and putting the
+    Secrets back by hand does not move it: the next test's Apply would read pods started from
+    other files and restart them for nothing. Changing the template is a restart, so this is
+    the restart the reset would otherwise make. False when there was nothing to put back.
+    """
+    if template_checksum(deployment) == checksum:
+        return False
+    patch = {"spec": {"template": {"metadata": {"annotations": {ROLLED_OUT_CHECKSUM: checksum}}}}}
+    kubectl("patch", deployment, "--type=strategic", "-p", json.dumps(patch))
+    kubectl("rollout", "status", deployment, "--timeout=600s")
+    return True
+
+
 def restart_coordinator() -> None:
     kubectl("rollout", "restart", COORDINATOR)
     kubectl("rollout", "status", COORDINATOR, "--timeout=600s")
@@ -442,6 +474,13 @@ def _divergence(settings: Settings) -> list[str]:
         "jsonpath={.spec.template.spec.volumes[*].name}",
     ).split()
     problems.extend(f"mount {volume}" for volume in OPTIONAL_VOLUMES if volume in volumes)
+    # The manifests ship no checksum, and one left by an earlier run names files the
+    # restored Secrets no longer hold.
+    problems.extend(
+        f"checksum on {deployment}"
+        for deployment in (COORDINATOR, WORKER)
+        if template_checksum(deployment) is not None
+    )
 
     # A catalog the seed does not name is one a previous run created. The store is an
     # emptyDir reseeded at pod start, so it survives only until the coordinator restarts --
@@ -538,10 +577,11 @@ def _restore_baseline(settings: Settings) -> None:
     # The catalog store is an emptyDir reseeded from the Secret at pod start, so a restart
     # is what removes a catalog a previous run created -- and it is also how the coordinator
     # picks up a restored user-mapping file, which it reads once when it starts.
-    restart_coordinator()
+    if not put_back_checksum(COORDINATOR, None):
+        restart_coordinator()
     # The workers read their files once at start too, so a restored Secret reaches them only
     # through a restart -- paid for only when theirs had moved.
-    if workers_diverged:
+    if not put_back_checksum(WORKER, None) and workers_diverged:
         restart_workers()
 
     if remaining := _divergence(settings):
@@ -665,8 +705,14 @@ class ForwardedKubernetes:
     async def pod_logs(self, name: str, tail: int) -> str:
         return await self._real.pod_logs(name, tail)
 
-    async def restart_deployment(self, deployment: str, reason: str) -> None:
-        await self._real.restart_deployment(deployment, reason)
+    async def restart_deployment(self, deployment: str, reason: str, checksum: str) -> None:
+        await self._real.restart_deployment(deployment, reason, checksum)
+
+    async def rolled_out_checksum(self, deployment: str) -> str | None:
+        return await self._real.rolled_out_checksum(deployment)
+
+    async def annotate_deployment(self, deployment: str, annotations: dict[str, str]) -> bool:
+        return await self._real.annotate_deployment(deployment, annotations)
 
     async def rollout_state(self, deployment: str) -> RolloutState:
         """Revives the Cluster tunnel while polling.
@@ -797,6 +843,7 @@ async def cluster_state(
         WORKER_CONFIG_SECRET,
     )
     originals = {name: await real_kubernetes.read_secret(name) for name in secrets}
+    checksums = {deployment: template_checksum(deployment) for deployment in (COORDINATOR, WORKER)}
 
     def cluster() -> Trino:
         return Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
@@ -825,7 +872,7 @@ async def cluster_state(
         )
         for name, content in originals.items():
             await real_kubernetes.write_secret(name, content)
-        if changed_workers:
+        if not put_back_checksum(WORKER, checksums[WORKER]) and changed_workers:
             restart_workers()
         # Apchi mounts its own volumes on the coordinator for resource groups and raw files.
         # Left behind, the next test inherits configuration it never asked for.
@@ -867,7 +914,9 @@ async def cluster_state(
             kubectl("rollout", "status", COORDINATOR, "--timeout=600s")
             forward.restart()
 
-        if changed_rules:
+        if put_back_checksum(COORDINATOR, checksums[COORDINATOR]):
+            forward.restart()
+        elif changed_rules:
             # Writing the Secret back is not enough. Trino re-reads the rules on its own
             # security.refresh-period, and the kubelet takes up to its syncFrequency to
             # project the change -- the two delays of §7.5, adding up to longer than the

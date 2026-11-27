@@ -486,6 +486,24 @@ queries, so Review does not touch Trino for it — and when a restart *is* comin
 cannot be reached, the count is reported as unknown rather than guessed at, because Review's job
 is to show an Operator what is staged and an unreachable Cluster must not stop that.
 
+**What a Deployment was started from is read off the Deployment, never stored in MongoDB.**
+A Secret says what Trino runs after its next restart, not what it runs now: these files are
+read once at start, and a subPath mount never updates inside a running pod. So the restart
+patch also writes `apchi/rolled-out-checksum`, a checksum of every file the role reads only at
+start as Apchi renders it — the Snapshot, the Admin values and the chart's wiring alike — and
+the pods copy it from the template. An Apply restarts a role whose template carries another
+checksum even when its Secrets match, which is what an Apply stopped between the two leaves. A
+template with no checksum, as on a fresh install, is judged by its Secrets alone. The time is
+still written beside it, because a Secret edited by hand and put back renders the checksum the
+pods already carry. After Verification, `apchi/verified-snapshot` goes on the Deployment's own
+metadata, which restarts nothing; it is for people, and Apchi decides nothing from it. It does
+bump the Deployment's `generation` -- Kubernetes copies a Deployment's annotations onto its
+ReplicaSets and counts that as a change -- so whether pods were replaced is read from the pod
+template, never from the generation. Kubernetes
+records nothing about which content of a Secret a pod mounted, so this is the standard answer
+(Helm's `checksum/config`); a restart outside Apchi in the middle of a stopped Apply costs one
+restart too many, never one too few (#290).
+
 ## 7.4 Minimal restart set
 
 Apchi restarts only what the Candidate's changes require:

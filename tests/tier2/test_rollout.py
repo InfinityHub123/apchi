@@ -23,6 +23,7 @@ from tests.tier2.conftest import (
     SERVER_CONFIG_SECRET,
     PortForward,
     coordinator_log,
+    pod_template,
 )
 
 pytestmark = pytest.mark.tier2
@@ -137,12 +138,11 @@ async def test_a_catalogs_only_apply_does_not_restart_the_coordinator(
 ) -> None:
     """Half the Sections reach the Cluster without a restart. Proven here by the pod
     surviving: routine catalog work must not cost anybody their queries."""
-    before = await real_kubernetes.rollout_state("trino-coordinator")
+    before = pod_template()
 
     await e2e_client.post("/api/v1/catalogs", json=CATALOG)
     record = await _apply(e2e_client)
 
     assert record["stage"] == "succeeded", record.get("failure_reason")
     assert "rolling_out" not in [event["stage"] for event in record["history"]]
-    after = await real_kubernetes.rollout_state("trino-coordinator")
-    assert after.generation == before.generation, "the pod template was not touched"
+    assert pod_template() == before, "the pod template was not touched"

@@ -16,7 +16,7 @@ from httpx import AsyncClient
 
 from app.adapters.trino import Trino
 from app.pipeline.applies import TERMINAL
-from tests.tier2.conftest import PortForward
+from tests.tier2.conftest import PortForward, pod_template
 
 pytestmark = pytest.mark.tier2
 
@@ -76,15 +76,14 @@ async def test_a_grant_is_enforced_without_restarting_the_coordinator(
 ) -> None:
     """The whole point of this Section's engine: Trino re-reads the rules on a timer, so a
     permission change reaches a busy Cluster without destroying a single query."""
-    before = await real_kubernetes.rollout_state("trino-coordinator")
+    before = pod_template()
     assert (await e2e_client.post("/api/v1/catalogs", json=BENCH)).status_code == 201
     await e2e_client.post("/api/v1/permissions", json=READ_NATION)
 
     record = await _apply(e2e_client)
 
     assert record["stage"] == "succeeded", record
-    after = await real_kubernetes.rollout_state("trino-coordinator")
-    assert after.generation == before.generation, "the pod template was never touched"
+    assert pod_template() == before, "the pod template was never touched"
 
     alice = Trino(url=f"http://127.0.0.1:{forward.port}", user="alice")
     assert await _until(alice, "SELECT count(*) FROM bench.tiny.nation", allowed=True)

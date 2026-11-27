@@ -21,7 +21,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from app.adapters.kubernetes import CREDENTIAL_FILE_MODE, TRINO_GROUP, KubernetesAdapter
+from app.adapters.kubernetes import (
+    CREDENTIAL_FILE_MODE,
+    PREFIX,
+    TRINO_GROUP,
+    KubernetesAdapter,
+)
 from app.adapters.trino import Trino
 from app.config import (
     CA_BUNDLE_PATH,
@@ -58,7 +63,7 @@ logger = logging.getLogger(__name__)
 #: Every object Validation creates carries this, so orphans are findable. Apchi
 #: sweeps them at startup: a crash mid-validation would otherwise leak a pod, and
 #: leaked Trino pods are not cheap.
-ROLE_LABEL = "apchi.dev/role"
+ROLE_LABEL = f"{PREFIX}role"
 VALIDATION_ROLE = "trino-validation"
 VALIDATION_SELECTOR = f"{ROLE_LABEL}={VALIDATION_ROLE}"
 

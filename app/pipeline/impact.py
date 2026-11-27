@@ -11,11 +11,12 @@ import logging
 
 from pydantic import BaseModel, Field
 
-from app.pipeline import raw_files, server_configuration
+from app.pipeline import checksum, raw_files, server_configuration
 from app.pipeline.files import would_change
 from app.sections import SectionName
 from app.sections.base import Cluster, Resources, SectionPlan
 from app.sections.registry import REGISTERED
+from app.sections.server_configuration import Role
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,9 @@ async def cost_of(
     """
     rollout = await sections_needing_rollout(plans, desired, cluster)
     coordinator_files, workers = await _admin_files_move(cluster)
+    behind = await _behind(cluster, desired)
+    coordinator_files = coordinator_files or "coordinator" in behind
+    workers = workers or "worker" in behind
     if not rollout and not coordinator_files:
         # The workers drain, so their restart puts no query at risk and is nothing to count.
         return ApplyCost(
@@ -172,3 +176,19 @@ async def _admin_files_move(cluster: Cluster) -> tuple[bool, bool]:
             exc_info=True,
         )
         return False, False
+
+
+async def _behind(cluster: Cluster, desired: dict[SectionName, Resources]) -> set[Role]:
+    """The roles an Apply would restart because their pods started from other files.
+
+    The same question the Apply asks, so Review and the Apply cannot disagree about a
+    restart. Unreadable answers none, as the two checks above do.
+    """
+    try:
+        return await checksum.behind(cluster, desired)
+    except Exception:
+        logger.warning(
+            "could not read what Trino was started from; the restart decision leaves it out",
+            exc_info=True,
+        )
+        return set()

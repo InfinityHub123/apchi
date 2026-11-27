@@ -16,7 +16,7 @@ from app import trust
 from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.config import Settings
-from app.pipeline import preconditions, raw_files, server_configuration
+from app.pipeline import checksum, preconditions, raw_files, server_configuration
 from app.pipeline.admin_values import AdminStore
 from app.pipeline.auto_rollback import declare_incident, restore
 from app.pipeline.candidate import CandidateStore
@@ -62,6 +62,7 @@ class Engine:
         self._rollout: set[SectionName] = set()
         self._raw_files_changed = False
         self._server_configuration_roles: set[Role] = set()
+        self._behind: set[Role] = set()
         self._warnings: list[ValidationFailure] = []
         self._verification: list[CheckResult] = []
         self._cluster = Cluster(trino=trino, kubernetes=kubernetes, settings=settings)
@@ -116,6 +117,10 @@ class Engine:
         # The same question for Trino's own files, which every Apply renders from the Admin
         # values and the chart's wiring. Either can have moved without any Section moving.
         self._server_configuration_roles = await server_configuration.changed_roles(self._cluster)
+        # And whether the pods were started from these files at all. A Secret can be new while
+        # the pods still run the old ones -- an Apply stopped between writing and restarting --
+        # and comparing Secrets alone would call that Cluster up to date.
+        self._behind = await checksum.behind(self._cluster, self._desired)
         self._warnings = await validate_candidate(
             self._desired,
             self._plans,
@@ -196,7 +201,10 @@ class Engine:
         query for nothing.
         """
         return (
-            bool(self._rollout) or self._raw_files_changed or bool(self._server_configuration_roles)
+            bool(self._rollout)
+            or self._raw_files_changed
+            or bool(self._server_configuration_roles)
+            or bool(self._behind)
         )
 
     async def roll_out(self) -> None:
@@ -213,17 +221,21 @@ class Engine:
             changed.append(f"the {roles} server configuration")
         if self._raw_files_changed:
             changed.append("raw files")
+        if self._behind:
+            changed.append(f"the files the {' and '.join(sorted(self._behind))} started from")
         coordinator = (
             bool(self._rollout)
             or self._raw_files_changed
             or "coordinator" in self._server_configuration_roles
+            or "coordinator" in self._behind
         )
         await roll_out_all(
             self._kubernetes,
             restarts(
-                self._settings,
+                self._cluster,
+                self._desired,
                 coordinator=coordinator,
-                workers="worker" in self._server_configuration_roles,
+                workers="worker" in self._server_configuration_roles or "worker" in self._behind,
             ),
             f"apply {self._apply_id} changed {', '.join(changed)}",
         )
@@ -299,14 +311,23 @@ class Engine:
             )
             raise
         logger.info("committed", extra={"snapshot": snapshot.number})
+        await checksum.record_verified(self._cluster, snapshot.number)
         # Every Apply delivers the Admin values in force too, so after this one they are what
         # the Cluster has -- and what an Admin Apply's rollback must go back to.
         await self._admin.record_applied(self._cluster.admin)
         return snapshot.number
 
 
-def restarts(settings: Settings, *, coordinator: bool, workers: bool) -> list[Restart]:
-    """The Deployments to restart, each with its own bound."""
+def restarts(
+    cluster: Cluster,
+    sections: dict[SectionName, Resources],
+    *,
+    coordinator: bool,
+    workers: bool,
+) -> list[Restart]:
+    """The Deployments to restart, each with its own bound and the checksum of the files
+    `sections` and the Cluster's Admin values render."""
+    settings = cluster.settings
     chosen: list[Restart] = []
     if coordinator:
         chosen.append(
@@ -314,6 +335,7 @@ def restarts(settings: Settings, *, coordinator: bool, workers: bool) -> list[Re
                 settings.coordinator_deployment_name,
                 settings.rollout_timeout_seconds,
                 drains=False,
+                checksum=checksum.checksum("coordinator", cluster, sections),
             )
         )
     if workers:
@@ -322,6 +344,7 @@ def restarts(settings: Settings, *, coordinator: bool, workers: bool) -> list[Re
                 settings.worker_deployment_name,
                 settings.worker_rollout_timeout_seconds,
                 drains=True,
+                checksum=checksum.checksum("worker", cluster, sections),
             )
         )
     return chosen
@@ -400,7 +423,8 @@ class AdminEngine(Engine):
             await roll_out_all(
                 self._kubernetes,
                 restarts(
-                    self._settings,
+                    self._cluster,
+                    sections,
                     coordinator=raw_changed or "coordinator" in roles,
                     workers="worker" in roles,
                 ),
@@ -411,4 +435,8 @@ class AdminEngine(Engine):
     async def commit(self) -> int | None:
         logger.info("admin apply committed no snapshot")
         await self._admin.record_applied(self._cluster.admin)
+        # The latest Snapshot is what this Apply delivered and verified, merged with the
+        # Admin values now in force.
+        latest = await self._snapshots.latest()
+        await checksum.record_verified(self._cluster, None if latest is None else latest.number)
         return None
