@@ -81,26 +81,12 @@ async def test_a_real_mid_apply_failure_returns_the_cluster_to_its_latest_snapsh
     assert (await e2e_client.get("/api/v1/snapshots")).json()["items"][0]["number"] == 1
     assert len((await e2e_client.get("/api/v1/snapshots")).json()["items"]) == 1
 
-
-async def test_what_the_rollback_restored_survives_a_coordinator_restart(
-    e2e_client: AsyncClient,
-    settings: Settings,
-    forwarded_kubernetes: ForwardedKubernetes,
-    forward: PortForward,
-) -> None:
-    """Why restoring the Secret is half the job. Had Auto Rollback left the failed
-    Apply's Secret in place, the catalog it never managed to create would arrive at the
-    next pod restart -- weeks later, with nothing linking it to this Apply."""
-    await _snapshot_one(e2e_client)
-    refused = settings.model_copy(update={"trino_user": "notapchi"})
-    async with running_apchi(refused, forwarded_kubernetes, forward) as client:
-        await client.post("/api/v1/catalogs", json=ADDED)
-        record = await _apply(client)
-        assert record["rollback"] == "succeeded"
-
+    # Why restoring the Secret is half the job. Had Auto Rollback left the failed Apply's
+    # Secret in place, the catalog it never managed to create would arrive at the next pod
+    # restart -- weeks later, with nothing linking it to this Apply. In the same test, because
+    # a second one would pay for this whole failure again (#300).
     restart_coordinator()
     forward.restart()
-
     live = await _live_catalogs(forward)
     assert "kept" in live
     assert "added" not in live

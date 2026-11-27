@@ -64,59 +64,43 @@ async def _until(trino: Trino, sql: str, allowed: bool) -> bool:
     return False
 
 
-async def test_closing_the_cluster_enforces_the_grants(
+async def test_closing_the_cluster_and_opening_it_again(
     e2e_client: AsyncClient, forward: PortForward, settings
 ) -> None:
-    """The whole decision, on a real coordinator: granted access works, ungranted access
-    stops, and Apchi still reaches the Cluster it has to recover."""
+    """The whole decision on a real coordinator, both ways. One scenario, because every switch
+    waits out the kubelet's projection and Trino's refresh, and each test pays a restart to be
+    put back (#300).
+
+    - **Open**, an identity reads a table nobody granted it.
+    - **Closed**, granted access works and ungranted access stops -- for an identity with some
+      grants and for one with none, who keeps the right to run a query at all, because the
+      queries block grants execute to everyone. That is what an Admin signs up to.
+    - **Apchi still reaches the Cluster**, which is what makes this recoverable rather than a
+      one-way door.
+    - **Reopened**, what was there comes back: the posture is a value rather than a migration
+      step, so an Admin who closes too early can undo it.
+    """
     assert (await e2e_client.post("/api/v1/catalogs", json=BENCH)).status_code == 201
     assert (await e2e_client.post("/api/v1/permissions", json=GRANT)).status_code == 201
     record = await _apply(e2e_client)
     assert record["stage"] == "succeeded", record
 
-    alice = Trino(url=f"http://127.0.0.1:{forward.port}", user="alice")
-    # Open: she can read a table nobody granted her.
+    def caller(user: str) -> Trino:
+        return Trino(url=f"http://127.0.0.1:{forward.port}", user=user)
+
+    alice, stranger, apchi = caller("alice"), caller("nobody"), caller(settings.trino_user)
     assert await _until(alice, "SELECT count(*) FROM bench.tiny.region", allowed=True)
 
     await e2e_client.put(ENFORCEMENT, json={"enforced": True})
     record = await _apply(e2e_client, "/api/v1/admin/applies")
     assert record["stage"] == "succeeded", record
 
-    # Closed: only what she was granted.
     assert await _until(alice, "SELECT count(*) FROM bench.tiny.region", allowed=False)
     assert await _allowed(alice, "SELECT count(*) FROM bench.tiny.nation")
-    # And Apchi, which is what makes this recoverable rather than a one-way door.
-    apchi = Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
+    assert not await _allowed(stranger, "SELECT count(*) FROM bench.tiny.nation")
+    assert await _allowed(stranger, "SELECT 1")
     assert await _allowed(apchi, "SELECT 1 FROM system.runtime.nodes LIMIT 1")
     assert await _allowed(apchi, "SELECT count(*) FROM system.runtime.queries")
-
-
-async def test_an_identity_with_no_grant_at_all_is_denied(
-    e2e_client: AsyncClient, forward: PortForward
-) -> None:
-    """What an Admin is signing up to: everyone they have not granted loses what they had."""
-    await e2e_client.post("/api/v1/catalogs", json=BENCH)
-    await e2e_client.post("/api/v1/permissions", json=GRANT)
-    await e2e_client.put(ENFORCEMENT, json={"enforced": True})
-    record = await _apply(e2e_client)
-
-    assert record["stage"] == "succeeded", record
-    stranger = Trino(url=f"http://127.0.0.1:{forward.port}", user="nobody")
-    assert await _until(stranger, "SELECT count(*) FROM bench.tiny.nation", allowed=False)
-    # Still able to run a query at all -- the queries block grants execute to everyone.
-    assert await _allowed(stranger, "SELECT 1")
-
-
-async def test_reopening_the_cluster_restores_what_was_there(
-    e2e_client: AsyncClient, forward: PortForward
-) -> None:
-    """An Admin who closes a Cluster too early has to be able to undo it, and the posture is
-    a value rather than a migration step for exactly that reason."""
-    await e2e_client.post("/api/v1/catalogs", json=BENCH)
-    await e2e_client.put(ENFORCEMENT, json={"enforced": True})
-    await _apply(e2e_client)
-    stranger = Trino(url=f"http://127.0.0.1:{forward.port}", user="nobody")
-    assert await _until(stranger, "SELECT count(*) FROM bench.tiny.nation", allowed=False)
 
     await e2e_client.put(ENFORCEMENT, json={"enforced": False})
     record = await _apply(e2e_client, "/api/v1/admin/applies")

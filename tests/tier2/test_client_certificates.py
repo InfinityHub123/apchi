@@ -35,11 +35,30 @@ async def _apply(client: AsyncClient, timeout: float = 900.0) -> dict:
     raise AssertionError("Apply never settled")
 
 
-async def test_a_certificate_appears_on_a_pod_that_is_never_replaced(
-    e2e_client: AsyncClient, real_kubernetes
+async def _gone(deployment: str, name: str) -> bool:
+    deadline = asyncio.get_running_loop().time() + _PROJECTED_WITHIN
+    while asyncio.get_running_loop().time() < deadline:
+        listed = kubectl("exec", deployment, "-c", "trino", "--", "ls", MOUNT_DIR).split()
+        if name not in listed:
+            return True
+        await asyncio.sleep(3)
+    return False
+
+
+async def test_a_certificate_comes_and_goes_without_replacing_a_pod(
+    e2e_client: AsyncClient,
 ) -> None:
-    """The whole point of one Secret mounted once: the pod spec does not change, so no
-    rollout, so no query dies for an upload."""
+    """Uploaded, then removed, on both roles. One scenario, because each half waits out the
+    kubelet's projection and that wait is the cost of every test here (#300).
+
+    - **It appears on a pod that is never replaced.** The whole point of one Secret mounted
+      once: the pod spec does not change, so no rollout, so no query dies for an upload.
+    - **It reaches the workers too.** Workers open their own connections to data sources, so
+      a certificate only the coordinator can read is a catalog that works for metadata and
+      fails for data.
+    - **Removing it takes the files away.** A file left behind is key material outliving its
+      use, in a directory every process in the pod can read.
+    """
     before = pod_template()
     uploaded = await e2e_client.post(
         "/api/v1/certificates",
@@ -52,50 +71,21 @@ async def test_a_certificate_appears_on_a_pod_that_is_never_replaced(
 
     assert record["stage"] == "succeeded", record
     assert pod_template() == before, "the pod template was never patched"
-    assert await file_appears(MOUNT_DIR, "finance.crt"), (
-        "the certificate never reached the coordinator"
+    coordinator, key, worker = await asyncio.gather(
+        file_appears(MOUNT_DIR, "finance.crt"),
+        file_appears(MOUNT_DIR, "finance.key"),
+        file_appears(MOUNT_DIR, "finance.crt", "deploy/trino-worker"),
     )
-    assert await file_appears(MOUNT_DIR, "finance.key")
-
-
-async def test_a_certificate_reaches_the_workers_too(e2e_client: AsyncClient) -> None:
-    """Workers open their own connections to data sources, so a certificate only the
-    coordinator can read is a catalog that works for metadata and fails for data."""
-    await e2e_client.post(
-        "/api/v1/certificates",
-        data={"name": "finance"},
-        files={"archive": ("finance.zip", bundle(), "application/zip")},
-    )
-
-    record = await _apply(e2e_client)
-
-    assert record["stage"] == "succeeded", record
-    assert await file_appears(MOUNT_DIR, "finance.crt", "deploy/trino-worker")
-
-
-async def test_removing_a_certificate_takes_the_files_away(e2e_client: AsyncClient) -> None:
-    """A file left behind is key material outliving its use, in a directory every process in
-    the pod can read."""
-    await e2e_client.post(
-        "/api/v1/certificates",
-        data={"name": "finance"},
-        files={"archive": ("finance.zip", bundle(), "application/zip")},
-    )
-    await _apply(e2e_client)
-    assert await file_appears(MOUNT_DIR, "finance.crt")
+    assert coordinator, "the certificate never reached the coordinator"
+    assert key
+    assert worker, "the certificate never reached the workers"
 
     await e2e_client.delete("/api/v1/certificates/finance")
     record = await _apply(e2e_client)
 
     assert record["stage"] == "succeeded", record
-    deadline = asyncio.get_running_loop().time() + _PROJECTED_WITHIN
-    while asyncio.get_running_loop().time() < deadline:
-        if (
-            "finance.crt"
-            not in kubectl(
-                "exec", "deploy/trino-coordinator", "-c", "trino", "--", "ls", MOUNT_DIR
-            ).split()
-        ):
-            return
-        await asyncio.sleep(3)
-    raise AssertionError("the certificate is still on the coordinator")
+    gone = await asyncio.gather(
+        _gone("deploy/trino-coordinator", "finance.crt"),
+        _gone("deploy/trino-worker", "finance.crt"),
+    )
+    assert gone == [True, True], "the certificate is still on a pod"

@@ -69,11 +69,19 @@ async def _stage(client: AsyncClient) -> None:
     await client.put("/api/v1/resource-groups/selectors", json=SELECTORS)
 
 
-async def test_a_real_coordinator_comes_back_on_the_generated_file(
+async def test_resource_groups_on_a_coordinator_that_restarts_to_read_them(
     e2e_client: AsyncClient, forward: PortForward
 ) -> None:
-    """Every field Apchi models, in one hierarchy, on a coordinator that has to restart to
-    read it. A file Trino will not parse is a coordinator that never comes back."""
+    """Applied, used, then emptied: one scenario, because each Apply restarts the coordinator
+    and each test pays a restart again to be put back (#300).
+
+    - **It comes back on the generated file.** Every field Apchi models, in one hierarchy. A
+      file Trino will not parse is a coordinator that never comes back.
+    - **The manager is live, not merely parsed:** Trino records the group a query ran in.
+    - **Emptying the Section leaves a coordinator that still starts.** Both files go
+      together: leaving the properties file behind would point Trino at a file that is no
+      longer mounted, and it refuses to start on that.
+    """
     await _stage(e2e_client)
 
     record = await _apply(e2e_client)
@@ -83,24 +91,21 @@ async def test_a_real_coordinator_comes_back_on_the_generated_file(
     trino = Trino(url=f"http://127.0.0.1:{forward.port}")
     assert await trino.query("SELECT 1") == [[1]]
     assert "SERVER STARTED" in coordinator_log(400)
-
-
-async def test_the_queries_land_somewhere_the_coordinator_reports(
-    e2e_client: AsyncClient, forward: PortForward
-) -> None:
-    """The manager is live, not merely parsed: Trino records the group a query ran in."""
-    await _stage(e2e_client)
-    await _apply(e2e_client)
-    forward.restart()
-
-    trino = Trino(url=f"http://127.0.0.1:{forward.port}")
-    await trino.query("SELECT 1")
     groups = await trino.query(
         "SELECT DISTINCT resource_group_id FROM system.runtime.queries "
         "WHERE resource_group_id IS NOT NULL"
     )
-
     assert groups, "the coordinator attributed no query to a resource group"
+
+    for path in ("global.etl", "global.adhoc", "global"):
+        await e2e_client.delete(f"/api/v1/resource-groups/{path}")
+    await e2e_client.put("/api/v1/resource-groups/selectors", json={"selectors": []})
+    record = await _apply(e2e_client)
+
+    assert record["stage"] == "succeeded", record
+    forward.restart()
+    trino = Trino(url=f"http://127.0.0.1:{forward.port}")
+    assert await trino.query("SELECT 1") == [[1]]
 
 
 async def test_a_file_trino_will_not_parse_fails_validation_before_the_cluster_is_touched(
@@ -120,22 +125,3 @@ async def test_a_file_trino_will_not_parse_fails_validation_before_the_cluster_i
 
     assert verdict["outcome"] == "failed"
     assert verdict["failures"][0]["reason"], "Trino's own words, which exist only in the pod log"
-
-
-async def test_emptying_the_section_leaves_a_coordinator_that_still_starts(
-    e2e_client: AsyncClient, forward: PortForward
-) -> None:
-    """Both files go together. Leaving the properties file behind would point Trino at a
-    file that is no longer mounted, and it refuses to start on that."""
-    await _stage(e2e_client)
-    await _apply(e2e_client)
-
-    for path in ("global.etl", "global.adhoc", "global"):
-        await e2e_client.delete(f"/api/v1/resource-groups/{path}")
-    await e2e_client.put("/api/v1/resource-groups/selectors", json={"selectors": []})
-    record = await _apply(e2e_client)
-
-    assert record["stage"] == "succeeded", record
-    forward.restart()
-    trino = Trino(url=f"http://127.0.0.1:{forward.port}")
-    assert await trino.query("SELECT 1") == [[1]]

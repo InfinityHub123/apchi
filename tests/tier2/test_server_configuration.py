@@ -298,7 +298,13 @@ async def test_a_workers_property_reaches_the_workers_after_a_drain_and_the_coor
 ) -> None:
     """The whole of stage 2 in one run: the property reaches the worker, the old worker
     drains before it goes -- read from its own log, captured while it ran -- and the
-    coordinator, which cannot drain, is never touched."""
+    coordinator, which cannot drain, is never touched.
+
+    Then what the pods say they were started from. Kubernetes copies the template's
+    annotations onto each pod it creates, so a worker carries the checksum of its files; one
+    carrying another -- an Apply stopped between writing the Secret and the restart -- is
+    restarted though its Secret already matches. In the same run, because both need a worker
+    rollout and each test pays one again to be put back (#300)."""
     import subprocess
 
     coordinator = _pod_uid("coordinator")
@@ -326,6 +332,22 @@ async def test_a_workers_property_reaches_the_workers_after_a_drain_and_the_coor
     assert "All active tasks are finished" in drained, drained[-2000:]
     log = kubectl("logs", "deploy/trino-worker", "-c", "trino", "--tail=20000")
     assert _runtime_value(log, "task.concurrency") == "8"
+
+    written = template_checksum(WORKER)
+    carried = {
+        pod["metadata"].get("annotations", {}).get(ROLLED_OUT_CHECKSUM)
+        for pod in _component_pods("worker")
+    }
+    put_back_checksum(WORKER, "0" * 64)
+    review = (await e2e_client.get("/api/v1/review")).json()
+    started = await e2e_client.post("/api/v1/applies", json={})
+    assert started.status_code == 202, started.text
+    record = await _settled(e2e_client, started.json()["id"])
+
+    assert written is not None and carried == {written}
+    assert review["cost"]["restarts_workers"] is True, review["cost"]
+    assert record["stage"] == "succeeded", record
+    assert template_checksum(WORKER) == written
 
 
 async def test_only_apchis_identity_may_drain_a_worker(e2e_client: AsyncClient) -> None:
@@ -422,32 +444,6 @@ def _replica_sets(component: str) -> set[str]:
         "get", "replicasets", "-l", f"app.kubernetes.io/component={component}", "-o", "name"
     )
     return set(listed.split())
-
-
-async def test_pods_carry_the_checksum_and_pods_started_from_other_files_are_restarted(
-    e2e_client: AsyncClient,
-) -> None:
-    """Kubernetes copies the template's annotations onto each pod it creates, so a pod says
-    what it was started from. A worker carrying another checksum -- an Apply stopped between
-    writing the Secret and the restart -- is restarted though its Secret already matches."""
-    await _set_role(e2e_client, "worker", {"config.properties": {"task.concurrency": "8"}})
-    assert (await _admin_apply(e2e_client))["stage"] == "succeeded"
-    written = template_checksum(WORKER)
-    carried = {
-        pod["metadata"].get("annotations", {}).get(ROLLED_OUT_CHECKSUM)
-        for pod in _component_pods("worker")
-    }
-
-    put_back_checksum(WORKER, "0" * 64)
-    review = (await e2e_client.get("/api/v1/review")).json()
-    started = await e2e_client.post("/api/v1/applies", json={})
-    assert started.status_code == 202, started.text
-    record = await _settled(e2e_client, started.json()["id"])
-
-    assert written is not None and carried == {written}
-    assert review["cost"]["restarts_workers"] is True, review["cost"]
-    assert record["stage"] == "succeeded", record
-    assert template_checksum(WORKER) == written
 
 
 async def test_recording_the_verified_snapshot_restarts_nothing(e2e_client: AsyncClient) -> None:
