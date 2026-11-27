@@ -115,9 +115,9 @@ jobs:
     # and not work -- one job spent seventeen minutes mostly waiting for pods. Each shard
     # gets its own kind cluster, so they cannot contend over the one Trino they all reset.
     #
-    # The split is computed from the directory rather than listed here, so a new tier 2 file
-    # runs without anyone remembering to add it. A hand-written list is how the adapter
-    # conformance check came to miss a method twice.
+    # The split is computed from the directory and the measured cost of each file
+    # (scripts/tier2_shards.py), so a new tier 2 file runs without anyone remembering to add
+    # it. A hand-written list is how the adapter conformance check came to miss a method twice.
     name: Tier 2 -- end to end on kind (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     strategy:
@@ -136,7 +136,7 @@ jobs:
         run: |
           # One line, space separated. A multi-line output turns the pytest step into
           # several shell lines, and the second one tries to *execute* a test file.
-          files=$(ls tests/tier2/test_*.py | awk "NR % 4 == ${{ matrix.shard }} % 4" | tr '\n' ' ')
+          files=$(uv run python scripts/tier2_shards.py ${{ matrix.shard }} 4)
           test -n "$files" || { echo "shard ${{ matrix.shard }} selected no files"; exit 1; }
           echo "files=$files" >> "$GITHUB_OUTPUT"
           echo "$files"
@@ -155,7 +155,7 @@ jobs:
       - name: Tier 2 -- against the real cluster
         # The slowest tests, by name: the suite is dominated by Trino restarts, and which test
         # pays for one is what deciding where to merge or move tests needs (#300).
-        run: uv run pytest ${{ steps.shard.outputs.files }} -q --durations=40 --durations-min=5
+        run: uv run pytest ${{ steps.shard.outputs.files }} -q --durations=0 --durations-min=1
 
       - name: Diagnostics on failure
         if: failure()
