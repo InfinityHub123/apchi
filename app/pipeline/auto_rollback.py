@@ -16,6 +16,7 @@ import logging
 import httpx
 
 from app.config import Settings
+from app.pipeline import checksum
 from app.pipeline.files import deliver, would_change
 from app.pipeline.maintenance import EngagedBy, MaintenanceStore
 from app.pipeline.rollout import roll_out
@@ -59,13 +60,17 @@ async def restore(
             changed.add(section.name)
 
     # A Section Trino adopts only by restarting has to be restarted to be *un*done too,
-    # and that restart is part of the single bounded attempt rather than a retry.
-    if any(section.requires_rollout and section.name in changed for section in REGISTERED):
+    # and that restart is part of the single bounded attempt rather than a retry. So does a
+    # coordinator whose pods were started from files the Apply being undone delivered.
+    if any(
+        section.requires_rollout and section.name in changed for section in REGISTERED
+    ) or "coordinator" in await checksum.behind(cluster, snapshot_sections):
         await roll_out(
             cluster.kubernetes,
             cluster.settings.coordinator_deployment_name,
             "auto rollback to the latest Snapshot",
             cluster.settings.rollout_timeout_seconds,
+            checksum.checksum("coordinator", cluster, snapshot_sections),
         )
 
     await verify(

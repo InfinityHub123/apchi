@@ -17,6 +17,16 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+#: Every annotation and label Apchi writes is under this prefix. Kubernetes keys a prefix to
+#: keep tools from writing each other's keys on one object; `apchi.dev` is not a domain the
+#: project owns, and an unprefixed key belongs to the cluster's own users.
+PREFIX = "apchi/"
+
+#: On a Trino Deployment's pod template: the checksum of the files its pods were started
+#: from. Pods copy the template's annotations when they are created, so a Deployment that has
+#: finished rolling out is one whose every pod carries it.
+ROLLED_OUT_CHECKSUM = f"{PREFIX}rolled-out-checksum"
+
 #: The mode for a Secret file that carries credentials.
 #:
 #: 0640 and not 0600, and that is not a compromise. A Secret volume's files are owned by
@@ -140,7 +150,11 @@ class KubernetesAdapter(Protocol):
 
     async def delete_pods(self, label_selector: str) -> list[str]: ...
 
-    async def restart_deployment(self, deployment: str, reason: str) -> None: ...
+    async def restart_deployment(self, deployment: str, reason: str, checksum: str) -> None: ...
+
+    async def rolled_out_checksum(self, deployment: str) -> str | None: ...
+
+    async def annotate_deployment(self, deployment: str, annotations: dict[str, str]) -> bool: ...
 
     async def rollout_state(self, deployment: str) -> RolloutState: ...
 
@@ -357,10 +371,15 @@ class RealKubernetes:
                 raise
             return None
 
-    async def restart_deployment(self, deployment: str, reason: str) -> None:
+    async def restart_deployment(self, deployment: str, reason: str, checksum: str) -> None:
         """Patch the pod template's annotations, which is all a rollout restart is -- so it
         works through the API with no kubectl dependency. Any change to the template makes
-        the controller replace every pod."""
+        the controller replace every pod.
+
+        The time goes in alongside the checksum because a restart must happen even when the
+        checksum is unchanged: a Secret edited by hand and written back by Apchi renders the
+        same checksum the pods already carry, while the pods run the hand edit.
+        """
         await self._patch_deployment(
             deployment,
             {
@@ -368,14 +387,45 @@ class RealKubernetes:
                     "template": {
                         "metadata": {
                             "annotations": {
-                                "apchi.dev/restarted-at": datetime.now(UTC).isoformat(),
-                                "apchi.dev/restarted-because": reason,
+                                ROLLED_OUT_CHECKSUM: checksum,
+                                f"{PREFIX}restarted-at": datetime.now(UTC).isoformat(),
+                                f"{PREFIX}restarted-because": reason,
                             }
                         }
                     }
                 }
             },
         )
+
+    async def rolled_out_checksum(self, deployment: str) -> str | None:
+        """The checksum on the pod template, or None when Apchi never wrote one or the
+        Deployment does not exist -- a Cluster with no workers has no worker Deployment."""
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            dep = await self._call(
+                self._apps.read_namespaced_deployment, deployment, self._namespace
+            )
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+            return None
+        annotations = dep.spec.template.metadata.annotations or {}
+        value = annotations.get(ROLLED_OUT_CHECKSUM)
+        return None if value is None else str(value)
+
+    async def annotate_deployment(self, deployment: str, annotations: dict[str, str]) -> bool:
+        """Annotate the Deployment itself, never its pod template, so nothing restarts.
+        False when there is no such Deployment."""
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            await self._patch_deployment(deployment, {"metadata": {"annotations": annotations}})
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+            return False
+        return True
 
     async def rollout_state(self, deployment: str) -> RolloutState:
         dep = await self._call(self._apps.read_namespaced_deployment, deployment, self._namespace)
