@@ -1758,7 +1758,10 @@ refuses them as Admin input, naming the chart value that owns each one.
 | `catalog.management`, `catalog.store` | coordinator `config.properties` | fixed: dynamic, file (§7.1) |
 | the user-mapping property | coordinator `config.properties` | `trino.authentication.type` and the mapping mount |
 | `http-server.process-forwarded` | coordinator `config.properties` | `expose.trino` |
-| `http-server.https.enabled`, `.port`, `.keystore.path` | coordinator `config.properties` | `trino.https` |
+| `http-server.https.enabled`, `.port`, `.keystore.path` | coordinator `config.properties` | `trino.https`, always on under certificate authentication |
+| `http-server.https.truststore.path` | coordinator `config.properties` | `trino.https.clientCaKey`, under certificate authentication |
+| `internal-communication.shared-secret` | both roles' `config.properties` | the Secret Apchi creates when it is missing, as `${ENV:...}` |
+| `http-server.authentication.allow-insecure-over-http` | coordinator `config.properties` | `trino.authentication.type`: Apchi uses the HTTP port |
 | `node.environment`, `node.data-dir` | `node.properties` | `trino.environment`, the data volume |
 | `node.id` | `node.properties` | the pod: the image sets it from the hostname |
 | all of `jvm.config` | `jvm.config` | fixed flags and `javaTruststore` |
@@ -1772,17 +1775,38 @@ Two departures from the first draft of this design, both found while building it
   already had the value, and an Admin default would have differed from what every running
   Cluster had -- so the first Apply after an upgrade would have restarted every coordinator
   for nothing. Apchi refuses to start with it empty.
-- **`http-server.authentication.type` is the Admin's.** The chart never set it: it chooses
-  which user-mapping property applies, and turning the authenticator on -- the type, and the
-  truststore certificate authentication validates clients against -- was always done through
-  `additionalCoordinatorProperties`. It moved with them, into the Server Configuration. The
-  eighth precondition still reads the result from the coordinator's file.
+- **How callers sign in is the chart's; which methods besides Apchi's is the Admin's**
+  (stage 3, #295). `trino.authentication.type` is `certificate` by default and `insecure`
+  otherwise, and no Admin input moves a Cluster between them.
 
-  Turning it on needs `internal-communication.shared-secret` too, on both roles and the same on
-  each: *measured* on 483, a coordinator with an authenticator and no secret refuses to start --
-  "Shared secret (internal-communication.shared-secret) is required when authentication is
-  enabled". Apchi does not check for it, because that failure is visible: the probe refuses the
-  Apply, or Verification fails and Auto Rollback restores the previous properties.
+  Under `certificate` the coordinator listens twice. HTTPS is for everyone outside the
+  namespace: Apchi renders `http-server.authentication.type=CERTIFICATE` as a default the
+  Admin may replace with any methods, and the CA client certificates are checked against
+  (`http-server.https.truststore.path`) is wiring, from the server certificate's Secret.
+  HTTP stays inside the namespace and takes the user name a client sends
+  (`http-server.authentication.allow-insecure-over-http=true`, wiring). Apchi and the workers
+  use it, so Apchi needs no certificate and no method an Admin chooses can lock it out. Two
+  things keep the HTTP port in the namespace, and the chart enforces both. The NetworkPolicy,
+  on by default, admits only Trino's own pods and Apchi to it while HTTPS admits anyone. And a
+  Route or Ingress for Trino must reach HTTPS, so `edge`, which reaches the pod on HTTP, is
+  refused. Under `insecure` none of this is rendered.
+
+  The chart provides no certificate. They are the installer's (cert-manager's, typically),
+  because a CA in Apchi would make it responsible for rotation and for handing that CA to
+  every client.
+
+  `internal-communication.shared-secret` is wiring on both roles, by `${ENV:...}`. *Measured*
+  on 483, a coordinator with an authenticator and no secret refuses to start with "Shared
+  secret (internal-communication.shared-secret) is required when authentication is enabled",
+  and the roles must agree. Apchi creates the Secret with a random value at startup when it is
+  missing and never touches one that exists. It is not rendered from anything, so no Apply
+  compares or rewrites it, and replacing it would split the roles until each restarted. The
+  workers keep reaching the coordinator over HTTP, where Trino authenticates their internal
+  requests with this secret rather than with the client authenticator.
+
+  The validation probe is given none of the authenticator properties. It serves plain HTTP with
+  no shared secret, where Trino starts no authenticator, so an added method would otherwise
+  fail every Validation. Those are judged on the Cluster.
 
 ### Checks: only where a failure would be invisible
 
@@ -1972,7 +1996,9 @@ that would have collided with it, and the refusal names both mounts.
 2. **Built.** The workers' files: the worker rollout and its own timeout, the graceful-shutdown
    hook in the chart, and the drain rule -- in the workers' own access control rather than in
    Permissions, because a worker checks the request against its own rules (*measured*).
-3. Authentication, as a design of its own.
+3. **Built.** Authentication (#295): certificate on HTTPS by default and insecure by the
+   chart's choice, HTTP kept to the namespace for Apchi and the workers, the shared secret
+   Apchi creates, and a probe that leaves the authenticators to the Cluster.
 
 ## Maintenance Mode
 

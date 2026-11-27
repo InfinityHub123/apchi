@@ -87,7 +87,9 @@ def _trino_container() -> DockerContainer:
     )
 
 
-_SETTINGS = Settings()
+#: The tier 1 Trino is a plain-HTTP container, so the suite runs the `insecure` shape. The
+#: certificate shape's rendering and refusals are tested by naming it.
+_SETTINGS = Settings(trino_authentication_type="insecure")
 MAPPING_SECRET = _SETTINGS.certificate_mapping_secret_name
 RULES_SECRET = _SETTINGS.access_control_secret_name
 SERVER_CONFIG_SECRET = _SETTINGS.server_configuration_secret_name
@@ -121,7 +123,14 @@ def bootstrap_secrets() -> dict[str, dict[str, str]]:
     and the access-control rules. A fake holding less would make Apchi's own startup look
     like a change, and the first Apply restart a coordinator for nothing.
     """
-    return desired_secrets(_SETTINGS, {}, AdminValues())
+    return {
+        **desired_secrets(_SETTINGS, {}, AdminValues()),
+        _SETTINGS.shared_secret_name: dict(SHARED_SECRET),
+    }
+
+
+#: What the fake holds as the shared secret. A real one is random, and only ever created.
+SHARED_SECRET = {"internal-communication.shared-secret": "tier-1-shared-secret"}
 
 
 def container_url(container: DockerContainer, port: int = 8080) -> str:
@@ -596,6 +605,7 @@ def settings(mongo_container: MongoDbContainer) -> Settings:
     return Settings(
         mongo_uri=mongo_container.get_connection_url(),
         mongo_database=f"apchi_test_{uuid.uuid4().hex}",
+        trino_authentication_type="insecure",
     )
 
 

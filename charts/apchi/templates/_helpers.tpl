@@ -130,6 +130,20 @@ one behind something else -- and the Service otherwise.
 {{- end -}}
 
 {{/*
+Whether the coordinator serves HTTPS: when asked to, and always under certificate
+authentication, which Trino offers only over TLS. Non-empty means yes.
+*/}}
+{{- define "trino.https" -}}
+{{- if or .Values.trino.https.enabled (eq .Values.trino.authentication.type "certificate") -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Where the coordinator finds the CA that client certificates are checked against. Only under
+certificate authentication: nothing else reads it.
+*/}}
+{{- define "trino.clientCa" -}}/data/trino-https/client-ca.pem{{- end -}}
+
+{{/*
 Which authenticator reads the user-mapping file. Both variants feed the same file to the
 same parser; Trino rejects the certificate one unless certificate authentication is
 configured, which is the only reason there are two. §7.6.
@@ -322,6 +336,11 @@ router then speaks TLS to the pod.
 {{- $termination := $e.termination | default "edge" -}}
 {{- if not (has $termination (list "edge" "passthrough" "reencrypt")) -}}
 {{- fail (printf "expose.%s.termination must be edge, passthrough or reencrypt, not %q" .component $termination) -}}
+{{- end -}}
+{{- /* edge ends TLS at the router and reaches the pod on its HTTP port, which under
+certificate authentication takes the name a client sends and is kept to the namespace. */ -}}
+{{- if and (eq .component "trino") (eq $termination "edge") (eq $root.Values.trino.authentication.type "certificate") -}}
+{{- fail "expose.trino.termination edge would bring outside clients to Trino's HTTP port, which under certificate authentication trusts the user name it is sent and is kept to the namespace. Use passthrough, which carries a client's certificate to Trino, or reencrypt, which ends it at the router and so suits password sign-in only." -}}
 {{- end -}}
 {{- if and (ne $termination "edge") (not .https) -}}
 {{- if eq .component "trino" -}}
@@ -520,6 +539,13 @@ Takes (dict "root" . "role" "coordinator|worker").
   value: {{ $role.memory.maxMemoryPerNode | quote }}
 - name: TRINO_MEMORY_HEAP_HEADROOM_PER_NODE
   value: {{ $role.memory.heapHeadroomPerNode | quote }}
+# What both roles sign internal requests with. Apchi creates the
+# Secret on its first start; the pod waits for it until then.
+- name: TRINO_INTERNAL_SHARED_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ $root.Values.secrets.sharedSecret | quote }}
+      key: internal-communication.shared-secret
 {{- end -}}
 
 {{/*

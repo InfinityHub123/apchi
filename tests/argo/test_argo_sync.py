@@ -8,6 +8,12 @@ annotation emptied the catalog seed, reset the access-control rules to fail-open
 the Event Listener and Resource Groups Secrets while Apchi's mounts still read from them -- so
 the restarted coordinator crash-looped.
 
+It installs the chart's default shape, certificate authentication (#295), so it is also where a
+real coordinator proves that shape: HTTPS refuses a client that sends only a user name and admits
+one with a certificate, while Apchi, which has none, works over the HTTP port; the workers join
+on the shared secret Apchi created; and the sync keeps that secret, which the chart does not
+render.
+
 So this drives the real chart through a real Argo CD, with automated sync, prune and self-heal:
 Apchi applies a catalog, a permission, an Event Listener, Resource Groups and a Raw File through
 its own API, then the chart changes and Argo syncs, and everything Apchi wrote has to survive,
@@ -33,6 +39,9 @@ from typing import Any
 
 import httpx
 import pytest
+import trino
+
+from tests.certificates import tls_chain
 
 ROOT = Path(__file__).resolve().parents[2]
 ARGO_VERSION = "v2.13.3"
@@ -65,6 +74,28 @@ def kubectl(*args: str, stdin: str | None = None, check: bool = True, timeout: i
     return finished.stdout
 
 
+#: The certificates the installer provides: Apchi issues none. One CA signs the coordinator's
+#: server certificate and the certificate a client outside the namespace signs in with.
+CHAIN = tls_chain(server_name="trino", client_name="apchi")
+SHARED_SECRET = "trino-internal-shared-secret"
+
+
+def _installers_secrets() -> None:
+    def secret(name: str, data: dict[str, bytes]) -> dict[str, Any]:
+        encoded = {key: base64.b64encode(value).decode() for key, value in data.items()}
+        return {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": name}, "data": encoded}
+
+    items = [
+        secret(
+            "trino-server-tls",
+            {"tls.crt": CHAIN.server, "tls.key": CHAIN.server_key, "ca.crt": CHAIN.ca},
+        ),
+    ]
+    kubectl(
+        "apply", "-f", "-", stdin=json.dumps({"apiVersion": "v1", "kind": "List", "items": items})
+    )
+
+
 def _secret(name: str) -> dict[str, str]:
     raw = kubectl("get", "secret", name, "-o", "json")
     data = json.loads(raw).get("data") or {}
@@ -80,6 +111,8 @@ def _values(annotation: str) -> dict[str, Any]:
         },
         "mongodb": {"deploy": True},
         "trino": {
+            # The server certificate, and nothing for Apchi: it reaches Trino over HTTP.
+            "https": {"existingSecret": "trino-server-tls"},
             "securityRefreshPeriod": "1s",
             "coordinator": {"podAnnotations": {"apchi-argo-test": annotation}, **SMALL},
             "worker": {
@@ -155,6 +188,7 @@ def argo() -> Iterator[None]:
         "--timeout=600s",
     )
     _serve_chart()
+    _installers_secrets()
     kubectl("apply", "-f", "-", stdin=json.dumps(_application("first")))
     _await("the chart to sync and come up healthy", _synced_and_healthy)
     yield
@@ -273,6 +307,58 @@ class _Apchi:
         self._forward.terminate()
 
 
+class _Coordinator:
+    """The coordinator's HTTPS port through a port-forward, signed in with a certificate, as a
+    client outside the namespace would be."""
+
+    def __init__(self) -> None:
+        self._work = tempfile.TemporaryDirectory()
+        work = Path(self._work.name)
+        for name, content in (
+            ("ca.pem", CHAIN.ca),
+            ("client.pem", CHAIN.client),
+            ("client-key.pem", CHAIN.client_key),
+        ):
+            (work / name).write_bytes(content)
+        self.ca = str(work / "ca.pem")
+        self._client = (str(work / "client.pem"), str(work / "client-key.pem"))
+        self._forward = subprocess.Popen(
+            ["kubectl", "port-forward", "svc/trino", "18443:8443"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self.https = "https://127.0.0.1:18443"
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            try:
+                httpx.get(f"{self.https}/v1/info", verify=self.ca, timeout=5)
+                return
+            except httpx.TransportError:
+                time.sleep(1)
+        raise AssertionError("the coordinator never answered through the port-forward")
+
+    def query(self, sql: str) -> list[list[Any]]:
+        connection = trino.dbapi.connect(
+            host=self.https,
+            user="apchi",
+            auth=trino.auth.CertificateAuthentication(*self._client),
+            verify=self.ca,
+        )
+        try:
+            cursor = connection.cursor()
+            cursor.execute(sql)
+            return [list(row) for row in cursor.fetchall()]
+        finally:
+            connection.close()
+
+    def __enter__(self) -> "_Coordinator":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self._forward.terminate()
+        self._work.cleanup()
+
+
 def _await_answer(http: httpx.Client) -> None:
     deadline = time.monotonic() + 120
     while time.monotonic() < deadline:
@@ -328,6 +414,10 @@ def test_an_argo_sync_keeps_everything_apchi_applied(argo: None) -> None:
         ):
             response = apchi.http.post(path, json=body)
             assert response.status_code in (200, 201), f"{path}: {response.text}"
+        # A client signing in to HTTPS is its certificate's subject, CN=apchi; this makes it
+        # the user its queries are checked as.
+        mapping = apchi.http.put("/certificate-mapping", json={"pattern": "CN=(.*)", "user": "$1"})
+        assert mapping.status_code == 200, mapping.text
         selectors = apchi.http.put(
             "/resource-groups/selectors", json={"selectors": [{"group": "global"}]}
         )
@@ -364,6 +454,7 @@ def test_an_argo_sync_keeps_everything_apchi_applied(argo: None) -> None:
     )
     assert _apchi_volumes() == {"apchi-resource-groups", "apchi-admin-raw-files"}
     checksum = _template_annotations()["apchi/rolled-out-checksum"]
+    shared = _secret(SHARED_SECRET)
     verified = _deployment_annotations()["apchi/verified-snapshot"]
     syncs_before = len(_app()["status"].get("history", []))
 
@@ -405,16 +496,36 @@ def test_an_argo_sync_keeps_everything_apchi_applied(argo: None) -> None:
         if "deletionTimestamp" not in pod["metadata"]
     }
     assert carried == {checksum}, carried
-    trino = kubectl(
-        "exec",
-        "deploy/trino-coordinator",
-        "-c",
-        "trino",
-        "--",
-        "trino",
-        "--execute",
-        "SHOW CATALOGS",
-    )
-    assert "argotest" in trino, (
-        f"the restarted coordinator lost the catalog Apchi applied:\n{trino}"
-    )
+    assert _secret(SHARED_SECRET) == shared, "the sync replaced the shared secret Apchi created"
+    with _Coordinator() as coordinator:
+        catalogs = coordinator.query("SHOW CATALOGS")
+        assert ["argotest"] in catalogs, (
+            f"the restarted coordinator lost the catalog Apchi applied: {catalogs}"
+        )
+
+
+def test_the_coordinator_authenticates_by_certificate(argo: None) -> None:
+    """The chart's default, on a real coordinator: HTTPS demands a certificate, and the workers
+    joined on the shared secret Apchi created."""
+    shared = _secret(SHARED_SECRET)
+    assert list(shared) == ["internal-communication.shared-secret"], shared
+    assert len(shared["internal-communication.shared-secret"]) >= 64
+
+    with _Coordinator() as coordinator:
+        # A query needs a worker -- the coordinator schedules none of its own -- so an answer
+        # here is the worker's internal requests accepted on the shared secret.
+        nodes = coordinator.query("SELECT coordinator FROM system.runtime.nodes")
+        assert sorted(nodes) == [[False], [True]], nodes
+
+        # Only a user name, over HTTPS: refused. HTTP would take it, which is why the
+        # NetworkPolicy keeps that port to Trino and Apchi -- a port-forward goes around a
+        # policy, and kind's network plugin enforces none, so that half is the
+        # NetworkPolicy job's and tier 1's.
+        refused = httpx.post(
+            f"{coordinator.https}/v1/statement",
+            content="SELECT 1",
+            headers={"X-Trino-User": "analyst"},
+            verify=coordinator.ca,
+            timeout=30,
+        )
+        assert refused.status_code == 401, (refused.status_code, refused.text)

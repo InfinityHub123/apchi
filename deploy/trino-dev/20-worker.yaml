@@ -47,6 +47,13 @@ spec:
               value: "600MB"
             - name: TRINO_MEMORY_HEAP_HEADROOM_PER_NODE
               value: "600MB"
+            # What both roles sign internal requests with. Apchi creates the
+            # Secret on its first start; the pod waits for it until then.
+            - name: TRINO_INTERNAL_SHARED_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: "trino-internal-shared-secret"
+                  key: internal-communication.shared-secret
           ports:
             - containerPort: 8080
               name: http

@@ -5,17 +5,22 @@ it -- and with `insecure` authentication it can claim to be any user, admin incl
 sending X-Trino-User. Egress is left alone: Trino reaches databases, object stores and DNS that
 this chart cannot enumerate, and a policy that guessed would break catalogs silently.
 
+Under certificate authentication the HTTP port takes the user name a client sends, so it is
+Trino's own pods' and Apchi's alone, and everyone else -- the router, a Trino Gateway, BI
+tools -- comes to the HTTPS port, which authenticates them and so needs no list.
+
 The ports are the container ports, because a NetworkPolicy is evaluated at the pod, after the
 Service has translated its port.
 */ -}}
+{{- $certificate := eq .Values.trino.authentication.type "certificate" -}}
 {{- $ports := list (int .Values.trino.httpPort) -}}
-{{- if .Values.trino.https.enabled -}}
+{{- if (include "trino.https" .) -}}
 {{- $ports = append $ports (int .Values.trino.https.port) -}}
 {{- end -}}
 {{- $np := .Values.networkPolicy -}}
 {{- $routed := and .Values.expose.trino.host (eq (include "apchi.exposeKind" .) "route") -}}
 {{- $ingressed := and .Values.expose.trino.host (eq (include "apchi.exposeKind" .) "ingress") -}}
-{{- if and $ingressed (not $np.ingressControllerNamespaceSelector) }}
+{{- if and $ingressed (not $np.ingressControllerNamespaceSelector) (not $certificate) }}
 {{- fail "networkPolicy.ingressControllerNamespaceSelector is required when Trino is exposed by an Ingress: the policy has to let the controller's pods through, and only you know which namespace they run in (for ingress-nginx, {kubernetes.io/metadata.name: ingress-nginx})" }}
 {{- end }}
 apiVersion: networking.k8s.io/v1
@@ -42,6 +47,13 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "apchi.apiSelectorLabels" . | nindent 14 }}
+      {{- if $certificate }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.trino.httpPort }}}
+    # Anyone, because HTTPS authenticates whoever comes: the Route or Ingress, and every client.
+    - ports:
+        - {protocol: TCP, port: {{ .Values.trino.https.port }}}
+      {{- else }}
         {{- if $routed }}
         # OpenShift's router, for the Route. Both labels, because the network plugins differ:
         # OVN-Kubernetes selects the router's namespace by the first, OpenShift SDN by the second.
@@ -65,6 +77,7 @@ spec:
         {{- range $ports }}
         - {protocol: TCP, port: {{ . }}}
         {{- end }}
+      {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

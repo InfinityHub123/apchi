@@ -56,11 +56,11 @@ FILES = "/api/v1/admin/files"
 ADMIN = Identity(subject="root", role="admin", via="password")
 OPERATOR = Identity(subject="jo", role="operator", via="password")
 
-SHARED_SECRET = "s3cret-internal-communication"
+SHARED_SECRET = "s3cret-web-ui-sessions"
 PROPERTIES = {
     "config.properties": {
         "query.max-execution-time": "2h",
-        "internal-communication.shared-secret": SHARED_SECRET,
+        "web-ui.shared-secret": SHARED_SECRET,
     },
     "log.properties": {"io.trino.plugin.postgresql": "DEBUG"},
 }
@@ -297,12 +297,13 @@ async def test_the_rendered_files_are_wiring_then_the_admins_keys(as_admin: Asyn
         "catalog.management=dynamic\n"
         "catalog.store=file\n"
         f"http-server.authentication.insecure.user-mapping.file={USER_MAPPING_PATH}\n"
+        "internal-communication.shared-secret=${ENV:TRINO_INTERNAL_SHARED_SECRET}\n"
         "query.max-memory=${ENV:TRINO_QUERY_MAX_MEMORY}\n"
         "query.max-memory-per-node=${ENV:TRINO_QUERY_MAX_MEMORY_PER_NODE}\n"
         "memory.heap-headroom-per-node=${ENV:TRINO_MEMORY_HEAP_HEADROOM_PER_NODE}\n"
-        f"internal-communication.shared-secret={SHARED_SECRET}\n"
         "node-scheduler.include-coordinator=false\n"
         "query.max-execution-time=2h\n"
+        f"web-ui.shared-secret={SHARED_SECRET}\n"
     )
     assert files[LOG_PROPERTIES] == "io.trino.plugin.postgresql=DEBUG\n"
     assert files[NODE_PROPERTIES] == "node.environment=production\nnode.data-dir=/data/trino\n"
@@ -356,8 +357,25 @@ def test_the_heap_is_never_in_jvm_config() -> None:
         ({"trino_process_forwarded": True}, ["http-server.process-forwarded=true"], []),
         (
             {"trino_authentication_type": "certificate"},
-            [f"http-server.authentication.certificate.user-mapping.file={USER_MAPPING_PATH}"],
-            ["insecure.user-mapping", "http-server.authentication.type"],
+            [
+                f"http-server.authentication.certificate.user-mapping.file={USER_MAPPING_PATH}",
+                "http-server.authentication.type=CERTIFICATE",
+            ],
+            ["insecure.user-mapping"],
+        ),
+        (
+            {
+                "trino_authentication_type": "certificate",
+                "trino_https_port": 8443,
+                "trino_https_truststore_path": "/data/trino-https/client-ca.pem",
+            },
+            ["http-server.https.truststore.path=/data/trino-https/client-ca.pem"],
+            [],
+        ),
+        (
+            {"trino_authentication_type": "insecure"},
+            [f"http-server.authentication.insecure.user-mapping.file={USER_MAPPING_PATH}"],
+            ["http-server.authentication.type", "truststore"],
         ),
         (
             {"trino_http_port": 9090, "trino_discovery_uri": "http://trino-a:9090"},

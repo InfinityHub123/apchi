@@ -62,9 +62,9 @@ does not create.
 | `logging.level`, `logging.json` | `null` | INFO and console lines when null. An explicit level can be raised during an incident without a rebuild |
 | `environment` | `null` | **Deprecated**, removed in the next release. While set, `np`/`test` still mean DEBUG and `prep`/`prod` INFO and JSON, and Apchi logs a warning. Any value is accepted |
 | `logging.debug` | `false` | Debugging mode: DEBUG unless `logging.level` says otherwise, each line naming the logger and line it came from, and every call to Kubernetes, Trino and MongoDB logged by name and timing. Payloads never, so it is safe to turn on in production. Dependencies' own debug output stays off, because PyMongo's prints Snapshots and the Kubernetes client's prints Secrets |
-| `trino.url` | `""` | The coordinator, scheme included; empty means `http://<trino.name>:8080`, the Service this chart creates. Set it for a coordinator serving HTTPS. A URL and not a host plus a port because the Trino client reads `https` from a port only at exactly 443, so `8443` silently meant plaintext |
+| `trino.url` | `""` | The coordinator, scheme included; empty means `http://<trino.name>:8080`, the Service this chart creates, whose HTTP port Apchi uses under either authentication type. A URL and not a host plus a port because the Trino client reads `https` from a port only at exactly 443, so `8443` silently meant plaintext |
 | `trino.tls.existingSecret` | `""` | A Secret holding the PEM files below, mounted read-only at `trino.tls.mountPath`. Required to reach a coordinator that serves HTTPS |
-| `trino.tls.certificateKey`, `trino.tls.keyKey` | `""`, `""` | The certificate Apchi authenticates with, where the coordinator sets `http-server.authentication.type=CERTIFICATE`. Both or neither |
+| `trino.tls.certificateKey`, `trino.tls.keyKey` | `""`, `""` | A certificate for Apchi to present, only for a coordinator outside this chart that authenticates every port. Both or neither |
 | `trino.user` | `apchi` | The identity Apchi issues DDL as, and the only one granted `owner` on catalogs |
 | `trino.name` | `trino` | Names the Service and the `-coordinator` and `-worker` Deployments, and configures Apchi with the same |
 | `trino.image.repository`, `trino.image.tag` | `trinodb/trino`, `483` | Apchi is developed and tested against 483. Validation runs the coordinator's image, whatever it is |
@@ -80,7 +80,7 @@ does not create.
 | `trino.<role>.memory.maxMemoryPerNode`, `.heapHeadroomPerNode` | `600MB`, `600MB` | `query.max-memory-per-node` and `memory.heap-headroom-per-node`, reaching Trino as `${ENV:...}` from the pod. The render fails when their sum exceeds the heap -- Trino refuses that at startup anyway |
 | `trino.fsGroup` | `1000` | The group that owns the credential volumes, which are `0640`. On OpenShift's `restricted-v2` it must be a group the namespace allows -- the first of its `openshift.io/sa.scc.supplemental-groups` annotation -- or the pods are refused. `null` renders none, which Apchi accepts only with `restrictedPodSecurity` set. See [OpenShift and other restricted clusters](../../docs/deploying/openshift.md) |
 | `trino.securityRefreshPeriod` | `30s` | How soon a permission change takes effect. Lower is a faster Apply and more file reads. Required: Apchi refuses to start without it |
-| `trino.authentication.type` | `insecure` | `certificate` for production. Both feed the same file to the same parser; Trino rejects the certificate variant unless certificate authentication is configured (§13.3) |
+| `trino.authentication.type` | `certificate` | How callers sign in, decided here and nowhere else. `certificate`: HTTPS demands a client certificate (or the methods an Admin sets instead), and HTTP, kept to Trino and Apchi by the NetworkPolicy, takes a user name. `insecure`: plain HTTP alone, for the quickstart and development |
 | `trino.worker.gracefulShutdown.gracePeriodSeconds` | `120` | How long a worker waits for the coordinator to notice it is draining, before and after its tasks finish. Apchi renders it as `shutdown.grace-period` |
 | `trino.worker.terminationGracePeriodSeconds` | `600` | At least twice the grace period plus the longest task a drain should wait for; the render fails below twice it. A worker killed before then ends the tasks it was draining |
 | `trino.worker.podDisruptionBudget.enabled`, `.maxUnavailable` or `.minAvailable` | `true`, `1` | How many workers a node drain or cluster upgrade may take at once. Each drains first, so the default lets a drain go one worker at a time without ending their tasks. One of the two, never both (the render refuses). Workers only: a budget on the single coordinator would protect nothing or block every node drain |
@@ -96,7 +96,7 @@ does not create.
 | `caBundle.existingSecret` or `.configMap`, `.key` | `""`, `""`, `ca-bundle.crt` | A PEM bundle mounted into **every** pod -- Apchi, MongoDB, the Trino coordinator and workers, and the Validation pod -- at `/etc/pki/tls/certs/ca-bundle.crt`, which replaces an image's own system bundle there. Apchi adds it to the public store for every connection it makes. A ConfigMap for OpenShift's injected trusted-CA bundle; named rather than looked up, because Helm's `lookup` finds nothing under `helm template` or Argo CD. It turns on TLS to MongoDB only if `mongodb.uri` or a client certificate already asks for it |
 | `javaTruststore.existingSecret` or `.configMap`, `.key` | `""`, `""`, `cacerts` | A Java truststore mounted into every pod that runs Trino, at `/etc/pki/java/truststore/cacerts`, with the JVM pointed at it. It replaces the JDK's own store, so it must hold the public roots too if a catalog reaches anything they sign. What connectors use for outbound TLS; Trino's own HTTPS server is separate |
 | `javaTruststore.password.existingSecret`, `.key` | `""`, `""` | Only for a store that needs its password to load. Read from the Secret into the JVM by Kubernetes, never written into a ConfigMap |
-| `networkPolicy.enabled` | `false` | Who may reach Trino's pods. Turn it on: without it, any pod that can route to the coordinator can query it, and with `insecure` authentication claim to be any user. Always allowed: Trino's own pods, Apchi's API pods, and the router or ingress controller when `expose.trino` is set. Egress is never restricted. Your network plugin must enforce NetworkPolicy -- kind's default does not |
+| `networkPolicy.enabled` | `true` | Who may reach Trino's pods. Under certificate authentication, the coordinator's HTTP port, which trusts a user name, admits only Trino's own pods and Apchi, and HTTPS admits anyone. Under `insecure`, the HTTP port admits Trino's pods, Apchi, the router or ingress controller when `expose.trino` is set, and `networkPolicy.coordinator.from`. Egress is never restricted. Your network plugin must enforce NetworkPolicy -- kind's default does not |
 | `networkPolicy.coordinator.from`, `networkPolicy.worker.from` | `[]` | Extra `NetworkPolicyPeer`s: a Trino Gateway, BI tools in another namespace. Off by default because turning the policy on cuts off every client not listed here |
 | `networkPolicy.ingressControllerNamespaceSelector` | `{}` | The ingress controller's namespace labels, required when Trino is exposed by an Ingress. A Route needs nothing: OpenShift's router namespace is selected by its own labels, both the OVN-Kubernetes and the OpenShift SDN one |
 | `restrictedPodSecurity` | `false` | Set on a cluster that forbids pinning `fsGroup` and runs each pod as an arbitrary uid -- OpenShift's `restricted-v2` SCC. A mounted file then reaches the process only by being world-readable, so Apchi's pod renders no `fsGroup` and mounts its credentials `0644`; the Validation pod Apchi creates carries no `fsGroup` either; and Apchi accepts `0644` credential mounts on the Trino pods instead of refusing them, while still refusing a writable one. The rest of the security context -- `runAsNonRoot`, seccomp, capabilities, the uid -- the platform adds itself, and the image runs as any uid. See [OpenShift and other restricted clusters](../../docs/deploying/openshift.md). The bundled MongoDB (`mongodb.deploy`) is for trying Apchi out and is not built for a restricted cluster |
@@ -105,6 +105,7 @@ does not create.
 | `mongodb.deploy`, `mongodb.image` | `false`, `mongo:7` | A MongoDB beside Apchi, for trying it out. Loses Snapshots on restart |
 | `secrets.*` | see above | Must be what Trino mounts |
 | `secrets.workerServerConfiguration` | `trino-server-config-worker` | The workers' own files, including the access-control rule that lets Apchi's identity drain a worker. Written by Apchi like the coordinator's |
+| `secrets.sharedSecret` | `trino-internal-shared-secret` | `internal-communication.shared-secret`, which both roles read from their environment. Created by Apchi with a random value on its first start when it is missing, and never touched once it exists |
 | `secrets.serverConfiguration` | `trino-server-config-coordinator` | The coordinator's own files -- `config.properties`, `jvm.config`, `node.properties`, `log.properties`, `catalog-store.properties`, `access-control.properties`, and the Event Listener when one is configured -- which Apchi renders and this chart only mounts (ADR-0010). Not created by the chart: Apchi writes it on its first start, and the coordinator waits in `ContainerCreating` until then |
 | `volumes.*` | `apchi-*` | The volumes Apchi adds to the coordinator's pod template. Everything else there is the Admin's. The user-mapping Secret is not here: the Admin mounts it as a directory and Apchi only fills it |
 | `validation.resources` | `{}` | Requests and limits for the Validation pod's container. Apchi creates that pod itself, so this is the only place a cluster that requires them on every container can set them. Trino needs about `2Gi` to start. Empty sets none |
@@ -122,7 +123,7 @@ does not create.
 | `expose.ingress.className`, `.controller` | `""`, `""` | `controller` is `nginx` or `haproxy`, for the annotations `passthrough` and `reencrypt` need |
 | `expose.apchi.host`, `.termination`, `.tlsSecret`, `.annotations` | `""`, `edge`, `""`, `{}` | Apchi from outside, created only when `host` is set. `edge` only: Apchi serves plain HTTP |
 | `expose.trino.host`, `.termination`, `.tlsSecret`, `.destinationCACertificate`, `.annotations` | `""`, `edge`, `""`, `""`, `{}` | Trino from outside, created only when `host` is set. `passthrough` and `reencrypt` need `trino.https` |
-| `trino.https.enabled`, `.port`, `.existingSecret`, `.certificateKey`, `.keyKey` | `false`, `8443`, `""`, `tls.crt`, `tls.key` | Trino serving HTTPS itself, from a TLS Secret such as cert-manager writes |
+| `trino.https.enabled`, `.port`, `.existingSecret`, `.certificateKey`, `.keyKey`, `.clientCaKey` | `false`, `8443`, `""`, `tls.crt`, `tls.key`, `ca.crt` | Trino serving HTTPS itself, from a TLS Secret you provide, such as cert-manager writes. Always on under certificate authentication; `clientCaKey` is the CA client certificates are checked against |
 | `resources`, `nodeSelector`, `tolerations`, `affinity`, `podAnnotations`, `podLabels` | | The usual |
 
 **Rotating anything under `trino.tls`, `mongodb.tls`, `caBundle` or `javaTruststore` needs a
@@ -227,17 +228,18 @@ time, whole, at `/etc/trino/apchi`. When the Admin configures a listener, Apchi 
 `config.properties` at it; without one, neither exists. A fixed mount, so Argo CD sees nothing
 change on the Deployment for it (#269).
 
-**`trino.https` makes the coordinator serve HTTPS**, on `trino.https.port` beside plain HTTP,
-with the certificate in `trino.https.existingSecret`. A TLS Secret holds the certificate and
-the key apart and Trino's PEM keystore wants them in one file, so an initContainer joins them
-at pod start into a memory-backed volume only the pod can read. Workers and Apchi keep using
-HTTP inside the cluster.
+**Certificate authentication is the default.** The coordinator serves HTTPS on
+`trino.https.port` for clients outside the namespace and demands a client certificate there.
+A Route or Ingress for Trino must reach it (`passthrough` or `reencrypt`; `edge` is refused).
+The HTTP port takes the user name a client sends, and the NetworkPolicy, on by default, keeps
+it to Trino's own pods and Apchi, which uses it and so needs no certificate. The server
+certificate is yours to provide: without `trino.https.existingSecret` the chart refuses to
+render. A TLS Secret holds the certificate and the key apart and Trino's PEM keystore wants
+them in one file, so an initContainer joins them at pod start into a memory-backed volume
+only the pod can read.
 
-`trino.authentication.type: certificate` selects which authenticator reads the user-mapping
-file; it does not configure the authenticator. Once Trino authenticates its callers it
-refuses HTTP, and Apchi has to be told: `trino.url=https://...`, and `trino.tls.*` so it has a
-certificate to present. Apchi asserts this before every Apply and refuses rather than letting
-the queries time out.
+`trino.authentication.type: insecure` is plain HTTP alone, which is what the quickstart
+installs. Only this value moves a Cluster between the two.
 
 **Autoscaling, exchange managers, JMX export, group providers** are not here. A value this
 chart lacks is a gap to add.

@@ -41,7 +41,21 @@ CHART = ROOT / "charts" / "apchi"
 
 #: The release is deliberately not called `trino` or `apchi`: the names Apchi is configured
 #: with must come from the chart's helpers, not from a release name that happens to match.
-VALUES = ("--set", "mongodb.deploy=true", "--set", "trino.worker.replicas=1")
+VALUES = (
+    "--values",
+    str(CHART / "ci" / "certificate.yaml"),
+    "--set",
+    "trino.worker.replicas=1",
+)
+#: The quickstart's shape: plain HTTP and the name a client sends.
+INSECURE_VALUES = (
+    "--set",
+    "mongodb.deploy=true",
+    "--set",
+    "trino.worker.replicas=1",
+    "--set",
+    "trino.authentication.type=insecure",
+)
 #: The same, with a CA bundle and a Java truststore mounted into every pod -- which adds mounts
 #: to the coordinator, so the preconditions are checked against that shape as well.
 TRUST_VALUES = VALUES + (
@@ -242,7 +256,7 @@ def _apchi_settings(documents: list[dict[str, Any]]) -> Settings:
 
 
 def main() -> int:
-    for values in (VALUES, TRUST_VALUES, HTTPS_VALUES):
+    for values in (VALUES, INSECURE_VALUES, TRUST_VALUES, HTTPS_VALUES):
         if failed := _check(values):
             return failed
     return 0
