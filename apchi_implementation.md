@@ -1522,8 +1522,8 @@ Trino ignores a file at its default path.
 `event-listener.config-files` is therefore wiring: Apchi writes it, and an Admin's
 `config.properties` may not. A Raw File at `/etc/trino/event-listener.properties` is refused --
 Trino would read it while no listener is configured and silently drop it once one is -- and so
-is one anywhere under `/etc/trino/apchi`. The check that every file under `/etc/trino` is Apchi's (§16) refuses a coordinator
-that does not mount the Secret whole there.
+is one anywhere under `/etc/trino/apchi`. The check that every file under `/etc/trino` is
+Apchi's (§16) refuses a coordinator that does not mount the Secret whole there.
 
 **Restart-required.** `EventListenerManager.loadEventListeners()` is guarded by a
 `compareAndSet` that permits exactly one call per process lifetime, and there is no reload path
@@ -1532,17 +1532,6 @@ coordinator and not the workers, and the validation probe starts with the listen
 
 **One listener**, as before. `event-listener.config-files` takes a list, so more is a change to
 the model, not to delivery.
-
-**Carried over once.** An install upgrading from the Section has its listener in the latest
-Snapshot. At startup Apchi copies it into the Admin values -- the current ones, the pre-image and
-what the last Apply delivered, because the Cluster already runs it and a rollback restoring a
-copy without it would remove a listener nobody removed -- unless an Admin has set one since. It
-changes nothing on the Cluster: the coordinator keeps reading the listener from the old mount
-until the next Admin Apply renders it the new way, takes that mount off the Deployment and
-deletes its Secret. That is the last time Apchi edits the Deployment for a listener. A listener
-that would not validate is left where it is and logged, rather than carried broken. Snapshots and
-Candidates still holding the retired Section are read without it; an import carrying a non-empty
-one is refused, naming where the listener goes now, rather than dropping it.
 
 # 14. Admin capabilities
 
@@ -1978,18 +1967,15 @@ comes from a Secret Apchi names in its settings, or from the volume it adds for 
 chart change that starts mounting its own file under `/etc/trino` is refused before the Apply
 that would have collided with it, and the refusal names both mounts.
 
-### Migration
+### What the chart keeps
 
 - **Sizing** keeps its place in the chart, restructured per role:
   `trino.coordinator.jvm.{maxHeapSize,extraArgs}`, `trino.worker.jvm.{…}` and the three query
   memory values, all required, with defaults.
 - **Everything else leaves the chart:** `trino.additionalCoordinatorProperties`, `trino.jvm.*`
   and, in stage 2, `trino.additionalWorkerProperties` -- and with it the chart's Trino ConfigMap,
-  which no longer exists. Setting any of them fails the render and names its replacement.
+  which no longer exists. Those properties go through `PUT /api/v1/admin/server-configuration`.
   `trino.securityRefreshPeriod` stays, as wiring.
-- **An existing install** moves its additional properties into the Admin configuration
-  through `PUT /api/v1/admin/configuration` before upgrading. The first startup after the
-  upgrade writes the Secrets from them.
 
 ### Stages
 
@@ -2119,12 +2105,8 @@ no Section declares it; an initContainer reads it rather than Trino. Access-cont
 mapping patterns are configuration rather than secrets and are deliberately not covered: a
 check that fires where nothing is at stake is one an Admin learns to work around.
 
-**Only the volumes the Admin mounts are checked for their mode, and that is correctness rather
-than politeness.** Apchi sets the mode on its own mounts during Apply, so refusing one here
-would refuse the only thing that could fix it — and an upgrade from a version that mounted them
-bare would deadlock on this check forever. The `fsGroup` is checked for everyone, because Apchi
-cannot add one: the pod's `securityContext` is the Admin's, and Apchi does not own that
-template.
+**Every credential volume is the chart's.** Apchi mounts none of them during an Apply, so the
+mode and the `fsGroup` are checked on every one, and the fix is always the chart's.
 
 **It refuses rather than warns**, which is a deliberate departure from how catalog reachability
 is treated (§6). Reachability is a fact about the Candidate an Operator just wrote; an exposed
@@ -2152,10 +2134,6 @@ asymmetry. Whether the Cluster has workers at all is Verification's question and
 answers it; giving that requirement a second owner would mean two different failures for one
 misconfiguration. So a 404 logs and moves on, and `deployment_pod_spec_if_present` is what makes
 "no such Deployment" an answer instead of an error.
-
-Nothing on a worker is exempt as Apchi's own, either. The coordinator's exemption exists because
-Apchi sets those modes during Apply and Apply patches one Deployment — so on a worker every
-credential volume is the Admin's, and the empty exemption set is what says so.
 
 **Why the setting is a URL and not a host and a port.** The official Trino client infers the
 scheme from the port at **exactly 443** and nowhere else, so `trino_port: 8443` — the port
@@ -2803,10 +2781,8 @@ threads.
 The goal is that a runtime failure is diagnosable from the logs without reproducing it.
 
 **Level.** A `LOG_LEVEL` setting, defaulting to `INFO`, and `LOG_JSON` for the format, both
-overridable at runtime without a rebuild. They used to follow an `environment` tier name --
-`DEBUG` in np and test, JSON in prep and prod -- which tied three unrelated behaviours to one
-label and crashlooped any installer whose tiers were named otherwise. `environment` is
-deprecated: for one release it still decides those two defaults, with a warning.
+overridable at runtime without a rebuild. Not derived from a tier name: that tied unrelated
+behaviours to one label and crashlooped any installer whose tiers were named otherwise.
 
 **Unknown settings refuse to start.** An `APCHI_` variable Apchi does not read stops it at
 startup, naming the variable and the setting it is closest to. pydantic-settings passes over

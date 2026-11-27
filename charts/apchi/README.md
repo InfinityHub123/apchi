@@ -60,7 +60,6 @@ does not create.
 | `audit.retentionDays` | `""` | How long §20's audit history is kept. **Empty means forever, deliberately** — a trail that deletes itself is worse than one that grows. Setting it creates a TTL index, so history past it is discarded |
 | `candidateMaxBytes` | `15728640` | The most the Configuration Candidate may occupy. It is **one** MongoDB document, which MongoDB caps at 16MB, so this is a ceiling on all six Sections together rather than a per-Section quota. Below 16MB to leave room for BSON overhead and the Snapshot an Apply makes of the same content |
 | `logging.level`, `logging.json` | `null` | INFO and console lines when null. An explicit level can be raised during an incident without a rebuild |
-| `environment` | `null` | **Deprecated**, removed in the next release. While set, `np`/`test` still mean DEBUG and `prep`/`prod` INFO and JSON, and Apchi logs a warning. Any value is accepted |
 | `logging.debug` | `false` | Debugging mode: DEBUG unless `logging.level` says otherwise, each line naming the logger and line it came from, and every call to Kubernetes, Trino and MongoDB logged by name and timing. Payloads never, so it is safe to turn on in production. Dependencies' own debug output stays off, because PyMongo's prints Snapshots and the Kubernetes client's prints Secrets |
 | `trino.user` | `apchi` | The identity Apchi issues DDL as, and the only one granted `owner` on catalogs |
 | `trino.name` | `trino` | Names the Service and the `-coordinator` and `-worker` Deployments, and configures Apchi with the same |

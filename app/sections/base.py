@@ -20,7 +20,7 @@ from pydantic import BaseModel, ValidationError
 from app.adapters.kubernetes import KubernetesAdapter
 from app.adapters.trino import Trino
 from app.config import Settings
-from app.sections import RetiredSectionName, SectionName
+from app.sections import SectionName
 from app.sections.admin import AdminValues
 
 #: One Section's resources as they are stored in the Candidate and in Snapshots, keyed
@@ -33,8 +33,7 @@ class ValidationFailure(BaseModel):
     """One reason a Candidate should not be applied, named well enough for an
     Operator to know what to fix."""
 
-    #: A retired Section's name too, read from a validation stored while it existed.
-    section: SectionName | RetiredSectionName | None = None
+    section: SectionName | None = None
     resource: str | None = None
     reason: str
 

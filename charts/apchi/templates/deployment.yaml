@@ -47,13 +47,6 @@ spec:
             - containerPort: 8000
               name: http
           env:
-            {{- with .Values.environment }}
-            # Deprecated: it now decides only the log defaults below, and Apchi warns while
-            # it is set. Rendered so an existing values file keeps its log level for one
-            # more release.
-            - name: APCHI_ENVIRONMENT
-              value: {{ . | quote }}
-            {{- end }}
             - name: APCHI_AUTH_MODE
               value: {{ .Values.auth.mode | quote }}
             - name: APCHI_AUTH_INITIAL_ADMIN_USERNAME
@@ -202,16 +195,12 @@ spec:
               value: {{ .Values.secrets.catalogSeed | quote }}
             - name: APCHI_ACCESS_CONTROL_SECRET_NAME
               value: {{ .Values.secrets.accessControl | quote }}
-            - name: APCHI_EVENT_LISTENER_SECRET_NAME
-              value: {{ .Values.secrets.eventListener | quote }}
             - name: APCHI_CERTIFICATE_MAPPING_SECRET_NAME
               value: {{ .Values.secrets.certificateMapping | quote }}
             - name: APCHI_CLIENT_CERTIFICATE_SECRET_NAME
               value: {{ .Values.secrets.clientCertificates | quote }}
             - name: APCHI_RESOURCE_GROUPS_SECRET_NAME
               value: {{ .Values.secrets.resourceGroups | quote }}
-            - name: APCHI_EVENT_LISTENER_VOLUME_NAME
-              value: {{ .Values.volumes.eventListener | quote }}
             - name: APCHI_RESOURCE_GROUPS_VOLUME_NAME
               value: {{ .Values.volumes.resourceGroups | quote }}
             - name: APCHI_CATALOG_CONNECTIVITY_BLOCKS_APPLY

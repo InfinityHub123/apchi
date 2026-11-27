@@ -82,13 +82,6 @@ class Truststore(MountedFile):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix=_PREFIX, env_file=".env", extra="ignore")
 
-    #: Deprecated, and read only for the log defaults it used to decide; removed in the next
-    #: release. It tied three unrelated behaviours to one tier name, and refused at startup
-    #: any name outside four -- so an installer with tiers of their own crashlooped on a
-    #: label. Any value is accepted now, and Apchi warns while it is set. See
-    #: `effective_log_level`.
-    environment: str | None = None
-
     #: Defaults to `none`, which resolves every caller to an Admin: that is the behaviour
     #: Apchi has today, and a default of anything else would lock existing installs out of
     #: their own Admin surface on upgrade.
@@ -262,12 +255,6 @@ class Settings(BaseSettings):
     #: Holds the generated system access-control file. Mounted as a whole volume so the
     #: kubelet keeps it current; never with subPath (§16).
     access_control_secret_name: str = "trino-access-control"
-    #: Where the Event Listeners Section kept its file, before the listener became the Admin's
-    #: (#269). Apchi no longer writes it. Read so that the volume Apchi mounted from it can be
-    #: taken off the coordinator, and so that the ninth precondition does not refuse that
-    #: mount as foreign before it has been.
-    event_listener_secret_name: str = "trino-event-listener"
-    event_listener_volume_name: str = "apchi-event-listener"
     #: Holds the generated user-mapping file. Always present once Apchi has applied: the
     #: authenticator reading it refuses to start when it is missing, so "no pattern" is a
     #: file that changes nothing rather than no file. The Admin mounts it as a directory, so
@@ -352,8 +339,8 @@ class Settings(BaseSettings):
     #: stop Maintenance Mode engaging.
     alert_webhook_url: str | None = None
 
-    # None means "derive from environment"; an explicit value always wins, so the
-    # level can be raised during a production incident without a rebuild.
+    # None means INFO and console lines; an explicit value always wins, so the level can be
+    # raised during a production incident without a rebuild.
     log_level: str | None = None
     log_json: bool | None = None
     #: Debugging mode: DEBUG unless `log_level` says otherwise, and every line names the
@@ -413,15 +400,13 @@ class Settings(BaseSettings):
             return self.log_level.upper()
         if self.debug:
             return "DEBUG"
-        # What `environment` used to decide, honoured until the setting is removed so that
-        # an upgrade does not quietly change a deployment's log level.
-        return "DEBUG" if self.environment in ("np", "test") else "INFO"
+        return "INFO"
 
     @property
     def effective_log_json(self) -> bool:
         if self.log_json is not None:
             return self.log_json
-        return self.environment in ("prep", "prod")
+        return False
 
 
 def refuse_unrecognised(environ: Mapping[str, str]) -> None:

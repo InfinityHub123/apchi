@@ -453,33 +453,6 @@ it costs a stuck Deployment. Takes (dict "root" . "role" "coordinator|worker").
 {{- end -}}
 
 {{/*
-Values the chart no longer reads, refused by name so an upgrade says where each one went rather
-than rendering as though it were absent -- which tells an operator nothing, and leaves them
-believing it still does something. hasKey rather than truthiness: `bootstrap.create: false` and
-an empty `highWaterConfigMap` are set values too.
-*/}}
-{{- define "trino.refuseMovedValues" -}}
-{{- if (.Values.bootstrap).catalogs -}}
-{{- fail "bootstrap.catalogs is gone: the chart no longer creates the catalog seed, because Argo CD recreated it on every sync. Create catalogs through Apchi (POST /api/v1/catalogs, or an import) and apply them" -}}
-{{- end -}}
-{{- if hasKey (.Values.bootstrap | default dict) "create" -}}
-{{- fail "bootstrap.create is gone: the chart creates none of the Secrets Apchi writes into, because Argo CD recreated them on every sync, and Apchi writes them on its first start. Delete the value" -}}
-{{- end -}}
-{{- if hasKey .Values "highWaterConfigMap" -}}
-{{- fail "highWaterConfigMap is gone, with the high-water mark (ADR-0009). Delete the value, and the ConfigMap an earlier release created: kubectl delete configmap <release>-high-water" -}}
-{{- end -}}
-{{- if hasKey .Values.trino "jvm" -}}
-{{- fail "trino.jvm is gone: the heap and JVM flags are per role now, under trino.coordinator.jvm and trino.worker.jvm" -}}
-{{- end -}}
-{{- if .Values.trino.additionalWorkerProperties -}}
-{{- fail "trino.additionalWorkerProperties is gone: Apchi renders the workers' config.properties. Set those properties through PUT /api/v1/admin/server-configuration, under worker (memory sizing is trino.worker.memory)" -}}
-{{- end -}}
-{{- if .Values.trino.additionalCoordinatorProperties -}}
-{{- fail "trino.additionalCoordinatorProperties is gone: Apchi renders the coordinator's config.properties. Set those properties through PUT /api/v1/admin/server-configuration (memory sizing is trino.coordinator.memory)" -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
 A role's JVM and sizing, as the pod's environment. The heap and every tuning flag travel in
 JDK_JAVA_OPTIONS, which the java launcher reads itself; jvm.config carries none, because it is
 read after this variable and its last -Xmx would win (measured). Query memory travels in the

@@ -181,8 +181,7 @@ await self._wait_for_rules_reload()
 
 ## Logging
 
-A `LOG_LEVEL` setting, defaulting to `INFO`, and `LOG_JSON`; `environment` is deprecated and
-decides those two defaults only until it is removed. An `APCHI_` variable that is not a
+A `LOG_LEVEL` setting, defaulting to `INFO`, and `LOG_JSON`. An `APCHI_` variable that is not a
 setting stops Apchi starting -- add a field before you add a variable. A
 `contextvar` carries the id of the Apply in progress into every record, so one id yields the
 whole story of a failure. Log resource names and diff summaries (`catalogs: +finance_pg`); a

@@ -113,11 +113,11 @@ FORBIDDEN_BITS = 0o037
 #: Asserted, so that adding another and forgetting to restrict it fails here rather than
 #: mounting a key 0644 unnoticed.
 #:
-#: Three volumes are mounted and only two are counted: the CA bundle is a list of public
+#: Two volumes are mounted and only MongoDB's is counted: the CA bundle is a list of public
 #: certificates with no key in it, so it deliberately sets no mode and takes the kubelet's
 #: 0644 (#187). If it ever grew a defaultMode this number would stop matching, which is the
 #: right way round -- a surprise here is cheaper than a surprise in a cluster.
-EXPECTED_TLS_VOLUMES = 2
+EXPECTED_TLS_VOLUMES = 1
 
 
 def tls_mount_problems() -> list[str]:
