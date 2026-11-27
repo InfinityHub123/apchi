@@ -153,7 +153,9 @@ jobs:
           kubectl rollout status deploy/trino-worker --timeout=600s
 
       - name: Tier 2 -- against the real cluster
-        run: uv run pytest ${{ steps.shard.outputs.files }} -q
+        # The slowest tests, by name: the suite is dominated by Trino restarts, and which test
+        # pays for one is what deciding where to merge or move tests needs (#300).
+        run: uv run pytest ${{ steps.shard.outputs.files }} -q --durations=40 --durations-min=5
 
       - name: Diagnostics on failure
         if: failure()
