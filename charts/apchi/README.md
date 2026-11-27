@@ -62,9 +62,6 @@ does not create.
 | `logging.level`, `logging.json` | `null` | INFO and console lines when null. An explicit level can be raised during an incident without a rebuild |
 | `environment` | `null` | **Deprecated**, removed in the next release. While set, `np`/`test` still mean DEBUG and `prep`/`prod` INFO and JSON, and Apchi logs a warning. Any value is accepted |
 | `logging.debug` | `false` | Debugging mode: DEBUG unless `logging.level` says otherwise, each line naming the logger and line it came from, and every call to Kubernetes, Trino and MongoDB logged by name and timing. Payloads never, so it is safe to turn on in production. Dependencies' own debug output stays off, because PyMongo's prints Snapshots and the Kubernetes client's prints Secrets |
-| `trino.url` | `""` | The coordinator, scheme included; empty means `http://<trino.name>:8080`, the Service this chart creates, whose HTTP port Apchi uses with HTTPS or without. A URL and not a host plus a port because the Trino client reads `https` from a port only at exactly 443, so `8443` silently meant plaintext |
-| `trino.tls.existingSecret` | `""` | A Secret holding the PEM files below, mounted read-only at `trino.tls.mountPath`. Required to reach a coordinator that serves HTTPS |
-| `trino.tls.certificateKey`, `trino.tls.keyKey` | `""`, `""` | A certificate for Apchi to present, only for a coordinator outside this chart that authenticates every port. Both or neither |
 | `trino.user` | `apchi` | The identity Apchi issues DDL as, and the only one granted `owner` on catalogs |
 | `trino.name` | `trino` | Names the Service and the `-coordinator` and `-worker` Deployments, and configures Apchi with the same |
 | `trino.image.repository`, `trino.image.tag` | `trinodb/trino`, `483` | Apchi is developed and tested against 483. Validation runs the coordinator's image, whatever it is |
@@ -125,10 +122,9 @@ does not create.
 | `trino.https.enabled`, `.port`, `.existingSecret`, `.certificateKey`, `.keyKey`, `.clientCaKey` | `true`, `8443`, `""`, `tls.crt`, `tls.key`, `ca.crt` | How callers sign in, decided here and nowhere else. On: the coordinator serves HTTPS from a TLS Secret you provide, such as cert-manager writes, and authenticates every client there -- by certificate unless an Admin sets other methods -- while HTTP, kept to the namespace by the NetworkPolicy, takes a user name. Off: plain HTTP alone, for the quickstart and development. `clientCaKey` is the CA client certificates are checked against |
 | `resources`, `nodeSelector`, `tolerations`, `affinity`, `podAnnotations`, `podLabels` | | The usual |
 
-**Rotating anything under `trino.tls`, `mongodb.tls`, `caBundle` or `javaTruststore` needs a
-`kubectl rollout restart`.** Apchi reads all of it once, at startup, which is what keeps the
-coordinator's two client libraries from presenting different certificates mid-rotation; the
-next Apply logs a warning naming a file that changed, and each certificate's expiry is logged
+**Rotating anything under `mongodb.tls`, `caBundle` or `javaTruststore` needs a
+`kubectl rollout restart`.** Apchi reads all of it once, at startup, so that every destination
+trusts the same CA at every moment; the next Apply logs a warning naming a file that changed, and each certificate's expiry is logged
 as it loads. §18 argues it and #193 has the measurements.
 
 `scripts/check_chart_env.py` renders this chart and builds Apchi's own `Settings` out of the

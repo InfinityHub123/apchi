@@ -456,8 +456,8 @@ file does not need to be a complete bundle.
 one root for all four. If you need several — an internal CA and a partner's — concatenate them
 into the one file.
 
-This is separate from `trino.tls` and `mongodb.tls` below, which are the certificates Apchi
-*presents* rather than the ones it trusts.
+This is separate from `mongodb.tls` below, which is the certificate Apchi *presents* rather
+than the ones it trusts.
 
 ## Reaching a MongoDB that requires TLS
 
@@ -474,8 +474,9 @@ helm upgrade apchi charts/apchi -n apchi --reuse-values \
 ```
 
 **`client.pem` holds the certificate and its key in one file.** That is PyMongo's
-`tlsCertificateKeyFile` shape, and it differs from `trino.tls` below, which wants the two
-apart. `cat cert.pem key.pem > client.pem` is the whole of it.
+`tlsCertificateKeyFile` shape, and `cat cert.pem key.pem > client.pem` is the whole of it. An
+issuer that writes them apart, as cert-manager does, can use `mongodb.tls.certificateKey` and
+`mongodb.tls.keyKey` instead, and Apchi joins them.
 
 **Either file turns TLS on.** There is no `tls=true` to remember — PyMongo builds its SSL
 context from these.
@@ -537,47 +538,14 @@ start on a mapping no authenticator reads, so Apchi wires it only then. Validati
 these methods, because the probe serves plain HTTP; the Cluster does, and Auto Rollback
 restores the previous properties if the coordinator does not come up.
 
-## Reaching a coordinator over HTTPS
-
-Apchi reaches Trino over HTTP in both shapes. Point it at HTTPS only for a coordinator this
-chart does not run, one that authenticates every port:
-
-```sh
-kubectl create secret generic apchi-trino-tls -n apchi \
-  --from-file=tls.crt=apchi.pem --from-file=tls.key=apchi-key.pem
-
-helm upgrade apchi charts/apchi -n apchi --reuse-values \
-  --set trino.url=https://trino:8443 \
-  --set trino.tls.existingSecret=apchi-trino-tls \
-  --set trino.tls.certificateKey=tls.crt --set trino.tls.keyKey=tls.key
-```
-
-Three things are worth knowing about how Apchi connects:
-
-**It is a URL, not a port.** The Trino client reads `https` from a port only when the port is
-*exactly* 443, so setting a port of 8443 — the one Trino's own documentation uses — produced
-plaintext requests against a TLS listener and reported nothing. `trino.url` carries the
-scheme so that cannot happen.
-
-**A private CA goes in `caBundle`, not here.** One bundle covers every outbound
-connection Apchi makes — see *Trusting a private CA* above. `trino.tls` is only the
-certificate Apchi presents.
-
-**`trino.tls` is the certificate Apchi presents.** Its subject must be one the coordinator's
-CA accepts. It is not a Client Certificate in Apchi's sense — that term means a
-certificate *Trino* presents when it connects outward to a data source, and points the other
-way. Apchi mounts this one `0640` with an `fsGroup` matching the user it runs as, which is the
-only combination that is both restricted and readable — a Secret volume's files are root-owned
-whatever their mode, so `0600` would lock Apchi out of its own key.
-
 ## Rotating any of it
 
 Apchi reads every certificate and CA above **once, when it starts**, so replacing the
 contents of a Secret changes nothing by itself:
 
 ```sh
-kubectl create secret generic apchi-trino-tls -n apchi \
-  --from-file=tls.crt=new.pem --from-file=tls.key=new-key.pem \
+kubectl create secret generic apchi-mongo-tls -n apchi \
+  --from-file=client.pem=new-client.pem \
   --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl rollout restart -n apchi deploy/apchi
@@ -585,8 +553,8 @@ kubectl rollout restart -n apchi deploy/apchi
 
 The restart is the part that matters, and Apchi will tell you if you forget: the next Apply
 logs a warning naming the file that changed. It is a warning and not a refusal on purpose —
-the certificate Apchi is still presenting works until your Trino or MongoDB stops accepting
-it, so there is no reason to block an Apply that would succeed.
+the certificate Apchi is still presenting works until MongoDB stops accepting it, so there is
+no reason to block an Apply that would succeed.
 
 **Why it does not just reload.** One of Apchi's destinations cannot. MongoDB's client loads
 its certificate into an SSL context when the client is built and keeps it, so picking up a
@@ -598,7 +566,7 @@ touches all four, a restart was needed either way.
 Each restart logs what it loaded and when it expires, which is worth reading:
 
 ```
-loaded certificate from /etc/apchi/trino-tls/tls.crt, subject CN=apchi, expires 2027-04-18T09:12:00+00:00
+loaded certificate from /etc/apchi/mongo-tls/client.pem, subject CN=apchi, expires 2027-04-18T09:12:00+00:00
 ```
 
 **You will also be reminded before it expires.** Every Apply checks the certificates Apchi
@@ -606,7 +574,7 @@ loaded and warns about any inside `certificates.expiringWithinDays` (30 by defau
 `ERROR` once one is actually past it:
 
 ```
-the certificate at /etc/apchi/trino-tls/tls.crt expires on 2026-11-20T09:12:00+00:00, in 18 days
+the certificate at /etc/apchi/mongo-tls/client.pem expires on 2026-11-20T09:12:00+00:00, in 18 days
 ```
 
 The limit is worth knowing: that check runs during an Apply, so a cluster you have not
@@ -622,14 +590,10 @@ reachable at all, startup takes about a minute before it starts answering — Py
 its own server-selection timeout first.
 
 **Apchi crashloops instead of reporting `503`.** The TLS settings above are read at startup
-and not per request, so a `trino.tls` or `mongodb.tls` key naming a file the Secret does not
+and not per request, so a `mongodb.tls` or `caBundle` key naming a file the Secret does not
 hold stops the process rather than degrading. `kubectl logs` names the path and which setting
 put it there. This is the one startup failure that is not a 503, because there is nothing left
 to serve it from — a 503 means MongoDB is unreachable, which is a different thing.
-
-**Every Apply is refused with "Trino then refuses plain HTTP from every client".** The
-coordinator authenticates its callers and Apchi is configured for `http://`. See
-*HTTPS and sign-in* above.
 
 **A rotated certificate seems to have been ignored.** It was. See *Rotating any of it*
 above — the Secret's new contents reach the pod within about a minute, and Apchi keeps using

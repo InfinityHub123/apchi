@@ -118,7 +118,7 @@ async def test_a_tunnel_that_cannot_be_revived_is_not_a_verdict(
 async def test_a_worker_pod_template_reads_back_restricted(
     real_kubernetes: RealKubernetes,
 ) -> None:
-    """Workers mount private keys, and §16's eighth precondition reads this template to
+    """Workers mount private keys, and §16's credential precondition reads this template to
     check them (#184). Proved against the live cluster rather than the render, because the
     API server is what fills `defaultMode` in and the precondition reads what it returns."""
     spec = await real_kubernetes.deployment_pod_spec_if_present(WORKER_DEPLOYMENT)

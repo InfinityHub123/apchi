@@ -252,8 +252,8 @@ Not built:
   it configures. Point `mongodb.uri` at something durable; the MongoDB the chart can deploy
   is for trying Apchi out and loses everything when its pod restarts.
 - **Certificate rotation needs a restart**, by decision rather than by omission. Everything
-  Apchi presents or trusts is read once at startup, which is what keeps one coordinator
-  reached through two HTTP libraries from presenting two identities mid-rotation. Apchi logs
+  Apchi presents or trusts is read once at startup, which is what keeps every destination
+  trusting the same CA at every moment. Apchi logs
   a warning naming the file when a mounted certificate changes under it, and logs each
   certificate's expiry as it loads. Fine for the lifetimes these certificates usually have;
   an issuer renewing hourly would want a reload Apchi does not do (§18, §27).

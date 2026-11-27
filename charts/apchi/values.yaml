@@ -180,38 +180,6 @@ logging:
   debug: false
 
 trino:
-  # The coordinator, scheme included. Apchi issues catalog DDL and the Verification smoke
-  # query through it.
-  #
-  # A URL and not a host plus a port: the Trino client reads https from a port only when the
-  # port is exactly 443, so `port: 8443` -- the port Trino's own documentation uses for
-  # HTTPS -- sent plaintext at a TLS listener and reported nothing.
-  #
-  # Empty means the coordinator Service below, over its HTTP port: with HTTPS or without,
-  # that is the port Apchi uses.
-  url: ""
-  # Reaching a coordinator that serves HTTPS.
-  #
-  # Trino requires TLS under every authentication type it supports, and with an
-  # authenticator enabled it refuses plain HTTP from every client. So a Cluster that
-  # authenticates its callers -- which is the Cluster the Certificate Mapping Section exists
-  # for -- is reachable only with these set.
-  tls:
-    # A Secret holding the PEM files below. Apchi mounts it read-only at
-    # /etc/apchi/trino-tls and restricts the key, which is why it is a Secret and not a
-    # ConfigMap even though the CA half is public.
-    existingSecret: ""
-    # The certificate Apchi authenticates with, where the coordinator sets
-    # http-server.authentication.type=CERTIFICATE and so demands one of every client.
-    # Both keys or neither: a certificate without its key cannot be presented.
-    #
-    # Not a Client Certificate, which is the certificate *Trino* presents when connecting
-    # outward to a data source. This one points the other way.
-    certificateKey: ""
-    keyKey: ""
-    # Where the Secret is mounted. The env vars Apchi reads are built from this and the
-    # key names above, so a file only has to be named once.
-    mountPath: /etc/apchi/trino-tls
   # The identity Apchi issues DDL as, and the only identity granted `owner` on
   # catalogs -- which is what restricts catalog DDL to Apchi.
   user: apchi
@@ -486,10 +454,9 @@ javaTruststore:
     existingSecret: ""
     key: ""
 
-# What Apchi's own pod runs as, and how it mounts its own credentials. Shared by both the
-# `trino.tls` and `mongodb.tls` blocks, because a Secret volume's files are root-owned
-# whatever their mode -- so the group has to be one Apchi's process belongs to, and two
-# blocks each naming it separately is how the two come to disagree.
+# What Apchi's own pod runs as, and how it mounts its own credentials: `mongodb.tls`. A
+# Secret volume's files are root-owned whatever their mode, so the group has to be one
+# Apchi's process belongs to.
 pod:
   # uid 10001, gid 10001, from the image's `useradd` -- read out of the built image rather
   # than assumed, because Debian's useradd is free to pick a different gid and a mismatch
@@ -513,8 +480,7 @@ mongodb:
     existingSecret: ""
     # The Secret key holding one PEM with Apchi's certificate **and its key** -- hence the
     # doubled word, not a typo: the `...Key` suffix names a Secret key, as above, and the
-    # file itself is PyMongo's `tlsCertificateKeyFile`. That is its shape, unlike the
-    # `trino.tls` settings, which want the certificate and the key apart.
+    # file itself is PyMongo's `tlsCertificateKeyFile`.
     #
     # A client certificate turns TLS on by itself. Without one, put tls=true in the URI: the
     # CA bundle alone does not, because it is what every pod trusts.

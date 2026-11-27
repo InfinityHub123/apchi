@@ -191,7 +191,7 @@ async def test_the_secret_is_written_on_first_start_and_never_rewritten(
 async def test_a_mount_of_anyone_elses_under_etc_trino_refuses_the_apply(
     e2e_client: AsyncClient,
 ) -> None:
-    """The ninth precondition against a real pod template: a chart that mounts a file of its
+    """The foreign-mount precondition against a real pod template: a chart that mounts a file of its
     own under /etc/trino again is refused before Apchi writes anything."""
     kubectl("create", "configmap", "apchi-test-foreign", "--from-literal=node.properties=x=y\n")
     patch = {

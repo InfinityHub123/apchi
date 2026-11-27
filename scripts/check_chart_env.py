@@ -39,27 +39,16 @@ VALUES = ("--values", str(CHART / "ci" / "https.yaml"))
 #: The quickstart's shape: plain HTTP, and none of those Secrets.
 INSECURE_VALUES = ("--set", "mongodb.deploy=true", "--set", "trino.https.enabled=false")
 
-#: And again with TLS configured to Trino and to MongoDB, because those env vars are
+#: And again with TLS configured to MongoDB and a CA bundle, because those env vars are
 #: rendered only on those branches -- the default render would never see a typo in them
-#: (#188, #186). The file paths are built by the template from a mount path and the Secret's
-#: key names, which is exactly the kind of assembly that produces a name no setting reads.
-#:
-#: Both at once, not one at a time: they share the pod's `fsGroup`, so rendering them
-#: separately would never catch the two volumes disagreeing about the mode.
+#: (#186). The file paths are built by the template from a mount path and the Secret's key
+#: names, which is exactly the kind of assembly that produces a name no setting reads.
 TLS_VALUES = VALUES + (
     # An explicit URI, because mongodb.tls against the chart's own bundled MongoDB is
     # refused -- that one serves plaintext, so the files would only produce a handshake
     # nothing answers. The x509 form, which is the one the docs recommend.
     "--set",
     "mongodb.uri=mongodb://mongo-0.mongo:27017/?authMechanism=MONGODB-X509",
-    "--set",
-    "trino.url=https://trino:8443",
-    "--set",
-    "trino.tls.existingSecret=apchi-trino-tls",
-    "--set",
-    "trino.tls.certificateKey=tls.crt",
-    "--set",
-    "trino.tls.keyKey=tls.key",
     "--set",
     "mongodb.tls.existingSecret=apchi-mongo-tls",
     "--set",

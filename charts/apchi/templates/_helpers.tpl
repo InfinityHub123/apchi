@@ -122,14 +122,6 @@ that restarts finds the coordinator again without knowing a pod IP.
 {{- end -}}
 
 {{/*
-Where Apchi reaches the coordinator: trino.url when set -- a coordinator serving HTTPS, or
-one behind something else -- and the Service otherwise.
-*/}}
-{{- define "trino.url" -}}
-{{- .Values.trino.url | default (include "trino.discoveryUri" .) -}}
-{{- end -}}
-
-{{/*
 Whether the coordinator serves HTTPS, and so authenticates whoever comes to it there.
 Non-empty means yes.
 */}}

@@ -1522,7 +1522,7 @@ Trino ignores a file at its default path.
 `event-listener.config-files` is therefore wiring: Apchi writes it, and an Admin's
 `config.properties` may not. A Raw File at `/etc/trino/event-listener.properties` is refused --
 Trino would read it while no listener is configured and silently drop it once one is -- and so
-is one anywhere under `/etc/trino/apchi`. The ninth precondition (§16) refuses a coordinator
+is one anywhere under `/etc/trino/apchi`. The check that every file under `/etc/trino` is Apchi's (§16) refuses a coordinator
 that does not mount the Secret whole there.
 
 **Restart-required.** `EventListenerManager.loadEventListeners()` is guarded by a
@@ -1971,7 +1971,7 @@ while Apchi still lists it as delivered, and the next Apply swaps it in again.
   itself. Parsing an arbitrary file into wiring and Admin keys is a guess, and a wrong guess
   would change a Cluster nobody asked to change.
 
-### The ninth precondition
+### Every file under /etc/trino is Apchi's
 
 Nothing under `/etc/trino` is mounted from a volume Apchi does not write. Every mount there
 comes from a Secret Apchi names in its settings, or from the volume it adds for Raw Files. A
@@ -1995,7 +1995,7 @@ that would have collided with it, and the refusal names both mounts.
 
 1. **Built.** The coordinator's files: the wiring settings, the sizing variables and their
    render check, the Secret and the first write, the write-time checks, probe validation, the
-   Raw File path refusal and the ninth precondition.
+   Raw File path refusal and the check that every file under `/etc/trino` is Apchi's.
 2. **Built.** The workers' files: the worker rollout and its own timeout, the graceful-shutdown
    hook in the chart, and the drain rule -- in the workers' own access control rather than in
    Permissions, because a worker checks the request against its own rules (*measured*).
@@ -2047,7 +2047,7 @@ Owning them would put Apchi in the business of node selectors, image tags and re
 which belong to the chart, and so does sizing the heap against the pod's memory. Apchi owns
 the *files* under `/etc/trino` and never the Deployments that mount them (ADR-0010, §14).
 
-**The first precondition: no Apchi-managed configuration file is mounted with `subPath`.**
+**No Apchi-managed configuration file is mounted with `subPath`.**
 Kubernetes documents that "a container using a ConfigMap as a `subPath` volume
 mount will not receive ConfigMap updates" — the file is frozen at pod creation, permanently.
 Apchi would write the ConfigMap, see the write succeed, report success, and Trino would never
@@ -2056,38 +2056,33 @@ see the change.
 Checked **before every Apply**, because a later chart change can reintroduce
 it silently.
 
-**The second precondition: the catalog seed initContainer is present.** It copies the durable
+**The catalog seed initContainer is present.** It copies the durable
 catalogs into the writable store before Trino reads it; without it the Cluster comes up with no
 catalogs at all.
 
-**The third precondition: nothing read-only is mounted over `catalog.config-dir`** or any
+**Nothing read-only is mounted over `catalog.config-dir`** or any
 directory above it (§7.1). An `emptyDir` there is correct and is exactly what the seed design
 asks for — it is writable, and it is what the initContainer copies into. What breaks the Cluster
 is a **Secret or ConfigMap** volume over that path, because those are always mounted read-only,
 which is the finding the whole seed design rests on. Apchi therefore checks the volume's *kind*,
 not whether a volume is present at all.
 
-**The fourth precondition: nothing but Apchi is mounted at the paths Apchi's Sections
-declare.** An Admin mounting their own file at one of them would be fighting Apchi over one
+**Nothing but Apchi is mounted at the paths Apchi's Sections declare.** An Admin mounting their own file at one of them would be fighting Apchi over one
 file, and whichever of the two wrote last would win, silently. The list comes from the Section
 registry rather than from a list kept here, so a new file-owning Section is guarded without
 anyone remembering to add it.
 
-**The fifth precondition: `security.refresh-period` is set.** Without it Trino reads the
-access control rules once at startup and never again, so Apchi would write a permission
-change, report success, and the Cluster would never see it (§13.4). This is the first
-precondition that reads the Admin's Trino configuration rather than their pod template: Apchi
-follows whatever is mounted at `access-control.properties` back to its ConfigMap or Secret and
-reads the property out of it. The eighth does the same for `config.properties` on every Apply.
+Nothing here reads the content of Trino's files. Apchi renders all of them (ADR-0010), so
+whether `security.refresh-period` is set or Trino accepts Apchi over HTTP is decided when Apchi
+renders, and what a precondition has to establish is only that the file Trino reads is the one
+Apchi wrote.
 
-**The sixth precondition: no read-only directory volume covers a path Apchi mounts a single
-file at.** A `subPath` mount of one key at a path inside a ConfigMap or Secret directory mount
+**No read-only directory volume covers a path Apchi mounts a single file at.** A `subPath` mount of one key at a path inside a ConfigMap or Secret directory mount
 has no file to bind onto, and runc fails the container with "not a directory" before Trino
 runs at all. Reproduced on a real cluster; a nested *directory* mount in the same position
 works, which is what makes the shape below the answer rather than a workaround.
 
-**The ninth precondition: nothing under `/etc/trino` is mounted from a volume Apchi does not
-write.** Apchi renders every file there (ADR-0010). A file of anyone else's is either replaced
+**Nothing under `/etc/trino` is mounted from a volume Apchi does not write.** Apchi renders every file there (ADR-0010). A file of anyone else's is either replaced
 by Apchi's mount at the same path -- Kubernetes merges container mounts by path, measured on
 kind -- or puts back a second owner Apchi cannot see. Judged by the Secret behind the volume,
 not the volume's name, which is the deployment's to choose; a ConfigMap, an emptyDir or any
@@ -2107,10 +2102,10 @@ official `trino/trino` chart uses -- was supported until 0.3 and is no longer (A
 single file can be placed inside such a mount, so it needed a second way of delivering Resource
 Groups and Event Listeners, two settings to select it, a precondition of its own, and a rule
 that Event Listeners could never be emptied. Apchi now ships its Trino in the same chart as
-itself, so nothing needs that shape. The sixth precondition still refuses it, which is what
+itself, so nothing needs that shape. The single-file-mount precondition still refuses it, which is what
 turns an attempt into a named error rather than a coordinator that never starts.
 
-**The seventh precondition: a volume holding a credential is restricted, and still readable.**
+**A volume holding a credential is restricted, and still readable.**
 A Secret volume's files are written `0644` and owned by root unless the pod asks otherwise, so
 the default for a private key is world-readable — and libpq refuses a key file like that
 outright, which is how this was found rather than how it was predicted (§13.2). Two halves,
@@ -2139,9 +2134,9 @@ of the Admin, once, with the volume named. The cost is real and worth stating: a
 install whose pod template has no `fsGroup` has **every** Apply refused after this version,
 because the catalog seed is always mounted. Apchi's own chart sets it.
 
-**It is the only precondition that reads the worker as well.** The other seven are about files
-only a coordinator reads — the seed initContainer, the access-control properties, the pointers —
-and asserting them on a worker would refuse every correct deployment. This one's subject is a
+**It reads the worker as well**, as does the check that every file is Apchi's. The others are
+about what only a coordinator has — the seed initContainer, the catalog store — and asserting
+them on a worker would refuse every correct deployment. This one's subject is a
 private key, and a worker holds those: a connector presenting a certificate to a data source
 runs there ([ADR-0005](./docs/adr/0005-single-certificate-secret.md)), so both roles mount the
 certificate volume and a key leaks on a worker exactly as it does on a coordinator.
@@ -2162,36 +2157,6 @@ Nothing on a worker is exempt as Apchi's own, either. The coordinator's exemptio
 Apchi sets those modes during Apply and Apply patches one Deployment — so on a worker every
 credential volume is the Admin's, and the empty exemption set is what says so.
 
-**The eighth precondition: Trino will accept the connection Apchi is configured to make.**
-Every authentication type Trino supports requires TLS, and with an authenticator enabled
-alongside HTTPS Trino refuses plain HTTP from *every* client unless
-`http-server.authentication.allow-insecure-over-http` is true — which Trino's own documentation
-calls not recommended. So a Cluster that authenticates its callers does not answer an Apchi
-configured for `http://` at all, and the symptom is every query in the Apply timing out with
-nothing to read. That is this section's criterion for a precondition exactly (#188).
-
-Like the fifth and the seventh, this reads the Admin's Trino configuration rather than their
-pod template, and for the same reason: the answer is in `config.properties`, which is Admin
-territory (§15), so it is read and not inferred.
-
-It has three parts, and the third is a deliberate omission:
-
-- **An authenticator, HTTPS, no insecure override, and an `http://` URL** is refused. The rule
-  is conjunctive on purpose: an authenticator *without* HTTPS is a coordinator that refuses to
-  start, which Verification reports and this would only mislabel.
-- **`CERTIFICATE` authentication with no certificate given to Apchi** is refused too. Reaching
-  the coordinator is not the same as being let in; Trino demands a certificate from every client
-  under that authenticator, Apchi included.
-- **An `https://` URL against a coordinator that does not set `http-server.https.enabled` is
-  logged, not refused.** TLS terminated in front of Trino — a sidecar, a service mesh — is a
-  real deployment in which that property is absent and Apchi's URL is still correct. Refusing
-  there would reject a working Cluster, and this section refuses only what it knows is broken.
-
-It is also the one precondition that can hold having missed something, and says so: when
-`config.properties` cannot be read it reports nothing rather than guessing. A deployment that
-keeps its configuration somewhere Apchi's Role cannot reach gets no opinion.
-
-
 **Why the setting is a URL and not a host and a port.** The official Trino client infers the
 scheme from the port at **exactly 443** and nowhere else, so `trino_port: 8443` — the port
 Trino's own documentation uses for HTTPS — produced plaintext requests against a TLS listener
@@ -2200,12 +2165,10 @@ host, which removes the inference from the path entirely.
 
 **Two HTTP libraries reach one coordinator.** Queries go through the official client's
 `requests` session and `/v1/info` through `httpx`. `requests` ignores `SSL_CERT_FILE` and reads
-`REQUESTS_CA_BUNDLE`; `httpx` does the opposite, and in its current version deprecates both a
-path-valued `verify` and `cert` in favour of an `ssl.SSLContext`. So the certificate Apchi
-presents is handed to the two clients in two shapes, explicitly, rather than left to the
-environment where one coordinator would need both variables set. What Apchi *trusts* is not
-configured here at all: §18's one `ca_file` covers every destination, for the reason given
-there.
+`REQUESTS_CA_BUNDLE`; `httpx` does the opposite. Neither is left to the environment: §18's one
+`ca_file` covers every destination, for the reason given there. Apchi presents no certificate
+to Trino: it reaches the coordinator's HTTP port inside the namespace, which takes a user name
+(#295).
 
 
 ## Rollout mechanics
@@ -2312,22 +2275,17 @@ does deliver the new bytes, watch-driven and within `syncFrequency`; nothing her
 them.
 
 That is a decision, and the thing it buys is that all four destinations behave the same way.
-Two measurements decided it. The official Trino client hands `requests` the certificate and
-key as *paths*, and `requests` reopens them at every TLS handshake, where httpx is given a
-context with the bytes already in it — so one coordinator reached through two libraries
-presented two different identities as soon as one file rotated, confirmed against a server
-reporting the CN it was shown. And PyMongo builds its `SSLContext` while validating its
-options and keeps that object, so MongoDB cannot be handed a new one without rebuilding the
-client.
+PyMongo builds its `SSLContext` while validating its options and keeps that object, so MongoDB
+cannot be handed a new one without rebuilding the client. Reloading the others alone would
+leave a rotated CA trusted by the coordinator, the provider and the webhook but not by MongoDB
+— a split in the one thing this section's single bundle exists to keep whole. And since an
+organisation rotating its root touches all four destinations, a restart is needed either way.
 
-Together those rule out the middle option. Reloading Trino alone would leave a rotated CA
-trusted by the coordinator, the provider and the webhook but not by MongoDB — a split in the
-one thing this section's single bundle exists to keep whole. Reloading everything would mean
-replacing the Mongo client while requests are in flight. And since an organisation rotating
-its root touches all four destinations, a restart is needed either way; reloading one of them
-early only makes the window asymmetric. So `app/trust.py` copies the PEMs Apchi presents to
-files it owns and hands those to both libraries, which has the side benefit of being the only
-place the private key can be `0600` — a Secret mount cannot go below `0640` (§13.2).
+Apchi presents a certificate to MongoDB only. It once presented one to Trino too, through two
+libraries that read it at different moments — `requests` reopens a path at every handshake,
+httpx holds the bytes — and the two showed different identities after a rotation (#193).
+Apchi now reaches Trino's HTTP port inside the namespace with a user name (#295), so that
+problem has no subject left.
 
 A rotation is **reported, never refused**. `app.trust` remembers the digest of what it read,
 compares it against the mount, and the Apply path logs a warning naming the file. It is not a
@@ -2989,8 +2947,8 @@ Additional constraints:
 - **Every authentication type requires TLS.** With an authenticator configured alongside
   HTTPS, `http-server.authentication.allow-insecure-over-http` defaults to false and plain
   HTTP is refused for *every* client; Trino's documentation calls overriding it not
-  recommended. So there is no degraded plaintext connection for Apchi to fall back to, which
-  is what makes §16's eighth precondition a refusal rather than a warning.
+  recommended. Apchi renders the override with HTTPS on, because the HTTP port is the one it
+  uses, and keeps that port to the namespace with a NetworkPolicy (#295).
 - **The official Trino client reads `https` from the port only at exactly 443.** 8443 —
   Trino's own documented HTTPS port — produced plaintext requests against a TLS listener and
   reported nothing at all. The client takes a URL in place of a host, which is why the
@@ -3039,13 +2997,9 @@ Additional constraints:
   when the pod restarts, and Apchi says so rather than being silent about it
   ([#193](https://github.com/InfinityHub123/apchi/issues/193)).
 
-  What was actually wrong was not the staleness but an asymmetry. The official Trino client
-  hands `requests` the certificate and key as *paths* and `requests` reopens them at every
-  handshake, while httpx is given a context holding the bytes — so one coordinator reached
-  through two libraries presented two identities the moment one file was rotated, measured
-  against a server reporting the CN it was shown. `app.trust` copies both PEMs to files it
-  owns and hands those to both, which is also the one place the private key can be 0600
-  rather than the 0640 a Secret mount floors at (§13.2).
+  What was actually wrong was not the staleness but an asymmetry: one coordinator reached
+  through two libraries presented two identities after a rotation. Apchi no longer presents a
+  certificate to Trino (#295), which removed that case.
 
   Reloading instead was rejected for a reason worth keeping: PyMongo holds its certificate as
   bytes in a context built with the client, so MongoDB could not follow a reload without the

@@ -207,15 +207,10 @@ class Settings(BaseSettings):
     #: because the Trino client infers the scheme from the port at **exactly 443** and
     #: nowhere else -- so `8443`, the port Trino's own documentation uses for HTTPS, produced
     #: plaintext requests against a TLS listener and said nothing (#188).
-    trino_url: str = "http://trino:8080"
-    #: The certificate Apchi authenticates to Trino with, where the coordinator sets
-    #: `http-server.authentication.type=CERTIFICATE`. Trino then requires one of every
-    #: client, Apchi included.
     #:
-    #: Not a Client Certificate, which is the glossary's term for a certificate *Trino*
-    #: presents when it connects outward (ADR-0005). This one points the other way.
-    trino_auth_certificate_file: str | None = None
-    trino_auth_key_file: str | None = None
+    #: The coordinator's HTTP port, inside the namespace, with or without HTTPS: Apchi sends
+    #: only a user name, which that port takes (#295).
+    trino_url: str = "http://trino:8080"
     #: The identity Apchi issues DDL as. It is the only identity granted `owner`
     #: on catalogs, which is what restricts catalog DDL to Apchi.
     trino_user: str = "apchi"
