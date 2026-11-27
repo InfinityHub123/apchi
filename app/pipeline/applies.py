@@ -168,9 +168,22 @@ class ApplyRecord(BaseModel):
         return self.stage not in TERMINAL
 
 
+class ApplyInFlight(Exception):
+    """Another Apply holds the Candidate frozen."""
+
+    def __init__(self, running: ApplyRecord) -> None:
+        self.running = running
+        super().__init__(running.id)
+
+
 class ApplyStore:
     def __init__(self, database: AsyncDatabase[dict[str, Any]]) -> None:
         self._collection = database["applies"]
+        # Finding nothing in flight and recording the new Apply are one step: with an await
+        # between them, requests that arrived together each found nothing, and as many
+        # pipelines as requests ran against one Cluster. A lock in the process, because one
+        # Apchi is the supported shape -- a second replica is a second pipeline anyway.
+        self._starting = asyncio.Lock()
 
     @staticmethod
     def _as_record(document: dict[str, Any]) -> ApplyRecord:
@@ -178,6 +191,13 @@ class ApplyStore:
         return ApplyRecord.model_validate(document)
 
     async def create(self, base_snapshot: int | None, kind: ApplyKind = "apply") -> ApplyRecord:
+        """Record a new Apply, or raise `ApplyInFlight` naming the one already running."""
+        async with self._starting:
+            if (running := await self.in_flight()) is not None:
+                raise ApplyInFlight(running)
+            return await self._insert(base_snapshot, kind)
+
+    async def _insert(self, base_snapshot: int | None, kind: ApplyKind) -> ApplyRecord:
         now = datetime.now(UTC)
         record = ApplyRecord(
             id=f"apl_{uuid.uuid4().hex[:16]}",
