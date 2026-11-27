@@ -497,7 +497,7 @@ The chart's default. The coordinator listens twice:
   sign-in only. `edge` is refused: it would reach the HTTP port.
 - **HTTP, inside the namespace only.** It takes the user name a client sends. Apchi and the
   workers use it, so Apchi needs no certificate. The chart's NetworkPolicy, on by default,
-  keeps everyone but Trino's own pods and Apchi off it. Your network plugin has to enforce
+  keeps every pod outside the namespace off it. Your network plugin has to enforce
   NetworkPolicy for that to hold; kind's default plugin does not.
 
 The server certificate is yours to provide, because Apchi issues none. Put it in

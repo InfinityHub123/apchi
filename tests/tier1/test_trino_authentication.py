@@ -3,8 +3,8 @@ plain HTTP and the name a client sends when the chart says `insecure` (#295).
 
 Under `certificate`, HTTPS authenticates the clients a Route or Ingress brings, and the HTTP
 port takes a user name -- the port Apchi and the workers use, which the NetworkPolicy keeps to
-them. Tier 1 runs the `insecure` shape against a plain-HTTP Trino, so the certificate shape is
-named here; that a real coordinator refuses a client without a certificate on HTTPS, and
+the namespace. Tier 1 runs the `insecure` shape against a plain-HTTP Trino, so the certificate
+shape is named here; that a real coordinator refuses a client without a certificate on HTTPS, and
 answers Apchi on HTTP, is the Argo CD job's, which installs the chart's default.
 """
 

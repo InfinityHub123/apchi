@@ -1787,7 +1787,7 @@ Two departures from the first draft of this design, both found while building it
   (`http-server.authentication.allow-insecure-over-http=true`, wiring). Apchi and the workers
   use it, so Apchi needs no certificate and no method an Admin chooses can lock it out. Two
   things keep the HTTP port in the namespace, and the chart enforces both. The NetworkPolicy,
-  on by default, admits only Trino's own pods and Apchi to it while HTTPS admits anyone. And a
+  on by default, admits only the namespace's pods to it while HTTPS admits anyone. And a
   Route or Ingress for Trino must reach HTTPS, so `edge`, which reaches the pod on HTTP, is
   refused. Under `insecure` none of this is rendered.
 

@@ -110,10 +110,10 @@ the same limits as the one that seeds the catalog store.
 
 ## NetworkPolicy
 
-On by default. Under certificate authentication the coordinator's HTTP port admits only Trino
-itself and Apchi's API pods, and its HTTPS port admits anyone, the router included, since it
-authenticates them. Under `insecure` the HTTP port admits Trino itself, Apchi's API pods, and,
-when `expose.trino` is a Route, OpenShift's router. The router's namespace is
+On by default. Every pod in Trino's namespace reaches both roles -- Apchi, and a scraper such
+as Alloy. From outside it, under certificate authentication, only the coordinator's HTTPS port
+is open, to anyone, the router included, since it authenticates them. Under `insecure` the HTTP
+port also admits OpenShift's router when `expose.trino` is a Route. The router's namespace is
 selected by both labels in use, `policy-group.network.openshift.io/ingress: ""` (OVN-Kubernetes)
 and `network.openshift.io/policy-group: ingress` (OpenShift SDN), so nothing has to be set for
 it. Anything else that queries Trino directly, such as a Trino Gateway in its own namespace,

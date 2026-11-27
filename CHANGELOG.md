@@ -35,9 +35,9 @@ Two breaks the committed contract cannot show you, and which belong here when th
   Route or Ingress for Trino. `trino.authentication.type=insecure` keeps plain HTTP alone, for
   development.
 - `networkPolicy.enabled` defaults to `true`. Under certificate authentication the coordinator's
-  HTTP port admits only Trino's pods, Apchi and `networkPolicy.scrapers`, and
-  `networkPolicy.coordinator.from` no longer reaches it. A metrics scraper such as Alloy goes in
-  `networkPolicy.scrapers`, which admits it to both roles' HTTP port in either mode.
+  HTTP port admits only the pods in Trino's namespace, and `networkPolicy.coordinator.from` no
+  longer reaches it. In either mode, every pod in the namespace reaches both roles, so a scraper
+  there, such as Alloy, needs nothing listed.
 - `internal-communication.shared-secret`, `http-server.https.truststore.path` and
   `http-server.authentication.allow-insecure-over-http` are wiring, refused in the Server
   Configuration.

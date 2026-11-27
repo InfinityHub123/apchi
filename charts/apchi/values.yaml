@@ -404,7 +404,7 @@ trino:
   # `certificate`, the default: Trino serves HTTPS (trino.https) and demands a client
   # certificate there, unless an Admin sets other methods in the coordinator's Server
   # Configuration (`http-server.authentication.type=PASSWORD,CERTIFICATE`). The HTTP port
-  # takes the user name a client sends and is kept to Trino's own pods and Apchi by the
+  # takes the user name a client sends and is kept to Trino's namespace by the
   # NetworkPolicy; Apchi uses it, so it needs no certificate. A Route or Ingress for Trino
   # has to reach HTTPS: passthrough or reencrypt, never edge.
   #
@@ -434,29 +434,26 @@ restrictedPodSecurity: false
 
 # Who may reach Trino's pods. On by default, because under certificate authentication it is
 # what keeps the coordinator's HTTP port -- which trusts the user name a client sends, and is
-# how Apchi reaches Trino -- to Trino's own pods and Apchi. Everyone else uses the HTTPS port,
-# which is open to all because it authenticates them.
+# how Apchi reaches Trino -- to the pods in Trino's namespace. Everyone outside it uses the
+# HTTPS port, which is open to all because it authenticates them.
 #
-# Under `insecure` authentication there is no HTTPS to send anyone to, so the HTTP port admits
-# Trino's own pods, Apchi, the router or ingress controller when expose.trino is set, and the
+# Under `insecure` authentication there is no HTTPS to send anyone to, so the HTTP port also
+# admits the router or ingress controller when expose.trino is set, and the
 # peers listed below. Egress is never restricted -- Trino reaches databases, object stores and
 # DNS the chart cannot enumerate.
 #
 # Your cluster's network plugin must enforce NetworkPolicy, or this renders and protects
 # nothing; kind's default plugin does not. Turning it off leaves the HTTP port to any pod that
-# can route to it, as any user.
+# can route to it, as any user. Every pod in this namespace is admitted to both roles, so a
+# scraper here, such as Alloy, needs nothing listed.
 networkPolicy:
   enabled: true
-  # The metrics scraper, admitted to every Trino pod's HTTP port in either mode. That port
-  # trusts the user name a client sends, so a peer listed here can query as anyone: name the
-  # scraper's pods, not its namespace. Alloy in this namespace:
-  #   - podSelector: {matchLabels: {app.kubernetes.io/name: alloy}}
-  scrapers: []
-  # Under `insecure` authentication: extra NetworkPolicyPeers allowed to the coordinator, e.g.
+  # Under `insecure` authentication: extra NetworkPolicyPeers outside this namespace allowed to
+  # the coordinator, e.g.
   #   - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: trino-gateway}}
   coordinator:
     from: []
-  # And to the workers -- normally nothing: only Trino talks to a worker.
+  # And to the workers' HTTP port, in either mode -- a scraper in another namespace, say.
   worker:
     from: []
   # Where the ingress controller runs, when Trino is exposed by an Ingress under `insecure`

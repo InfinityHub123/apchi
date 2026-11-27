@@ -143,18 +143,15 @@ def test_it_can_be_turned_off() -> None:
     assert _of(_render("--set", "networkPolicy.enabled=false"), "NetworkPolicy") == []
 
 
-def test_http_is_trinos_and_apchis_and_https_is_anyones() -> None:
-    documents = _render()
+NAMESPACE = {"podSelector": {}}
 
-    rules = _rules(_policy(documents, "coordinator"))
+
+def test_http_is_the_namespaces_and_https_is_anyones() -> None:
+    rules = _rules(_policy(_render(), "coordinator"))
 
     assert sorted(rules) == [8080, 8443]
     assert rules[8443] is None, "HTTPS authenticates whoever comes, so it admits anyone"
-    http = rules[8080]
-    assert http is not None and len(http) == 2, http
-    trino, apchi = (peer["podSelector"]["matchLabels"] for peer in http)
-    assert _matches(trino, _pod_labels(documents, "worker", "trino"))
-    assert _matches(apchi, _pod_labels(documents, "api", "apchi"))
+    assert rules[8080] == [NAMESPACE], "every pod in the namespace, and none outside it"
 
 
 @pytest.mark.parametrize("kind", ["route", "ingress"])
@@ -186,29 +183,16 @@ def test_extra_peers_never_reach_http_under_certificate_authentication(tmp_path:
     assert peer not in (rules[8080] or [])
 
 
-ALLOY = {"podSelector": {"matchLabels": {"app.kubernetes.io/name": "alloy"}}}
-
-
 @pytest.mark.parametrize("shape", [(), INSECURE], ids=["certificate", "insecure"])
-def test_the_scraper_reaches_every_trino_pods_http_port(
-    tmp_path: Path, shape: tuple[str, ...]
+def test_a_scraper_in_the_namespace_reaches_every_trino_pods_http_port(
+    shape: tuple[str, ...],
 ) -> None:
-    """/metrics is on the HTTP port of both roles -- a worker has no other -- and the scraper
-    names a user there rather than presenting a certificate."""
-    values = tmp_path / "values.yaml"
-    values.write_text(yaml.safe_dump({"networkPolicy": {"scrapers": [ALLOY]}}))
-
-    documents = _render(*shape, "--values", str(values))
+    """/metrics is on the HTTP port of both roles -- a worker has no other -- and Alloy, in the
+    namespace, names a user there rather than presenting a certificate."""
+    documents = _render(*shape)
 
     for role in ("coordinator", "worker"):
-        assert ALLOY in (_rules(_policy(documents, role))[8080] or []), role
-
-
-def test_without_scrapers_nothing_else_reaches_http() -> None:
-    documents = _render()
-
-    for role in ("coordinator", "worker"):
-        assert ALLOY not in (_rules(_policy(documents, role))[8080] or []), role
+        assert NAMESPACE in (_rules(_policy(documents, role))[8080] or []), role
 
 
 def test_an_edge_route_to_trino_is_refused_under_certificate_authentication() -> None:
@@ -240,32 +224,17 @@ def test_each_policy_selects_its_own_role_and_restricts_ingress_only() -> None:
         assert policy["spec"]["policyTypes"] == ["Ingress"]
 
 
-def test_under_insecure_the_coordinator_admits_trino_and_apchi_and_nothing_else() -> None:
-    documents = _render(*INSECURE, "--set", "networkPolicy.enabled=true")
+def test_under_insecure_the_coordinator_admits_the_namespace_and_nothing_else() -> None:
+    documents = _render(*INSECURE)
 
-    peers = _peers(_policy(documents, "coordinator"))
-
-    selectors = [peer["podSelector"]["matchLabels"] for peer in peers]
-    assert len(peers) == 2, peers
-    trino, apchi = selectors
-    assert _matches(trino, _pod_labels(documents, "worker", "trino"))
-    assert _matches(trino, _pod_labels(documents, "coordinator", "trino"))
-    assert _matches(apchi, _pod_labels(documents, "api", "apchi"))
-    assert not _matches(apchi, _pod_labels(documents, "mongodb", "apchi")), (
-        "the bundled MongoDB shares Apchi's name and instance labels"
-    )
+    assert _peers(_policy(documents, "coordinator")) == [NAMESPACE]
     assert _ports(_policy(documents, "coordinator")) == [8080]
 
 
-def test_a_worker_admits_only_trino() -> None:
-    documents = _render("--set", "networkPolicy.enabled=true")
+def test_a_worker_admits_the_namespace_and_nothing_else() -> None:
+    documents = _render()
 
-    peers = _peers(_policy(documents, "worker"))
-
-    assert len(peers) == 1, peers
-    assert _matches(
-        peers[0]["podSelector"]["matchLabels"], _pod_labels(documents, "coordinator", "trino")
-    )
+    assert _peers(_policy(documents, "worker")) == [NAMESPACE]
     assert _ports(_policy(documents, "worker")) == [8080]
 
 

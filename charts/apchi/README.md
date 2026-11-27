@@ -80,7 +80,7 @@ does not create.
 | `trino.<role>.memory.maxMemoryPerNode`, `.heapHeadroomPerNode` | `600MB`, `600MB` | `query.max-memory-per-node` and `memory.heap-headroom-per-node`, reaching Trino as `${ENV:...}` from the pod. The render fails when their sum exceeds the heap -- Trino refuses that at startup anyway |
 | `trino.fsGroup` | `1000` | The group that owns the credential volumes, which are `0640`. On OpenShift's `restricted-v2` it must be a group the namespace allows -- the first of its `openshift.io/sa.scc.supplemental-groups` annotation -- or the pods are refused. `null` renders none, which Apchi accepts only with `restrictedPodSecurity` set. See [OpenShift and other restricted clusters](../../docs/deploying/openshift.md) |
 | `trino.securityRefreshPeriod` | `30s` | How soon a permission change takes effect. Lower is a faster Apply and more file reads. Required: Apchi refuses to start without it |
-| `trino.authentication.type` | `certificate` | How callers sign in, decided here and nowhere else. `certificate`: HTTPS demands a client certificate (or the methods an Admin sets instead), and HTTP, kept to Trino and Apchi by the NetworkPolicy, takes a user name. `insecure`: plain HTTP alone, for the quickstart and development |
+| `trino.authentication.type` | `certificate` | How callers sign in, decided here and nowhere else. `certificate`: HTTPS demands a client certificate (or the methods an Admin sets instead), and HTTP, kept to the namespace by the NetworkPolicy, takes a user name. `insecure`: plain HTTP alone, for the quickstart and development |
 | `trino.worker.gracefulShutdown.gracePeriodSeconds` | `120` | How long a worker waits for the coordinator to notice it is draining, before and after its tasks finish. Apchi renders it as `shutdown.grace-period` |
 | `trino.worker.terminationGracePeriodSeconds` | `600` | At least twice the grace period plus the longest task a drain should wait for; the render fails below twice it. A worker killed before then ends the tasks it was draining |
 | `trino.worker.podDisruptionBudget.enabled`, `.maxUnavailable` or `.minAvailable` | `true`, `1` | How many workers a node drain or cluster upgrade may take at once. Each drains first, so the default lets a drain go one worker at a time without ending their tasks. One of the two, never both (the render refuses). Workers only: a budget on the single coordinator would protect nothing or block every node drain |
@@ -96,8 +96,8 @@ does not create.
 | `caBundle.existingSecret` or `.configMap`, `.key` | `""`, `""`, `ca-bundle.crt` | A PEM bundle mounted into **every** pod -- Apchi, MongoDB, the Trino coordinator and workers, and the Validation pod -- at `/etc/pki/tls/certs/ca-bundle.crt`, which replaces an image's own system bundle there. Apchi adds it to the public store for every connection it makes. A ConfigMap for OpenShift's injected trusted-CA bundle; named rather than looked up, because Helm's `lookup` finds nothing under `helm template` or Argo CD. It turns on TLS to MongoDB only if `mongodb.uri` or a client certificate already asks for it |
 | `javaTruststore.existingSecret` or `.configMap`, `.key` | `""`, `""`, `cacerts` | A Java truststore mounted into every pod that runs Trino, at `/etc/pki/java/truststore/cacerts`, with the JVM pointed at it. It replaces the JDK's own store, so it must hold the public roots too if a catalog reaches anything they sign. What connectors use for outbound TLS; Trino's own HTTPS server is separate |
 | `javaTruststore.password.existingSecret`, `.key` | `""`, `""` | Only for a store that needs its password to load. Read from the Secret into the JVM by Kubernetes, never written into a ConfigMap |
-| `networkPolicy.enabled` | `true` | Who may reach Trino's pods. Under certificate authentication, the coordinator's HTTP port, which trusts a user name, admits only Trino's own pods and Apchi, and HTTPS admits anyone. Under `insecure`, the HTTP port admits Trino's pods, Apchi, the router or ingress controller when `expose.trino` is set, and `networkPolicy.coordinator.from`. Egress is never restricted. Your network plugin must enforce NetworkPolicy -- kind's default does not |
-| `networkPolicy.coordinator.from`, `networkPolicy.worker.from` | `[]` | Extra `NetworkPolicyPeer`s: a Trino Gateway, BI tools in another namespace. Off by default because turning the policy on cuts off every client not listed here |
+| `networkPolicy.enabled` | `true` | Who may reach Trino's pods. Every pod in the namespace reaches both roles. From outside it, under certificate authentication, only the coordinator's HTTPS port is open, to anyone; the HTTP port, which trusts a user name, admits nothing. Under `insecure`, the HTTP port also admits the router or ingress controller when `expose.trino` is set, and `networkPolicy.coordinator.from`. Egress is never restricted. Your network plugin must enforce NetworkPolicy -- kind's default does not |
+| `networkPolicy.coordinator.from`, `networkPolicy.worker.from` | `[]` | Extra `NetworkPolicyPeer`s outside the namespace: a Trino Gateway or BI tools under `insecure`, a scraper elsewhere for the workers. `coordinator.from` reaches nothing under certificate authentication, where those clients use HTTPS |
 | `networkPolicy.ingressControllerNamespaceSelector` | `{}` | The ingress controller's namespace labels, required when Trino is exposed by an Ingress. A Route needs nothing: OpenShift's router namespace is selected by its own labels, both the OVN-Kubernetes and the OpenShift SDN one |
 | `restrictedPodSecurity` | `false` | Set on a cluster that forbids pinning `fsGroup` and runs each pod as an arbitrary uid -- OpenShift's `restricted-v2` SCC. A mounted file then reaches the process only by being world-readable, so Apchi's pod renders no `fsGroup` and mounts its credentials `0644`; the Validation pod Apchi creates carries no `fsGroup` either; and Apchi accepts `0644` credential mounts on the Trino pods instead of refusing them, while still refusing a writable one. The rest of the security context -- `runAsNonRoot`, seccomp, capabilities, the uid -- the platform adds itself, and the image runs as any uid. See [OpenShift and other restricted clusters](../../docs/deploying/openshift.md). The bundled MongoDB (`mongodb.deploy`) is for trying Apchi out and is not built for a restricted cluster |
 | `pod.fsGroup` | `10001` | The group every mounted credential is owned by, which must be the one Apchi's process runs as. Ignored under `restrictedPodSecurity`. A Secret volume's files are root-owned whatever their mode, so a wrong value here is a key Apchi cannot read |
@@ -209,10 +209,10 @@ worker authenticates no one:
 ```
 
 `regex: worker|coordinator` scrapes both, on the HTTP port -- a worker has no other, and the
-coordinator's HTTPS port would want a client certificate. The NetworkPolicy keeps that port to
-Trino and Apchi, so list the scraper's pods in `networkPolicy.scrapers`, which admits them to
-both roles in either authentication mode. The port trusts the name a client sends, so a listed
-pod can query as anyone: select the scraper's pods, never a whole namespace.
+coordinator's HTTPS port would want a client certificate. A scraper in Trino's namespace, such
+as Alloy, needs nothing more: the NetworkPolicy admits every pod there. One in another
+namespace goes in `networkPolicy.worker.from`, and under `insecure` in
+`networkPolicy.coordinator.from` too.
 `management.user` is refused on the workers, because it replaces the identity of Apchi's drain
 request and Trino refuses it.
 
@@ -235,7 +235,7 @@ change on the Deployment for it (#269).
 `trino.https.port` for clients outside the namespace and demands a client certificate there.
 A Route or Ingress for Trino must reach it (`passthrough` or `reencrypt`; `edge` is refused).
 The HTTP port takes the user name a client sends, and the NetworkPolicy, on by default, keeps
-it to Trino's own pods and Apchi, which uses it and so needs no certificate. The server
+it to the pods in Trino's namespace. Apchi is one of them, so it needs no certificate. The server
 certificate is yours to provide: without `trino.https.existingSecret` the chart refuses to
 render. A TLS Secret holds the certificate and the key apart and Trino's PEM keystore wants
 them in one file, so an initContainer joins them at pod start into a memory-backed volume

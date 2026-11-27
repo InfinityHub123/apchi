@@ -518,7 +518,7 @@ def test_the_coordinator_authenticates_by_certificate(argo: None) -> None:
         assert sorted(nodes) == [[False], [True]], nodes
 
         # Only a user name, over HTTPS: refused. HTTP would take it, which is why the
-        # NetworkPolicy keeps that port to Trino and Apchi -- a port-forward goes around a
+        # NetworkPolicy keeps that port to the namespace -- a port-forward goes around a
         # policy, and kind's network plugin enforces none, so that half is the
         # NetworkPolicy job's and tier 1's.
         refused = httpx.post(

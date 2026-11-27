@@ -5,7 +5,7 @@ kind's default, kindnet, does not -- there a policy is accepted and changes noth
 job runs kind with Calico, and this refuses to run anywhere it would pass vacuously.
 
 The policies are the chart's own render, applied to the Trino deploy/trino-dev runs, and the
-clients are pods labelled as the chart's real pods are. Each is asked to reach the coordinator
+clients are pods inside and outside its namespace. Each is asked to reach the coordinator
 through its Service and a worker by its pod IP, the two ways Trino is reached.
 """
 
@@ -24,6 +24,8 @@ IMAGE = "trinodb/trino:483"
 #: The namespace standing in for a Trino Gateway: allowed to the coordinator by an extra peer,
 #: as an operator would list theirs.
 GATEWAY_NAMESPACE = "apchi-np-gateway"
+#: A namespace nobody listed, standing in for the rest of the cluster.
+OUTSIDE_NAMESPACE = "apchi-np-outside"
 
 
 def kubectl(*args: str, stdin: str | None = None, check: bool = True) -> str:
@@ -89,7 +91,8 @@ def policies() -> Iterator[None]:
         text=True,
         check=True,
     ).stdout
-    kubectl("create", "namespace", GATEWAY_NAMESPACE, check=False)
+    for namespace in (GATEWAY_NAMESPACE, OUTSIDE_NAMESPACE):
+        kubectl("create", "namespace", namespace, check=False)
     kubectl("apply", "-f", "-", stdin=rendered)
     # Calico programs a policy within a second or two; a client started straight after could
     # race it and be let through by a policy not yet in force.
@@ -98,7 +101,8 @@ def policies() -> Iterator[None]:
         yield
     finally:
         kubectl("delete", "-f", "-", "--ignore-not-found", stdin=rendered)
-        kubectl("delete", "namespace", GATEWAY_NAMESPACE, "--ignore-not-found", "--wait=false")
+        for namespace in (GATEWAY_NAMESPACE, OUTSIDE_NAMESPACE):
+            kubectl("delete", "namespace", namespace, "--ignore-not-found", "--wait=false")
 
 
 def _client(labels: dict[str, str], namespace: str = "default") -> str:
@@ -156,39 +160,26 @@ def _worker_url() -> str:
 
 
 COORDINATOR = "http://trino.default.svc:8080/v1/info"
-APCHI = {
-    "app.kubernetes.io/name": "apchi",
-    "app.kubernetes.io/instance": "trino",
-    "app.kubernetes.io/component": "api",
-}
 
 
-def test_a_pod_nobody_listed_reaches_neither_role() -> None:
-    """The point of the policy: with `insecure` authentication, reaching the port is being
-    able to claim any user."""
-    stranger = _client({})
+def test_a_pod_in_another_namespace_reaches_neither_role() -> None:
+    """The point of the policy: reaching the HTTP port is being able to claim any user."""
+    stranger = _client({}, namespace=OUTSIDE_NAMESPACE)
     try:
-        assert not _reaches(stranger, COORDINATOR)
-        assert not _reaches(stranger, _worker_url())
+        assert not _reaches(stranger, COORDINATOR, namespace=OUTSIDE_NAMESPACE)
+        assert not _reaches(stranger, _worker_url(), namespace=OUTSIDE_NAMESPACE)
     finally:
-        kubectl("delete", "pod", stranger, "--wait=false")
+        kubectl("delete", "pod", "-n", OUTSIDE_NAMESPACE, stranger, "--wait=false")
 
 
-def test_apchi_reaches_the_coordinator_and_not_the_workers() -> None:
-    apchi = _client(APCHI)
+def test_any_pod_in_trinos_namespace_reaches_both_roles() -> None:
+    """Apchi, and a scraper such as Alloy reading /metrics, with no label the chart knows."""
+    neighbour = _client({})
     try:
-        assert _reaches(apchi, COORDINATOR)
-        assert not _reaches(apchi, _worker_url()), "nothing but Trino talks to a worker"
+        assert _reaches(neighbour, COORDINATOR)
+        assert _reaches(neighbour, _worker_url())
     finally:
-        kubectl("delete", "pod", apchi, "--wait=false")
-
-
-def test_the_bundled_mongodb_is_not_let_through_for_sharing_apchis_labels() -> None:
-    mongodb = _client({**APCHI, "app.kubernetes.io/component": "mongodb"})
-    try:
-        assert not _reaches(mongodb, COORDINATOR)
-    finally:
-        kubectl("delete", "pod", mongodb, "--wait=false")
+        kubectl("delete", "pod", neighbour, "--wait=false")
 
 
 def test_a_listed_namespace_reaches_the_coordinator_and_not_the_workers() -> None:
