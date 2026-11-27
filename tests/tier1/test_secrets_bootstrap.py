@@ -15,11 +15,13 @@ from app.adapters.trino import Trino
 from app.config import Settings
 from app.main import create_app
 from app.pipeline.applies import TERMINAL
+from app.sections.server_configuration import SHARED_SECRET_KEY
 from tests.conftest import FakeKubernetes, bootstrap_secrets
 
 MEMORY = {"name": "scratch", "connector": "memory", "properties": {}}
 GRANT = {"identity": "analyst", "catalog": "scratch", "privileges": ["SELECT"]}
 OWNED = sorted(bootstrap_secrets())
+SHARED = "trino-internal-shared-secret"
 
 
 async def _started(settings: Settings, fake: FakeKubernetes) -> AsyncIterator[AsyncClient]:
@@ -54,7 +56,7 @@ async def _apply(client: AsyncClient, timeout: float = 180.0) -> dict:
     raise AssertionError("Apply never settled")
 
 
-def test_it_owns_all_eight() -> None:
+def test_it_owns_all_nine() -> None:
     """The five the chart used to create as hooks, Trino's own files for each role, and the raw
     files. The Event Listener's is no longer one: the listener is in the coordinator's Server
     Configuration (#269). A ninth would need its own reason to be the chart's."""
@@ -63,6 +65,7 @@ def test_it_owns_all_eight() -> None:
         "trino-admin-raw-files",
         "trino-catalog-seed",
         "trino-client-certificates",
+        "trino-internal-shared-secret",
         "trino-resource-groups",
         "trino-server-config-coordinator",
         "trino-server-config-worker",
@@ -78,7 +81,26 @@ async def test_a_new_install_gets_every_one(settings: Settings) -> None:
     async for _ in _started(settings, fake):
         await _settled(fake, OWNED)
 
-    assert fake.secrets == bootstrap_secrets()
+    shared = fake.secrets.pop(SHARED)
+    expected = bootstrap_secrets()
+    del expected[SHARED]
+    assert fake.secrets == expected
+    assert list(shared) == [SHARED_SECRET_KEY]
+    assert len(shared[SHARED_SECRET_KEY]) >= 64
+
+
+async def test_every_install_gets_a_shared_secret_of_its_own(settings: Settings) -> None:
+    """Random, not a constant every Cluster shares: whoever knows it can sign requests as a
+    Trino node."""
+    created = []
+    for _ in range(2):
+        fake = FakeKubernetes()
+        fake.secrets.clear()
+        async for _ in _started(settings, fake):
+            await _settled(fake, [SHARED])
+        created.append(fake.secrets[SHARED][SHARED_SECRET_KEY])
+
+    assert created[0] != created[1]
 
 
 @pytest.mark.parametrize("name", OWNED)

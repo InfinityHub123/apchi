@@ -16,7 +16,7 @@ import pytest
 import yaml
 
 CHART = Path(__file__).resolve().parents[2] / "charts" / "apchi"
-BASE = ("--set", "mongodb.deploy=true")
+BASE = ("--values", str(CHART / "ci" / "https.yaml"))
 
 
 def _render(*values: str) -> list[dict[str, Any]]:
@@ -66,7 +66,16 @@ def _policy(documents: list[dict[str, Any]], component: str) -> dict[str, Any]:
 
 
 def _peers(policy: dict[str, Any]) -> list[dict[str, Any]]:
-    return [peer for rule in policy["spec"]["ingress"] for peer in rule["from"]]
+    return [peer for rule in policy["spec"]["ingress"] for peer in rule.get("from", [])]
+
+
+def _rules(policy: dict[str, Any]) -> dict[int, list[dict[str, Any]] | None]:
+    """Who each port admits, by port: None is anyone."""
+    return {
+        port["port"]: rule.get("from")
+        for rule in policy["spec"]["ingress"]
+        for port in rule["ports"]
+    }
 
 
 def _ports(policy: dict[str, Any]) -> list[int]:
@@ -120,9 +129,83 @@ def test_both_at_once_is_refused_by_name() -> None:
 # --- the NetworkPolicy -------------------------------------------------------------------------
 
 
-def test_there_is_no_policy_until_one_is_asked_for() -> None:
-    """Off by default: turning it on cuts off every client the chart cannot know about."""
-    assert _of(_render(), "NetworkPolicy") == []
+#: The quickstart's shape, where the HTTP port is the only one and admits a list of peers.
+PLAIN = ("--set", "trino.https.enabled=false")
+
+
+def test_the_policy_is_on_by_default() -> None:
+    """It is what keeps the HTTP port, which trusts the user name it is sent, to Trino's own pods
+    and Apchi."""
+    assert len(_of(_render(), "NetworkPolicy")) == 2
+
+
+def test_it_can_be_turned_off() -> None:
+    assert _of(_render("--set", "networkPolicy.enabled=false"), "NetworkPolicy") == []
+
+
+NAMESPACE = {"podSelector": {}}
+
+
+def test_http_is_the_namespaces_and_https_is_anyones() -> None:
+    rules = _rules(_policy(_render(), "coordinator"))
+
+    assert sorted(rules) == [8080, 8443]
+    assert rules[8443] is None, "HTTPS authenticates whoever comes, so it admits anyone"
+    assert rules[8080] == [NAMESPACE], "every pod in the namespace, and none outside it"
+
+
+@pytest.mark.parametrize("kind", ["route", "ingress"])
+def test_exposing_trino_opens_nothing_more_beside_https(kind: str) -> None:
+    """The router comes to HTTPS, which is already open: no namespace to name, and nothing
+    added to HTTP."""
+    documents = _render(
+        "--set",
+        f"expose.kind={kind}",
+        "--set",
+        "expose.trino.host=trino.example.com",
+        "--set",
+        "expose.trino.termination=passthrough",
+    )
+
+    rules = _rules(_policy(documents, "coordinator"))
+
+    assert rules[8443] is None
+    assert not any("namespaceSelector" in peer for peer in rules[8080] or [])
+
+
+def test_extra_peers_never_reach_http_beside_https(tmp_path: Path) -> None:
+    values = tmp_path / "values.yaml"
+    peer = {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "trino-gateway"}}}
+    values.write_text(yaml.safe_dump({"networkPolicy": {"coordinator": {"from": [peer]}}}))
+
+    rules = _rules(_policy(_render("--values", str(values)), "coordinator"))
+
+    assert peer not in (rules[8080] or [])
+
+
+@pytest.mark.parametrize("shape", [(), PLAIN], ids=["https", "plain"])
+def test_a_scraper_in_the_namespace_reaches_every_trino_pods_http_port(
+    shape: tuple[str, ...],
+) -> None:
+    """/metrics is on the HTTP port of both roles -- a worker has no other -- and Alloy, in the
+    namespace, names a user there rather than presenting a certificate."""
+    documents = _render(*shape)
+
+    for role in ("coordinator", "worker"):
+        assert NAMESPACE in (_rules(_policy(documents, role))[8080] or []), role
+
+
+def test_an_edge_route_to_trino_is_refused_beside_https() -> None:
+    """edge reaches the pod on HTTP, which would hand outside clients the port that trusts a
+    user name."""
+    stderr = _refused("--set", "expose.trino.host=trino.example.com")
+
+    assert "expose.trino.termination edge" in stderr
+    assert "passthrough" in stderr
+
+
+def test_an_edge_route_to_trino_is_fine_without_it() -> None:
+    _render(*PLAIN, "--set", "expose.kind=route", "--set", "expose.trino.host=trino.example.com")
 
 
 def test_each_policy_selects_its_own_role_and_restricts_ingress_only() -> None:
@@ -141,37 +224,23 @@ def test_each_policy_selects_its_own_role_and_restricts_ingress_only() -> None:
         assert policy["spec"]["policyTypes"] == ["Ingress"]
 
 
-def test_the_coordinator_admits_trino_and_apchi_and_nothing_else_by_default() -> None:
-    documents = _render("--set", "networkPolicy.enabled=true")
+def test_without_https_the_coordinator_admits_the_namespace_and_nothing_else() -> None:
+    documents = _render(*PLAIN)
 
-    peers = _peers(_policy(documents, "coordinator"))
-
-    selectors = [peer["podSelector"]["matchLabels"] for peer in peers]
-    assert len(peers) == 2, peers
-    trino, apchi = selectors
-    assert _matches(trino, _pod_labels(documents, "worker", "trino"))
-    assert _matches(trino, _pod_labels(documents, "coordinator", "trino"))
-    assert _matches(apchi, _pod_labels(documents, "api", "apchi"))
-    assert not _matches(apchi, _pod_labels(documents, "mongodb", "apchi")), (
-        "the bundled MongoDB shares Apchi's name and instance labels"
-    )
+    assert _peers(_policy(documents, "coordinator")) == [NAMESPACE]
     assert _ports(_policy(documents, "coordinator")) == [8080]
 
 
-def test_a_worker_admits_only_trino() -> None:
-    documents = _render("--set", "networkPolicy.enabled=true")
+def test_a_worker_admits_the_namespace_and_nothing_else() -> None:
+    documents = _render()
 
-    peers = _peers(_policy(documents, "worker"))
-
-    assert len(peers) == 1, peers
-    assert _matches(
-        peers[0]["podSelector"]["matchLabels"], _pod_labels(documents, "coordinator", "trino")
-    )
+    assert _peers(_policy(documents, "worker")) == [NAMESPACE]
     assert _ports(_policy(documents, "worker")) == [8080]
 
 
 def test_the_https_port_is_admitted_when_trino_serves_one() -> None:
     documents = _render(
+        *PLAIN,
         "--set",
         "networkPolicy.enabled=true",
         "--set",
@@ -186,6 +255,7 @@ def test_the_https_port_is_admitted_when_trino_serves_one() -> None:
 
 def test_a_route_admits_openshifts_router_under_either_network_plugin() -> None:
     documents = _render(
+        *PLAIN,
         "--set",
         "networkPolicy.enabled=true",
         "--set",
@@ -211,6 +281,7 @@ def test_an_ingress_needs_the_controllers_namespace_named() -> None:
     """Only the operator knows where their ingress controller runs, and guessing wrong would
     cut Trino off from it."""
     stderr = _refused(
+        *PLAIN,
         "--set",
         "networkPolicy.enabled=true",
         "--set",
@@ -224,6 +295,7 @@ def test_an_ingress_needs_the_controllers_namespace_named() -> None:
 
 def test_an_ingress_controllers_namespace_is_admitted_once_named() -> None:
     documents = _render(
+        *PLAIN,
         "--set",
         "networkPolicy.enabled=true",
         "--set",
@@ -245,6 +317,7 @@ def test_an_ingress_controllers_namespace_is_admitted_once_named() -> None:
 
 def test_exposing_only_apchi_admits_no_router_to_trino() -> None:
     documents = _render(
+        *PLAIN,
         "--set",
         "networkPolicy.enabled=true",
         "--set",
@@ -262,7 +335,7 @@ def test_extra_peers_are_admitted_where_they_are_listed(tmp_path: Path, role: st
     peer = {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "trino-gateway"}}}
     values.write_text(yaml.safe_dump({"networkPolicy": {"enabled": True, role: {"from": [peer]}}}))
 
-    documents = _render("--values", str(values))
+    documents = _render(*PLAIN, "--values", str(values))
 
     assert peer in _peers(_policy(documents, role))
     other = "worker" if role == "coordinator" else "coordinator"

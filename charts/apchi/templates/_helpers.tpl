@@ -130,19 +130,17 @@ one behind something else -- and the Service otherwise.
 {{- end -}}
 
 {{/*
-Which authenticator reads the user-mapping file. Both variants feed the same file to the
-same parser; Trino rejects the certificate one unless certificate authentication is
-configured, which is the only reason there are two. §7.6.
+Whether the coordinator serves HTTPS, and so authenticates whoever comes to it there.
+Non-empty means yes.
 */}}
-{{- define "trino.userMappingProperty" -}}
-{{- if eq .Values.trino.authentication.type "certificate" -}}
-http-server.authentication.certificate.user-mapping.file
-{{- else if eq .Values.trino.authentication.type "insecure" -}}
-http-server.authentication.insecure.user-mapping.file
-{{- else -}}
-{{- fail (printf "trino.authentication.type must be 'insecure' or 'certificate', not %q" .Values.trino.authentication.type) -}}
+{{- define "trino.https" -}}
+{{- if .Values.trino.https.enabled -}}true{{- end -}}
 {{- end -}}
-{{- end -}}
+
+{{/*
+Where the coordinator finds the CA that client certificates are checked against.
+*/}}
+{{- define "trino.clientCa" -}}/data/trino-https/client-ca.pem{{- end -}}
 
 {{/*
 What every pod trusts. Both optional: unset renders nothing at all. Each pod that gets them
@@ -322,6 +320,11 @@ router then speaks TLS to the pod.
 {{- $termination := $e.termination | default "edge" -}}
 {{- if not (has $termination (list "edge" "passthrough" "reencrypt")) -}}
 {{- fail (printf "expose.%s.termination must be edge, passthrough or reencrypt, not %q" .component $termination) -}}
+{{- end -}}
+{{- /* edge ends TLS at the router and reaches the pod on its HTTP port, which beside HTTPS
+takes the name a client sends and is kept to the namespace. */ -}}
+{{- if and (eq .component "trino") (eq $termination "edge") .https -}}
+{{- fail "expose.trino.termination edge would bring outside clients to Trino's HTTP port, which beside HTTPS trusts the user name it is sent and is kept to the namespace. Use passthrough, which carries a client's certificate to Trino, or reencrypt, which ends it at the router and so suits password sign-in only." -}}
 {{- end -}}
 {{- if and (ne $termination "edge") (not .https) -}}
 {{- if eq .component "trino" -}}
@@ -520,6 +523,13 @@ Takes (dict "root" . "role" "coordinator|worker").
   value: {{ $role.memory.maxMemoryPerNode | quote }}
 - name: TRINO_MEMORY_HEAP_HEADROOM_PER_NODE
   value: {{ $role.memory.heapHeadroomPerNode | quote }}
+# What both roles sign internal requests with. Apchi creates the
+# Secret on its first start; the pod waits for it until then.
+- name: TRINO_INTERNAL_SHARED_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ $root.Values.secrets.sharedSecret | quote }}
+      key: internal-communication.shared-secret
 {{- end -}}
 
 {{/*

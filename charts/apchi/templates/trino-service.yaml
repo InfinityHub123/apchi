@@ -13,7 +13,7 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
-    {{- if .Values.trino.https.enabled }}
+    {{- if (include "trino.https" .) }}
     - port: {{ .Values.trino.https.port }}
       targetPort: https
       protocol: TCP

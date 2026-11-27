@@ -54,8 +54,9 @@ esac
 say "Namespace $NAMESPACE"
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-# One release: Apchi, its Trino and a MongoDB. The Secrets Trino mounts are install hooks,
-# so they exist before the coordinator starts.
+# One release: Apchi, its Trino and a MongoDB. Plain HTTP and the name a client sends, so
+# there are no certificates to make first; a real install keeps the chart's default,
+# certificate authentication, and provides them.
 say "Apchi and Trino"
 helm upgrade --install "$RELEASE" "$ROOT/charts/apchi" \
   --namespace "$NAMESPACE" \
@@ -63,6 +64,7 @@ helm upgrade --install "$RELEASE" "$ROOT/charts/apchi" \
   --set image.tag="${IMAGE##*:}" \
   --set mongodb.deploy=true \
   --set trino.worker.replicas=1 \
+  --set trino.https.enabled=false \
   --wait --timeout 10m
 
 cat <<EOF
