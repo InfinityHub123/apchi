@@ -16,6 +16,7 @@ stringData:
     catalog.management=dynamic
     catalog.store=file
     http-server.authentication.insecure.user-mapping.file=/etc/trino/user-mapping/user-mapping.json
+    internal-communication.shared-secret=${ENV:TRINO_INTERNAL_SHARED_SECRET}
     query.max-memory=${ENV:TRINO_QUERY_MAX_MEMORY}
     query.max-memory-per-node=${ENV:TRINO_QUERY_MAX_MEMORY_PER_NODE}
     memory.heap-headroom-per-node=${ENV:TRINO_MEMORY_HEAP_HEADROOM_PER_NODE}
@@ -46,6 +47,7 @@ stringData:
     query.max-memory-per-node=${ENV:TRINO_QUERY_MAX_MEMORY_PER_NODE}
     memory.heap-headroom-per-node=${ENV:TRINO_MEMORY_HEAP_HEADROOM_PER_NODE}
     shutdown.grace-period=5s
+    internal-communication.shared-secret=${ENV:TRINO_INTERNAL_SHARED_SECRET}
   node.properties: |
     node.environment=apchidev
     node.data-dir=/data/trino

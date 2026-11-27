@@ -159,6 +159,7 @@ def test_a_workers_files_are_wiring_then_the_admins_keys() -> None:
         "query.max-memory-per-node=${ENV:TRINO_QUERY_MAX_MEMORY_PER_NODE}\n"
         "memory.heap-headroom-per-node=${ENV:TRINO_MEMORY_HEAP_HEADROOM_PER_NODE}\n"
         "shutdown.grace-period=120s\n"
+        "internal-communication.shared-secret=${ENV:TRINO_INTERNAL_SHARED_SECRET}\n"
         "a.first=1\n"
         "task.concurrency=16\n"
     )

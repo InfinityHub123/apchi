@@ -1,21 +1,27 @@
 {{- if .Values.networkPolicy.enabled }}
 {{- /*
-Who may reach Trino. Without this, any pod that can route to the coordinator's port can query
-it -- and with `insecure` authentication it can claim to be any user, admin included, by
-sending X-Trino-User. Egress is left alone: Trino reaches databases, object stores and DNS that
-this chart cannot enumerate, and a policy that guessed would break catalogs silently.
+Who may reach Trino from outside its namespace. Inside it, every pod is trusted: Alloy scraping
+/metrics, Apchi, Trino's own pods, and whatever else the installer runs there. Outside it,
+nothing reaches the HTTP port -- without this, any pod in the cluster could reach it through the
+Service and, by sending X-Trino-User, be any user, admin included. Egress is left alone: Trino
+reaches databases, object stores and DNS that this chart cannot enumerate, and a policy that
+guessed would break catalogs silently.
+
+Beside HTTPS, everyone outside the namespace -- the router, a Trino Gateway,
+BI tools -- comes to the HTTPS port, which authenticates them and so needs no list.
 
 The ports are the container ports, because a NetworkPolicy is evaluated at the pod, after the
 Service has translated its port.
 */ -}}
+{{- $https := include "trino.https" . -}}
 {{- $ports := list (int .Values.trino.httpPort) -}}
-{{- if .Values.trino.https.enabled -}}
+{{- if (include "trino.https" .) -}}
 {{- $ports = append $ports (int .Values.trino.https.port) -}}
 {{- end -}}
 {{- $np := .Values.networkPolicy -}}
 {{- $routed := and .Values.expose.trino.host (eq (include "apchi.exposeKind" .) "route") -}}
 {{- $ingressed := and .Values.expose.trino.host (eq (include "apchi.exposeKind" .) "ingress") -}}
-{{- if and $ingressed (not $np.ingressControllerNamespaceSelector) }}
+{{- if and $ingressed (not $np.ingressControllerNamespaceSelector) (not $https) }}
 {{- fail "networkPolicy.ingressControllerNamespaceSelector is required when Trino is exposed by an Ingress: the policy has to let the controller's pods through, and only you know which namespace they run in (for ingress-nginx, {kubernetes.io/metadata.name: ingress-nginx})" }}
 {{- end }}
 apiVersion: networking.k8s.io/v1
@@ -33,15 +39,15 @@ spec:
   policyTypes: [Ingress]
   ingress:
     - from:
-        # The workers announcing themselves and returning results, and the coordinator itself.
-        - podSelector:
-            matchLabels:
-              {{- include "trino.selectorLabels" . | nindent 14 }}
-        # Apchi: every query it issues, Verification and the catalog DDL among them. Its API
-        # pods only -- the bundled MongoDB shares the name and instance labels.
-        - podSelector:
-            matchLabels:
-              {{- include "apchi.apiSelectorLabels" . | nindent 14 }}
+        # This namespace, whole.
+        - podSelector: {}
+      {{- if $https }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.trino.httpPort }}}
+    # Anyone, because HTTPS authenticates whoever comes: the Route or Ingress, and every client.
+    - ports:
+        - {protocol: TCP, port: {{ .Values.trino.https.port }}}
+      {{- else }}
         {{- if $routed }}
         # OpenShift's router, for the Route. Both labels, because the network plugins differ:
         # OVN-Kubernetes selects the router's namespace by the first, OpenShift SDN by the second.
@@ -65,6 +71,7 @@ spec:
         {{- range $ports }}
         - {protocol: TCP, port: {{ . }}}
         {{- end }}
+      {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -80,12 +87,8 @@ spec:
       app.kubernetes.io/component: worker
   policyTypes: [Ingress]
   ingress:
-    # Only Trino talks to a worker: the coordinator assigning tasks, and workers exchanging data.
-    # Nobody else has a reason to, and a worker's own port answers the drain request.
     - from:
-        - podSelector:
-            matchLabels:
-              {{- include "trino.selectorLabels" . | nindent 14 }}
+        - podSelector: {}
         {{- with $np.worker.from }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

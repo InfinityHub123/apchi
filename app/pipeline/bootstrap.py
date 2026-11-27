@@ -1,13 +1,14 @@
 """Writing the Secrets Apchi owns when they do not exist -- at startup, and never otherwise.
 
 Apchi writes into nine Secrets: the catalog seed, one per Section that renders a file, the
-server configuration of each role, and the raw files. None of them is the chart's to create
-(ADR-0010). The chart used to create the Sections' and the seed as Helm `pre-install` hooks,
-which Helm runs once -- but Argo CD does not run Helm. It turns those hooks into sync hooks and
-runs them on every sync, deleting and recreating each Secret with the chart's starting contents:
-measured on kind, one sync for a pod annotation emptied the catalog seed, reset the
-access-control rules to fail-open, and left the coordinator crash-looping on emptied Secrets its
-mounts still read from.
+server configuration of each role, and the raw files. It also creates a tenth, the shared secret
+Trino's nodes sign internal requests with, which nothing renders and no Apply rewrites. None of
+them is the chart's to create (ADR-0010). The chart used to create the Sections' and the seed as
+Helm `pre-install` hooks, which Helm runs once -- but Argo CD does not run Helm. It turns those
+hooks into sync hooks and runs them on every sync, deleting and recreating each Secret with the
+chart's starting contents: measured on kind, one sync for a pod annotation emptied the catalog
+seed, reset the access-control rules to fail-open, and left the coordinator crash-looping on
+emptied Secrets its mounts still read from.
 
 So Apchi creates them itself. What goes into one is what the Cluster runs: the latest Snapshot,
 rendered with the Admin values in force -- which on a new install is the empty configuration,
@@ -21,6 +22,7 @@ which Kubernetes retries by itself (measured).
 """
 
 import logging
+import secrets
 from typing import Any
 
 from app.adapters.kubernetes import KubernetesAdapter
@@ -34,7 +36,7 @@ from app.sections.admin import AdminValues
 from app.sections.catalogs import SECTION as CATALOGS
 from app.sections.catalogs.generator import render_secret
 from app.sections.registry import REGISTERED
-from app.sections.server_configuration import role_secret, secret_name
+from app.sections.server_configuration import SHARED_SECRET_KEY, role_secret, secret_name
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +75,15 @@ async def write_missing(
     sections = await snapshots.sections_of(None if latest is None else latest.number)
     values = await admin.load()
     written: list[str] = []
+    # Not rendered from anything, so not among the desired Secrets an Apply compares and
+    # rewrites: a new one is only ever this random value, and the one that exists is what every
+    # running pod holds. Both roles must agree on it, and replacing it would split them until
+    # each had restarted.
+    if await kubernetes.read_secret_if_present(settings.shared_secret_name) is None:
+        await kubernetes.write_secret(
+            settings.shared_secret_name, {SHARED_SECRET_KEY: secrets.token_urlsafe(48)}
+        )
+        written.append(settings.shared_secret_name)
     for name, data in desired_secrets(settings, sections, values).items():
         if await kubernetes.read_secret_if_present(name) is not None:
             continue

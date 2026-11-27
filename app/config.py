@@ -6,7 +6,7 @@ import re
 from collections.abc import Mapping
 from enum import StrEnum
 from functools import lru_cache
-from typing import Literal, Self
+from typing import Self
 
 from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -238,15 +238,19 @@ class Settings(BaseSettings):
     trino_http_port: int = 8080
     #: Where workers announce themselves: the coordinator's Service, never a pod.
     trino_discovery_uri: str = "http://trino:8080"
-    #: The HTTPS listener, when the coordinator serves one. Unset means plain HTTP only.
+    #: The HTTPS listener, when the coordinator serves one, and so how callers sign in, which
+    #: the chart decides and no Admin input can change. Set: HTTPS authenticates -- by
+    #: certificate, or whatever methods an Admin sets instead -- the clients the Route or
+    #: Ingress brings, while the HTTP port, which the NetworkPolicy keeps to the namespace,
+    #: takes the name a client sends. Apchi uses that port, so it needs no certificate. Unset:
+    #: plain HTTP alone, for the quickstart and development.
     trino_https_port: int | None = None
     trino_https_keystore_path: str = "/data/trino-https/keystore.pem"
+    #: The CA that client certificates are checked against, for the CERTIFICATE method.
+    trino_https_truststore_path: str | None = None
     #: Behind a proxy that terminates TLS, Trino has to believe its X-Forwarded headers, or
     #: every redirect it issues points at plain http.
     trino_process_forwarded: bool = False
-    #: Decides which user-mapping property the coordinator reads, and whether it demands a
-    #: certificate of every client -- Apchi included, which the eighth precondition checks.
-    trino_authentication_type: Literal["insecure", "certificate"] = "insecure"
     #: `node.environment`. Every node must agree on it, so one value serves both roles.
     trino_environment: str = "production"
     trino_data_dir: str = "/data/trino"
@@ -274,6 +278,10 @@ class Settings(BaseSettings):
     #: file that changes nothing rather than no file. The Admin mounts it as a directory, so
     #: there is no volume name here -- Apchi never adds or removes the mount (#93).
     certificate_mapping_secret_name: str = "trino-user-mapping"
+    #: Holds `internal-communication.shared-secret`, which both roles read from their
+    #: environment. Created at startup when it is missing and never touched once it exists:
+    #: replacing it would split the Cluster until every pod restarted.
+    shared_secret_name: str = "trino-internal-shared-secret"
 
     #: Holds every Client Certificate, two files each. Mounted once at a fixed directory on
     #: the coordinator and on the workers, so adding one adds a file to a mount that already

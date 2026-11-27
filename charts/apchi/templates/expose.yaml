@@ -13,4 +13,4 @@
       "name" (include "trino.fullname" .)
       "service" (include "trino.fullname" .)
       "labels" (include "trino.labels" .)
-      "https" .Values.trino.https.enabled) }}
+      "https" (not (empty (include "trino.https" .)))) }}

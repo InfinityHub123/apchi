@@ -67,13 +67,19 @@ one for anything else.
 ```sh
 helm install apchi charts/apchi -n apchi \
   --set image.repository=apchi --set image.tag=dev \
-  --set mongodb.deploy=true --set trino.worker.replicas=1 --wait
+  --set mongodb.deploy=true --set trino.worker.replicas=1 \
+  --set trino.https.enabled=false --wait
 ```
 
 That one release is Apchi, its MongoDB and the Trino cluster it configures. The two `image`
 settings are because you built the image locally; the chart otherwise defaults to the
 published one, which your cluster cannot pull a locally built tag from. One worker instead of
 two is for a laptop.
+
+`trino.https.enabled=false` is plain HTTP, and Trino takes the user name a client sends as
+who it is. That is what lets this walkthrough start with no certificates. The chart's default
+is HTTPS, and without its server certificate it refuses to render; see *HTTPS and sign-in*
+below before installing anything other people can reach.
 
 Nothing here sets `auth.mode`, so this walkthrough runs with authentication **off** — every
 caller is treated as an Admin, which is what makes the `curl` commands below work with no
@@ -480,17 +486,61 @@ no secret: MongoDB derives the username from the certificate's subject. Create t
 `$external` database named by that subject, in RFC2253 form — `CN=apchi` for a certificate
 issued to that common name — and grant it `readWrite` and `dbAdmin` on the Apchi database.
 
+## HTTPS and sign-in
+
+The chart's default, `trino.https.enabled`. The coordinator listens twice:
+
+- **HTTPS, for everyone outside the namespace.** Trino authenticates every client there --
+  by client certificate unless an Admin chooses other methods -- and a client that sends
+  only a user name is refused. A Route or Ingress for Trino has to
+  reach this port, so `expose.trino.termination` is `passthrough`, which carries the client's
+  certificate to Trino, or `reencrypt`, which ends it at the router and so suits password
+  sign-in only. `edge` is refused: it would reach the HTTP port.
+- **HTTP, inside the namespace only.** It takes the user name a client sends. Apchi and the
+  workers use it, so Apchi needs no certificate. The chart's NetworkPolicy, on by default,
+  keeps every pod outside the namespace off it. Your network plugin has to enforce
+  NetworkPolicy for that to hold; kind's default plugin does not.
+
+The server certificate is yours to provide, because Apchi issues none. Put it in
+`trino.https.existingSecret` as `tls.crt`, `tls.key` and `ca.crt`, the CA client
+certificates have to be issued by. That is the shape cert-manager writes.
+
+```sh
+helm upgrade --install apchi charts/apchi -n apchi \
+  --set mongodb.uri=mongodb://mongo:27017 \
+  --set trino.https.existingSecret=trino-server-tls
+```
+
+A client certificate's subject is the identity Trino sees, `CN=analyst` for example. Map it to
+a user name with the Certificate Mapping (`CN=(.*)` to `$1`).
+
+The workers' requests to the coordinator are authenticated with a shared secret. Apchi creates
+it, `trino-internal-shared-secret`, the first time it starts without one, and never touches it
+after.
+
+**The sign-in method is the Admin's.** CERTIFICATE is the default because it needs nothing
+beyond the server certificate's Secret. The coordinator's Server Configuration can replace it
+with any of Trino's methods, or a list of them: `http-server.authentication.type=PASSWORD`,
+`OAUTH2`, `PASSWORD,CERTIFICATE`. An empty list is refused, because HTTPS would then take any
+name it is sent. What a method needs beyond that is the Admin's too. For `PASSWORD`, the two
+files Trino's file authenticator reads, as Raw Files:
+
+```sh
+curl -X PUT $APCHI/api/v1/admin/files/etc/trino/password-authenticator.properties \
+  -d '{"content": "password-authenticator.name=file\nfile.password-file=/etc/trino/password.db\n"}'
+curl -X PUT $APCHI/api/v1/admin/files/etc/trino/password.db \
+  -d "{\"content\": \"$(htpasswd -nbBC 10 analyst secret)\\n\"}"
+```
+
+The Certificate Mapping applies only while CERTIFICATE is among the methods: Trino refuses to
+start on a mapping no authenticator reads, so Apchi wires it only then. Validation does not try
+these methods, because the probe serves plain HTTP; the Cluster does, and Auto Rollback
+restores the previous properties if the coordinator does not come up.
+
 ## Reaching a coordinator over HTTPS
 
-Apchi talks to Trino over plain HTTP by default, which is right for a coordinator on the pod
-network with no authenticator. It is not an option on a cluster that authenticates its
-callers: **every authentication type Trino supports requires TLS**, and with an authenticator
-enabled Trino refuses plain HTTP from every client unless
-`http-server.authentication.allow-insecure-over-http` is true — which it calls not
-recommended. So on such a cluster Apchi does not get a worse connection, it gets none, and
-§16 refuses the Apply rather than letting every query time out.
-
-Give Apchi the URL and the PEM files:
+Apchi reaches Trino over HTTP in both shapes. Point it at HTTPS only for a coordinator this
+chart does not run, one that authenticates every port:
 
 ```sh
 kubectl create secret generic apchi-trino-tls -n apchi \
@@ -502,7 +552,7 @@ helm upgrade apchi charts/apchi -n apchi --reuse-values \
   --set trino.tls.certificateKey=tls.crt --set trino.tls.keyKey=tls.key
 ```
 
-Three things are worth knowing before you do:
+Three things are worth knowing about how Apchi connects:
 
 **It is a URL, not a port.** The Trino client reads `https` from a port only when the port is
 *exactly* 443, so setting a port of 8443 — the one Trino's own documentation uses — produced
@@ -513,9 +563,8 @@ scheme so that cannot happen.
 connection Apchi makes — see *Trusting a private CA* above. `trino.tls` is only the
 certificate Apchi presents.
 
-**The certificate is only needed for `http-server.authentication.type=CERTIFICATE`.** Trino
-then demands one from every client, Apchi included, and the subject must be one the Cluster's
-truststore accepts. It is not a Client Certificate in Apchi's sense — that term means a
+**`trino.tls` is the certificate Apchi presents.** Its subject must be one the coordinator's
+CA accepts. It is not a Client Certificate in Apchi's sense — that term means a
 certificate *Trino* presents when it connects outward to a data source, and points the other
 way. Apchi mounts this one `0640` with an `fsGroup` matching the user it runs as, which is the
 only combination that is both restricted and readable — a Secret volume's files are root-owned
@@ -580,7 +629,7 @@ to serve it from — a 503 means MongoDB is unreachable, which is a different th
 
 **Every Apply is refused with "Trino then refuses plain HTTP from every client".** The
 coordinator authenticates its callers and Apchi is configured for `http://`. See
-*Reaching a coordinator over HTTPS* above.
+*HTTPS and sign-in* above.
 
 **A rotated certificate seems to have been ignored.** It was. See *Rotating any of it*
 above — the Secret's new contents reach the pod within about a minute, and Apchi keeps using

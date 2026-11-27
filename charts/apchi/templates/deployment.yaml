@@ -187,17 +187,18 @@ spec:
               value: {{ .Values.trino.httpPort | int64 | quote }}
             - name: APCHI_TRINO_DISCOVERY_URI
               value: {{ include "trino.discoveryUri" . | quote }}
-            {{- if .Values.trino.https.enabled }}
+            {{- if (include "trino.https" .) }}
             - name: APCHI_TRINO_HTTPS_PORT
               value: {{ .Values.trino.https.port | int64 | quote }}
             - name: APCHI_TRINO_HTTPS_KEYSTORE_PATH
               value: {{ include "trino.httpsKeystore" . | quote }}
+            - name: APCHI_TRINO_HTTPS_TRUSTSTORE_PATH
+              value: {{ include "trino.clientCa" . | quote }}
             {{- end }}
+            - name: APCHI_SHARED_SECRET_NAME
+              value: {{ .Values.secrets.sharedSecret | quote }}
             - name: APCHI_TRINO_PROCESS_FORWARDED
               value: {{ include "trino.behindTlsProxy" . | empty | not | quote }}
-            - name: APCHI_TRINO_AUTHENTICATION_TYPE
-              # The helper refuses a type Trino has no user-mapping property for.
-              value: {{ $_ := include "trino.userMappingProperty" . }}{{ .Values.trino.authentication.type | quote }}
             - name: APCHI_TRINO_ENVIRONMENT
               value: {{ .Values.trino.environment | quote }}
             - name: APCHI_TRINO_SECURITY_REFRESH_PERIOD
