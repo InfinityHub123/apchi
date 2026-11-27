@@ -447,6 +447,11 @@ restrictedPodSecurity: false
 # can route to it, as any user.
 networkPolicy:
   enabled: true
+  # The metrics scraper, admitted to every Trino pod's HTTP port in either mode. That port
+  # trusts the user name a client sends, so a peer listed here can query as anyone: name the
+  # scraper's pods, not its namespace. Alloy in this namespace:
+  #   - podSelector: {matchLabels: {app.kubernetes.io/name: alloy}}
+  scrapers: []
   # Under `insecure` authentication: extra NetworkPolicyPeers allowed to the coordinator, e.g.
   #   - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: trino-gateway}}
   coordinator:

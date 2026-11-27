@@ -208,8 +208,11 @@ worker authenticates no one:
   basic_auth: {username: prometheus}   # no password: the worker refuses one
 ```
 
-`regex: worker|coordinator` scrapes both. With `networkPolicy.enabled`, add Prometheus'
-namespace to `networkPolicy.worker.from` and `networkPolicy.coordinator.from`.
+`regex: worker|coordinator` scrapes both, on the HTTP port -- a worker has no other, and the
+coordinator's HTTPS port would want a client certificate. The NetworkPolicy keeps that port to
+Trino and Apchi, so list the scraper's pods in `networkPolicy.scrapers`, which admits them to
+both roles in either authentication mode. The port trusts the name a client sends, so a listed
+pod can query as anyone: select the scraper's pods, never a whole namespace.
 `management.user` is refused on the workers, because it replaces the identity of Apchi's drain
 request and Trino refuses it.
 

@@ -186,6 +186,31 @@ def test_extra_peers_never_reach_http_under_certificate_authentication(tmp_path:
     assert peer not in (rules[8080] or [])
 
 
+ALLOY = {"podSelector": {"matchLabels": {"app.kubernetes.io/name": "alloy"}}}
+
+
+@pytest.mark.parametrize("shape", [(), INSECURE], ids=["certificate", "insecure"])
+def test_the_scraper_reaches_every_trino_pods_http_port(
+    tmp_path: Path, shape: tuple[str, ...]
+) -> None:
+    """/metrics is on the HTTP port of both roles -- a worker has no other -- and the scraper
+    names a user there rather than presenting a certificate."""
+    values = tmp_path / "values.yaml"
+    values.write_text(yaml.safe_dump({"networkPolicy": {"scrapers": [ALLOY]}}))
+
+    documents = _render(*shape, "--values", str(values))
+
+    for role in ("coordinator", "worker"):
+        assert ALLOY in (_rules(_policy(documents, role))[8080] or []), role
+
+
+def test_without_scrapers_nothing_else_reaches_http() -> None:
+    documents = _render()
+
+    for role in ("coordinator", "worker"):
+        assert ALLOY not in (_rules(_policy(documents, role))[8080] or []), role
+
+
 def test_an_edge_route_to_trino_is_refused_under_certificate_authentication() -> None:
     """edge reaches the pod on HTTP, which would hand outside clients the port that trusts a
     user name."""

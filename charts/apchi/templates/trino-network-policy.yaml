@@ -6,7 +6,7 @@ sending X-Trino-User. Egress is left alone: Trino reaches databases, object stor
 this chart cannot enumerate, and a policy that guessed would break catalogs silently.
 
 Under certificate authentication the HTTP port takes the user name a client sends, so it is
-Trino's own pods' and Apchi's alone, and everyone else -- the router, a Trino Gateway, BI
+Trino's own pods', Apchi's and the metrics scraper's alone, and everyone else -- the router, a Trino Gateway, BI
 tools -- comes to the HTTPS port, which authenticates them and so needs no list.
 
 The ports are the container ports, because a NetworkPolicy is evaluated at the pod, after the
@@ -47,6 +47,10 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "apchi.apiSelectorLabels" . | nindent 14 }}
+        {{- with $np.scrapers }}
+        # The metrics scraper, which reads /metrics on the HTTP port in either mode.
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- if $certificate }}
       ports:
         - {protocol: TCP, port: {{ .Values.trino.httpPort }}}
@@ -99,6 +103,9 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "trino.selectorLabels" . | nindent 14 }}
+        {{- with $np.scrapers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         {{- with $np.worker.from }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
