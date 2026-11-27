@@ -7,7 +7,7 @@ an external system.
 import re
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 
 from app.sections.client_certificates.model import CertificateName
 
@@ -15,7 +15,23 @@ from app.sections.client_certificates.model import CertificateName
 # survives a round trip through a .properties filename and SQL without quoting.
 CATALOG_NAME = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 
-CatalogName = Annotated[str, StringConstraints(pattern=CATALOG_NAME.pattern)]
+#: Trino's own catalog, on every Cluster and impossible to create or drop. Staged, it would
+#: reach Validation as a catalog Apchi could adopt, which it cannot.
+TRINOS_OWN = "system"
+
+
+def _not_trinos_own(name: str) -> str:
+    if name == TRINOS_OWN:
+        raise ValueError(
+            f"'{TRINOS_OWN}' is Trino's own catalog, present on every Cluster; it cannot be "
+            "created, dropped or managed. Choose another name."
+        )
+    return name
+
+
+CatalogName = Annotated[
+    str, StringConstraints(pattern=CATALOG_NAME.pattern), AfterValidator(_not_trinos_own)
+]
 ConnectorName = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_-]{0,62}$")]
 
 
