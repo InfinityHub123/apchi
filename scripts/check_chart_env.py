@@ -33,11 +33,11 @@ ROOT = Path(__file__).resolve().parents[1]
 CHART = ROOT / "charts" / "apchi"
 
 #: The smallest default install: the dev MongoDB on, because mongodb.uri is deliberately
-#: required, and the Secrets certificate authentication needs, without which it refuses to
+#: required, and the Secrets HTTPS needs, without which it refuses to
 #: render at all.
-VALUES = ("--values", str(CHART / "ci" / "certificate.yaml"))
+VALUES = ("--values", str(CHART / "ci" / "https.yaml"))
 #: The quickstart's shape: plain HTTP, and none of those Secrets.
-INSECURE_VALUES = ("--set", "mongodb.deploy=true", "--set", "trino.authentication.type=insecure")
+INSECURE_VALUES = ("--set", "mongodb.deploy=true", "--set", "trino.https.enabled=false")
 
 #: And again with TLS configured to Trino and to MongoDB, because those env vars are
 #: rendered only on those branches -- the default render would never see a typo in them
@@ -193,7 +193,7 @@ def main() -> int:
     fields = {f"APCHI_{name.upper()}" for name in Settings.model_fields}
     shapes = (
         ("default", VALUES),
-        ("insecure", INSECURE_VALUES),
+        ("plain HTTP", INSECURE_VALUES),
         ("with TLS and a CA bundle", TLS_VALUES),
     )
     for shape, values in shapes:

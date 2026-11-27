@@ -65,10 +65,8 @@ spec:
           command: ["sh", "-c"]
           args:
             - umask 077 &&
-              { cat /etc/trino-https-source/key.pem; echo; cat /etc/trino-https-source/certificate.pem; } > {{ include "trino.httpsKeystore" . }}
-              {{- if eq .Values.trino.authentication.type "certificate" }} &&
+              { cat /etc/trino-https-source/key.pem; echo; cat /etc/trino-https-source/certificate.pem; } > {{ include "trino.httpsKeystore" . }} &&
               cp /etc/trino-https-source/client-ca.pem {{ include "trino.clientCa" . }}
-              {{- end }}
           volumeMounts:
             - {name: https-source, mountPath: /etc/trino-https-source, readOnly: true}
             - {name: https-keystore, mountPath: /data/trino-https}
@@ -176,14 +174,12 @@ spec:
         # The server's private key, so restricted as the other credential volumes are.
         - name: https-source
           secret:
-            secretName: {{ required "trino.https.existingSecret is required: the coordinator serves HTTPS when trino.https.enabled is set or trino.authentication.type is certificate. Provide the server certificate (cert-manager writes this shape), or set trino.authentication.type=insecure for plain HTTP." .Values.trino.https.existingSecret }}
+            secretName: {{ required "trino.https.existingSecret is required: the coordinator serves HTTPS, trino.https.enabled being the default. Provide the server certificate (cert-manager writes this shape), or set trino.https.enabled=false for plain HTTP with no authentication." .Values.trino.https.existingSecret }}
             defaultMode: 0640
             items:
               - {key: {{ .Values.trino.https.certificateKey }}, path: certificate.pem}
               - {key: {{ .Values.trino.https.keyKey }}, path: key.pem}
-              {{- if eq .Values.trino.authentication.type "certificate" }}
-              - {key: {{ required "trino.https.clientCaKey is required under certificate authentication" .Values.trino.https.clientCaKey }}, path: client-ca.pem}
-              {{- end }}
+              - {key: {{ required "trino.https.clientCaKey is required: the CA client certificates are checked against" .Values.trino.https.clientCaKey }}, path: client-ca.pem}
         # Memory-backed, so the joined key is never written to the node's disk.
         - {name: https-keystore, emptyDir: {medium: Memory}}
         {{- end }}

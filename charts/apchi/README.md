@@ -62,7 +62,7 @@ does not create.
 | `logging.level`, `logging.json` | `null` | INFO and console lines when null. An explicit level can be raised during an incident without a rebuild |
 | `environment` | `null` | **Deprecated**, removed in the next release. While set, `np`/`test` still mean DEBUG and `prep`/`prod` INFO and JSON, and Apchi logs a warning. Any value is accepted |
 | `logging.debug` | `false` | Debugging mode: DEBUG unless `logging.level` says otherwise, each line naming the logger and line it came from, and every call to Kubernetes, Trino and MongoDB logged by name and timing. Payloads never, so it is safe to turn on in production. Dependencies' own debug output stays off, because PyMongo's prints Snapshots and the Kubernetes client's prints Secrets |
-| `trino.url` | `""` | The coordinator, scheme included; empty means `http://<trino.name>:8080`, the Service this chart creates, whose HTTP port Apchi uses under either authentication type. A URL and not a host plus a port because the Trino client reads `https` from a port only at exactly 443, so `8443` silently meant plaintext |
+| `trino.url` | `""` | The coordinator, scheme included; empty means `http://<trino.name>:8080`, the Service this chart creates, whose HTTP port Apchi uses with HTTPS or without. A URL and not a host plus a port because the Trino client reads `https` from a port only at exactly 443, so `8443` silently meant plaintext |
 | `trino.tls.existingSecret` | `""` | A Secret holding the PEM files below, mounted read-only at `trino.tls.mountPath`. Required to reach a coordinator that serves HTTPS |
 | `trino.tls.certificateKey`, `trino.tls.keyKey` | `""`, `""` | A certificate for Apchi to present, only for a coordinator outside this chart that authenticates every port. Both or neither |
 | `trino.user` | `apchi` | The identity Apchi issues DDL as, and the only one granted `owner` on catalogs |
@@ -80,7 +80,6 @@ does not create.
 | `trino.<role>.memory.maxMemoryPerNode`, `.heapHeadroomPerNode` | `600MB`, `600MB` | `query.max-memory-per-node` and `memory.heap-headroom-per-node`, reaching Trino as `${ENV:...}` from the pod. The render fails when their sum exceeds the heap -- Trino refuses that at startup anyway |
 | `trino.fsGroup` | `1000` | The group that owns the credential volumes, which are `0640`. On OpenShift's `restricted-v2` it must be a group the namespace allows -- the first of its `openshift.io/sa.scc.supplemental-groups` annotation -- or the pods are refused. `null` renders none, which Apchi accepts only with `restrictedPodSecurity` set. See [OpenShift and other restricted clusters](../../docs/deploying/openshift.md) |
 | `trino.securityRefreshPeriod` | `30s` | How soon a permission change takes effect. Lower is a faster Apply and more file reads. Required: Apchi refuses to start without it |
-| `trino.authentication.type` | `certificate` | How callers sign in, decided here and nowhere else. `certificate`: HTTPS demands a client certificate (or the methods an Admin sets instead), and HTTP, kept to the namespace by the NetworkPolicy, takes a user name. `insecure`: plain HTTP alone, for the quickstart and development |
 | `trino.worker.gracefulShutdown.gracePeriodSeconds` | `120` | How long a worker waits for the coordinator to notice it is draining, before and after its tasks finish. Apchi renders it as `shutdown.grace-period` |
 | `trino.worker.terminationGracePeriodSeconds` | `600` | At least twice the grace period plus the longest task a drain should wait for; the render fails below twice it. A worker killed before then ends the tasks it was draining |
 | `trino.worker.podDisruptionBudget.enabled`, `.maxUnavailable` or `.minAvailable` | `true`, `1` | How many workers a node drain or cluster upgrade may take at once. Each drains first, so the default lets a drain go one worker at a time without ending their tasks. One of the two, never both (the render refuses). Workers only: a budget on the single coordinator would protect nothing or block every node drain |
@@ -96,8 +95,8 @@ does not create.
 | `caBundle.existingSecret` or `.configMap`, `.key` | `""`, `""`, `ca-bundle.crt` | A PEM bundle mounted into **every** pod -- Apchi, MongoDB, the Trino coordinator and workers, and the Validation pod -- at `/etc/pki/tls/certs/ca-bundle.crt`, which replaces an image's own system bundle there. Apchi adds it to the public store for every connection it makes. A ConfigMap for OpenShift's injected trusted-CA bundle; named rather than looked up, because Helm's `lookup` finds nothing under `helm template` or Argo CD. It turns on TLS to MongoDB only if `mongodb.uri` or a client certificate already asks for it |
 | `javaTruststore.existingSecret` or `.configMap`, `.key` | `""`, `""`, `cacerts` | A Java truststore mounted into every pod that runs Trino, at `/etc/pki/java/truststore/cacerts`, with the JVM pointed at it. It replaces the JDK's own store, so it must hold the public roots too if a catalog reaches anything they sign. What connectors use for outbound TLS; Trino's own HTTPS server is separate |
 | `javaTruststore.password.existingSecret`, `.key` | `""`, `""` | Only for a store that needs its password to load. Read from the Secret into the JVM by Kubernetes, never written into a ConfigMap |
-| `networkPolicy.enabled` | `true` | Who may reach Trino's pods. Every pod in the namespace reaches both roles. From outside it, under certificate authentication, only the coordinator's HTTPS port is open, to anyone; the HTTP port, which trusts a user name, admits nothing. Under `insecure`, the HTTP port also admits the router or ingress controller when `expose.trino` is set, and `networkPolicy.coordinator.from`. Egress is never restricted. Your network plugin must enforce NetworkPolicy -- kind's default does not |
-| `networkPolicy.coordinator.from`, `networkPolicy.worker.from` | `[]` | Extra `NetworkPolicyPeer`s outside the namespace: a Trino Gateway or BI tools under `insecure`, a scraper elsewhere for the workers. `coordinator.from` reaches nothing under certificate authentication, where those clients use HTTPS |
+| `networkPolicy.enabled` | `true` | Who may reach Trino's pods. Every pod in the namespace reaches both roles. From outside it, with `trino.https.enabled`, only the coordinator's HTTPS port is open, to anyone; the HTTP port, which trusts a user name, admits nothing. Without it, the HTTP port also admits the router or ingress controller when `expose.trino` is set, and `networkPolicy.coordinator.from`. Egress is never restricted. Your network plugin must enforce NetworkPolicy -- kind's default does not |
+| `networkPolicy.coordinator.from`, `networkPolicy.worker.from` | `[]` | Extra `NetworkPolicyPeer`s outside the namespace: a Trino Gateway or BI tools without HTTPS, a scraper elsewhere for the workers. `coordinator.from` reaches nothing with `trino.https.enabled`, where those clients use HTTPS |
 | `networkPolicy.ingressControllerNamespaceSelector` | `{}` | The ingress controller's namespace labels, required when Trino is exposed by an Ingress. A Route needs nothing: OpenShift's router namespace is selected by its own labels, both the OVN-Kubernetes and the OpenShift SDN one |
 | `restrictedPodSecurity` | `false` | Set on a cluster that forbids pinning `fsGroup` and runs each pod as an arbitrary uid -- OpenShift's `restricted-v2` SCC. A mounted file then reaches the process only by being world-readable, so Apchi's pod renders no `fsGroup` and mounts its credentials `0644`; the Validation pod Apchi creates carries no `fsGroup` either; and Apchi accepts `0644` credential mounts on the Trino pods instead of refusing them, while still refusing a writable one. The rest of the security context -- `runAsNonRoot`, seccomp, capabilities, the uid -- the platform adds itself, and the image runs as any uid. See [OpenShift and other restricted clusters](../../docs/deploying/openshift.md). The bundled MongoDB (`mongodb.deploy`) is for trying Apchi out and is not built for a restricted cluster |
 | `pod.fsGroup` | `10001` | The group every mounted credential is owned by, which must be the one Apchi's process runs as. Ignored under `restrictedPodSecurity`. A Secret volume's files are root-owned whatever their mode, so a wrong value here is a key Apchi cannot read |
@@ -123,7 +122,7 @@ does not create.
 | `expose.ingress.className`, `.controller` | `""`, `""` | `controller` is `nginx` or `haproxy`, for the annotations `passthrough` and `reencrypt` need |
 | `expose.apchi.host`, `.termination`, `.tlsSecret`, `.annotations` | `""`, `edge`, `""`, `{}` | Apchi from outside, created only when `host` is set. `edge` only: Apchi serves plain HTTP |
 | `expose.trino.host`, `.termination`, `.tlsSecret`, `.destinationCACertificate`, `.annotations` | `""`, `edge`, `""`, `""`, `{}` | Trino from outside, created only when `host` is set. `passthrough` and `reencrypt` need `trino.https` |
-| `trino.https.enabled`, `.port`, `.existingSecret`, `.certificateKey`, `.keyKey`, `.clientCaKey` | `false`, `8443`, `""`, `tls.crt`, `tls.key`, `ca.crt` | Trino serving HTTPS itself, from a TLS Secret you provide, such as cert-manager writes. Always on under certificate authentication; `clientCaKey` is the CA client certificates are checked against |
+| `trino.https.enabled`, `.port`, `.existingSecret`, `.certificateKey`, `.keyKey`, `.clientCaKey` | `true`, `8443`, `""`, `tls.crt`, `tls.key`, `ca.crt` | How callers sign in, decided here and nowhere else. On: the coordinator serves HTTPS from a TLS Secret you provide, such as cert-manager writes, and authenticates every client there -- by certificate unless an Admin sets other methods -- while HTTP, kept to the namespace by the NetworkPolicy, takes a user name. Off: plain HTTP alone, for the quickstart and development. `clientCaKey` is the CA client certificates are checked against |
 | `resources`, `nodeSelector`, `tolerations`, `affinity`, `podAnnotations`, `podLabels` | | The usual |
 
 **Rotating anything under `trino.tls`, `mongodb.tls`, `caBundle` or `javaTruststore` needs a
@@ -211,7 +210,7 @@ worker authenticates no one:
 `regex: worker|coordinator` scrapes both, on the HTTP port -- a worker has no other, and the
 coordinator's HTTPS port would want a client certificate. A scraper in Trino's namespace, such
 as Alloy, needs nothing more: the NetworkPolicy admits every pod there. One in another
-namespace goes in `networkPolicy.worker.from`, and under `insecure` in
+namespace goes in `networkPolicy.worker.from`, and without HTTPS in
 `networkPolicy.coordinator.from` too.
 `management.user` is refused on the workers, because it replaces the identity of Apchi's drain
 request and Trino refuses it.
@@ -231,8 +230,9 @@ time, whole, at `/etc/trino/apchi`. When the Admin configures a listener, Apchi 
 `config.properties` at it; without one, neither exists. A fixed mount, so Argo CD sees nothing
 change on the Deployment for it (#269).
 
-**Certificate authentication is the default.** The coordinator serves HTTPS on
-`trino.https.port` for clients outside the namespace and demands a client certificate there.
+**HTTPS is the default.** The coordinator serves HTTPS on `trino.https.port` for clients
+outside the namespace and authenticates every one there: by client certificate unless an Admin
+sets other methods in the Server Configuration, which the Certificate Mapping then follows.
 A Route or Ingress for Trino must reach it (`passthrough` or `reencrypt`; `edge` is refused).
 The HTTP port takes the user name a client sends, and the NetworkPolicy, on by default, keeps
 it to the pods in Trino's namespace. Apchi is one of them, so it needs no certificate. The server
@@ -241,8 +241,8 @@ render. A TLS Secret holds the certificate and the key apart and Trino's PEM key
 them in one file, so an initContainer joins them at pod start into a memory-backed volume
 only the pod can read.
 
-`trino.authentication.type: insecure` is plain HTTP alone, which is what the quickstart
-installs. Only this value moves a Cluster between the two.
+`trino.https.enabled: false` is plain HTTP alone, which is what the quickstart installs. Only
+this value moves a Cluster between the two.
 
 **Autoscaling, exchange managers, JMX export, group providers** are not here. A value this
 chart lacks is a gap to add.

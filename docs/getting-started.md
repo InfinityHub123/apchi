@@ -68,7 +68,7 @@ one for anything else.
 helm install apchi charts/apchi -n apchi \
   --set image.repository=apchi --set image.tag=dev \
   --set mongodb.deploy=true --set trino.worker.replicas=1 \
-  --set trino.authentication.type=insecure --wait
+  --set trino.https.enabled=false --wait
 ```
 
 That one release is Apchi, its MongoDB and the Trino cluster it configures. The two `image`
@@ -76,10 +76,10 @@ settings are because you built the image locally; the chart otherwise defaults t
 published one, which your cluster cannot pull a locally built tag from. One worker instead of
 two is for a laptop.
 
-`trino.authentication.type=insecure` is plain HTTP, and Trino takes the user name a client
-sends as who it is. That is what lets this walkthrough start with no certificates. The chart's
-default is certificate authentication, and without the certificates it refuses to render;
-see *Certificate authentication* below before installing anything other people can reach.
+`trino.https.enabled=false` is plain HTTP, and Trino takes the user name a client sends as
+who it is. That is what lets this walkthrough start with no certificates. The chart's default
+is HTTPS, and without its server certificate it refuses to render; see *HTTPS and sign-in*
+below before installing anything other people can reach.
 
 Nothing here sets `auth.mode`, so this walkthrough runs with authentication **off** — every
 caller is treated as an Admin, which is what makes the `curl` commands below work with no
@@ -486,12 +486,13 @@ no secret: MongoDB derives the username from the certificate's subject. Create t
 `$external` database named by that subject, in RFC2253 form — `CN=apchi` for a certificate
 issued to that common name — and grant it `readWrite` and `dbAdmin` on the Apchi database.
 
-## Certificate authentication
+## HTTPS and sign-in
 
-The chart's default. The coordinator listens twice:
+The chart's default, `trino.https.enabled`. The coordinator listens twice:
 
-- **HTTPS, for everyone outside the namespace.** Trino demands a client certificate there,
-  and a client that sends only a user name is refused. A Route or Ingress for Trino has to
+- **HTTPS, for everyone outside the namespace.** Trino authenticates every client there --
+  by client certificate unless an Admin chooses other methods -- and a client that sends
+  only a user name is refused. A Route or Ingress for Trino has to
   reach this port, so `expose.trino.termination` is `passthrough`, which carries the client's
   certificate to Trino, or `reencrypt`, which ends it at the router and so suits password
   sign-in only. `edge` is refused: it would reach the HTTP port.
@@ -517,11 +518,24 @@ The workers' requests to the coordinator are authenticated with a shared secret.
 it, `trino-internal-shared-secret`, the first time it starts without one, and never touches it
 after.
 
-**An Admin may set other sign-in methods for HTTPS.** The coordinator's Server Configuration
-can set `http-server.authentication.type=PASSWORD,CERTIFICATE`, or `PASSWORD` alone, with
-whatever else that method needs. Validation does not try these methods, because the probe
-serves plain HTTP; the Cluster does, and Auto Rollback restores the previous properties if the
-coordinator does not come up.
+**The sign-in method is the Admin's.** CERTIFICATE is the default because it needs nothing
+beyond the server certificate's Secret. The coordinator's Server Configuration can replace it
+with any of Trino's methods, or a list of them: `http-server.authentication.type=PASSWORD`,
+`OAUTH2`, `PASSWORD,CERTIFICATE`. An empty list is refused, because HTTPS would then take any
+name it is sent. What a method needs beyond that is the Admin's too. For `PASSWORD`, the two
+files Trino's file authenticator reads, as Raw Files:
+
+```sh
+curl -X PUT $APCHI/api/v1/admin/files/etc/trino/password-authenticator.properties \
+  -d '{"content": "password-authenticator.name=file\nfile.password-file=/etc/trino/password.db\n"}'
+curl -X PUT $APCHI/api/v1/admin/files/etc/trino/password.db \
+  -d "{\"content\": \"$(htpasswd -nbBC 10 analyst secret)\\n\"}"
+```
+
+The Certificate Mapping applies only while CERTIFICATE is among the methods: Trino refuses to
+start on a mapping no authenticator reads, so Apchi wires it only then. Validation does not try
+these methods, because the probe serves plain HTTP; the Cluster does, and Auto Rollback
+restores the previous properties if the coordinator does not come up.
 
 ## Reaching a coordinator over HTTPS
 
@@ -615,7 +629,7 @@ to serve it from — a 503 means MongoDB is unreachable, which is a different th
 
 **Every Apply is refused with "Trino then refuses plain HTTP from every client".** The
 coordinator authenticates its callers and Apchi is configured for `http://`. See
-*Certificate authentication* above.
+*HTTPS and sign-in* above.
 
 **A rotated certificate seems to have been ignored.** It was. See *Rotating any of it*
 above — the Secret's new contents reach the pod within about a minute, and Apchi keeps using

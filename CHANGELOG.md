@@ -28,15 +28,17 @@ Two breaks the committed contract cannot show you, and which belong here when th
 - Every label and annotation Apchi writes is under `apchi/` instead of `apchi.dev/`: the
   validation probe's `apchi/role` label and the restart annotations on the pod templates.
   `apchi.dev` is not a domain the project owns. A selector on `apchi.dev/role` finds nothing.
-- **Trino authenticates with client certificates by default** (#295). `trino.authentication.type`
-  defaults to `certificate`. The coordinator serves HTTPS for clients outside the namespace and
-  demands a certificate there; its HTTP port takes the user name a client sends, and Apchi uses
-  it. The chart refuses to render without `trino.https.existingSecret`, and refuses an `edge`
-  Route or Ingress for Trino. `trino.authentication.type=insecure` keeps plain HTTP alone, for
-  development.
-- `networkPolicy.enabled` defaults to `true`. Under certificate authentication the coordinator's
-  HTTP port admits only the pods in Trino's namespace, and `networkPolicy.coordinator.from` no
-  longer reaches it. In either mode, every pod in the namespace reaches both roles, so a scraper
+- **Trino serves HTTPS and authenticates its callers by default** (#295). `trino.https.enabled`
+  defaults to `true` and is the one switch for how callers sign in. The coordinator serves
+  HTTPS for clients outside the namespace and authenticates every one there, by client
+  certificate unless an Admin sets other methods (`PASSWORD`, `OAUTH2`, a list) in the Server
+  Configuration; its HTTP port takes the user name a client sends, and Apchi uses it, so no
+  method locks Apchi out. The chart refuses to render without `trino.https.existingSecret`, and
+  refuses an `edge` Route or Ingress for Trino. `trino.https.enabled=false` keeps plain HTTP
+  alone, for development. An empty `http-server.authentication.type` is refused.
+- `networkPolicy.enabled` defaults to `true`. With HTTPS the coordinator's HTTP port admits only
+  the pods in Trino's namespace, and `networkPolicy.coordinator.from` no longer reaches it. With
+  HTTPS or without, every pod in the namespace reaches both roles, so a scraper
   there, such as Alloy, needs nothing listed.
 - `internal-communication.shared-secret`, `http-server.https.truststore.path` and
   `http-server.authentication.allow-insecure-over-http` are wiring, refused in the Server

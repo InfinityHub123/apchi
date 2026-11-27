@@ -43,7 +43,7 @@ CHART = ROOT / "charts" / "apchi"
 #: with must come from the chart's helpers, not from a release name that happens to match.
 VALUES = (
     "--values",
-    str(CHART / "ci" / "certificate.yaml"),
+    str(CHART / "ci" / "https.yaml"),
     "--set",
     "trino.worker.replicas=1",
 )
@@ -54,7 +54,7 @@ INSECURE_VALUES = (
     "--set",
     "trino.worker.replicas=1",
     "--set",
-    "trino.authentication.type=insecure",
+    "trino.https.enabled=false",
 )
 #: The same, with a CA bundle and a Java truststore mounted into every pod -- which adds mounts
 #: to the coordinator, so the preconditions are checked against that shape as well.

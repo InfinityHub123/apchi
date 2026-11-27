@@ -6,7 +6,7 @@ import re
 from collections.abc import Mapping
 from enum import StrEnum
 from functools import lru_cache
-from typing import Literal, Self
+from typing import Self
 
 from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -238,21 +238,19 @@ class Settings(BaseSettings):
     trino_http_port: int = 8080
     #: Where workers announce themselves: the coordinator's Service, never a pod.
     trino_discovery_uri: str = "http://trino:8080"
-    #: The HTTPS listener, when the coordinator serves one. Unset means plain HTTP only.
+    #: The HTTPS listener, when the coordinator serves one, and so how callers sign in, which
+    #: the chart decides and no Admin input can change. Set: HTTPS authenticates -- by
+    #: certificate, or whatever methods an Admin sets instead -- the clients the Route or
+    #: Ingress brings, while the HTTP port, which the NetworkPolicy keeps to the namespace,
+    #: takes the name a client sends. Apchi uses that port, so it needs no certificate. Unset:
+    #: plain HTTP alone, for the quickstart and development.
     trino_https_port: int | None = None
     trino_https_keystore_path: str = "/data/trino-https/keystore.pem"
-    #: The CA that client certificates are checked against, under the `certificate` mode.
+    #: The CA that client certificates are checked against, for the CERTIFICATE method.
     trino_https_truststore_path: str | None = None
     #: Behind a proxy that terminates TLS, Trino has to believe its X-Forwarded headers, or
     #: every redirect it issues points at plain http.
     trino_process_forwarded: bool = False
-    #: How callers sign in to Trino, which the chart decides and no Admin input can change.
-    #: `certificate`: HTTPS authenticates by certificate -- or whatever methods an Admin sets
-    #: instead -- for the clients the Route or Ingress brings, while the HTTP port, which the
-    #: NetworkPolicy keeps to Apchi and Trino's own pods, takes the name a client sends. Apchi
-    #: uses that port, so it needs no certificate. `insecure`: plain HTTP alone, for the
-    #: quickstart and development.
-    trino_authentication_type: Literal["insecure", "certificate"] = "certificate"
     #: `node.environment`. Every node must agree on it, so one value serves both roles.
     trino_environment: str = "production"
     trino_data_dir: str = "/data/trino"

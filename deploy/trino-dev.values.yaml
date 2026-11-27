@@ -34,7 +34,7 @@ trino:
   securityRefreshPeriod: 1s
 
   # Plain HTTP and the name a client sends: tier 2's Apchi runs on the test host and reaches
-  # Trino through a port-forward with no certificate. The certificate shape, the chart's
-  # default, is what the Argo CD job installs.
-  authentication:
-    type: insecure
+  # Trino through a port-forward with no certificate. HTTPS, the chart's default, is what the
+  # Argo CD job installs.
+  https:
+    enabled: false

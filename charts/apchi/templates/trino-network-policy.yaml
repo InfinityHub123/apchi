@@ -7,13 +7,13 @@ Service and, by sending X-Trino-User, be any user, admin included. Egress is lef
 reaches databases, object stores and DNS that this chart cannot enumerate, and a policy that
 guessed would break catalogs silently.
 
-Under certificate authentication everyone outside the namespace -- the router, a Trino Gateway,
+Beside HTTPS, everyone outside the namespace -- the router, a Trino Gateway,
 BI tools -- comes to the HTTPS port, which authenticates them and so needs no list.
 
 The ports are the container ports, because a NetworkPolicy is evaluated at the pod, after the
 Service has translated its port.
 */ -}}
-{{- $certificate := eq .Values.trino.authentication.type "certificate" -}}
+{{- $https := include "trino.https" . -}}
 {{- $ports := list (int .Values.trino.httpPort) -}}
 {{- if (include "trino.https" .) -}}
 {{- $ports = append $ports (int .Values.trino.https.port) -}}
@@ -21,7 +21,7 @@ Service has translated its port.
 {{- $np := .Values.networkPolicy -}}
 {{- $routed := and .Values.expose.trino.host (eq (include "apchi.exposeKind" .) "route") -}}
 {{- $ingressed := and .Values.expose.trino.host (eq (include "apchi.exposeKind" .) "ingress") -}}
-{{- if and $ingressed (not $np.ingressControllerNamespaceSelector) (not $certificate) }}
+{{- if and $ingressed (not $np.ingressControllerNamespaceSelector) (not $https) }}
 {{- fail "networkPolicy.ingressControllerNamespaceSelector is required when Trino is exposed by an Ingress: the policy has to let the controller's pods through, and only you know which namespace they run in (for ingress-nginx, {kubernetes.io/metadata.name: ingress-nginx})" }}
 {{- end }}
 apiVersion: networking.k8s.io/v1
@@ -41,7 +41,7 @@ spec:
     - from:
         # This namespace, whole.
         - podSelector: {}
-      {{- if $certificate }}
+      {{- if $https }}
       ports:
         - {protocol: TCP, port: {{ .Values.trino.httpPort }}}
     # Anyone, because HTTPS authenticates whoever comes: the Route or Ingress, and every client.

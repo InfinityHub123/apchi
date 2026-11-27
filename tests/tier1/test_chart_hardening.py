@@ -47,7 +47,7 @@ def _render(*values: str) -> list[dict[str, Any]]:
             "rel",
             str(CHART),
             "--values",
-            str(CHART / "ci" / "certificate.yaml"),
+            str(CHART / "ci" / "https.yaml"),
             *values,
         ],
         capture_output=True,

@@ -109,8 +109,8 @@ SHARED_SECRET_KEY: Final = "internal-communication.shared-secret"
 
 AUTHENTICATOR_PREFIX: Final = "http-server.authentication."
 AUTHENTICATION_TYPE: Final = f"{AUTHENTICATOR_PREFIX}type"
-#: Under the `certificate` mode, what lets the in-namespace HTTP port take the name a client
-#: sends while HTTPS authenticates. Apchi and the workers use that port; the NetworkPolicy
+#: Beside HTTPS, what lets the in-namespace HTTP port take the name a client sends while
+#: HTTPS authenticates. Apchi and the workers use that port; the NetworkPolicy
 #: keeps everyone else off it, and the Route or Ingress reaches only HTTPS.
 ALLOW_INSECURE_OVER_HTTP: Final = f"{AUTHENTICATOR_PREFIX}allow-insecure-over-http"
 
@@ -129,15 +129,17 @@ WIRING: Final[dict[str, dict[str, str]]] = {
         "discovery.uri": "the coordinator Service (trino.name, trino.service.port)",
         "catalog.management": "Apchi: catalogs are applied by DDL (§7.1)",
         "catalog.store": "Apchi: catalogs are applied by DDL (§7.1)",
-        "http-server.authentication.insecure.user-mapping.file": "trino.authentication.type",
-        "http-server.authentication.certificate.user-mapping.file": "trino.authentication.type",
+        "http-server.authentication.insecure.user-mapping.file": "trino.https.enabled",
+        "http-server.authentication.certificate.user-mapping.file": (
+            "the Certificate Mapping Section, under the CERTIFICATE method"
+        ),
         "http-server.process-forwarded": "expose.trino",
         "http-server.https.enabled": "trino.https",
         "http-server.https.port": "trino.https.port",
         "http-server.https.keystore.path": "trino.https",
         "http-server.https.truststore.path": "trino.https.clientCaKey",
         SHARED_SECRET_KEY: "the Secret Apchi creates when it is missing (secrets.sharedSecret)",
-        ALLOW_INSECURE_OVER_HTTP: "trino.authentication.type: Apchi reaches Trino over HTTP",
+        ALLOW_INSECURE_OVER_HTTP: "trino.https.enabled: Apchi reaches Trino over HTTP",
         "query.max-memory": _SIZING.format(role="coordinator"),
         "query.max-memory-per-node": _SIZING.format(role="coordinator"),
         "memory.heap-headroom-per-node": _SIZING.format(role="coordinator"),
@@ -244,7 +246,16 @@ def _check_value(key: str, value: str) -> str | None:
         return f"the value of {key!r} ends in a backslash, which joins the next line onto it"
     if len(value.encode()) > MAX_VALUE_BYTES:
         return f"the value of {key!r} is longer than {MAX_VALUE_BYTES} bytes"
+    if key == AUTHENTICATION_TYPE and not methods_in(value):
+        # Trino reads an empty list as no authenticator, and HTTPS then takes the name any
+        # client sends -- admin included -- from whoever the Route or Ingress brings.
+        return f"{key} names no method, which would leave HTTPS authenticating nobody"
     return None
+
+
+def methods_in(value: str) -> list[str]:
+    """The methods an `http-server.authentication.type` value names, as Trino reads the list."""
+    return [method.strip().upper() for method in value.split(",") if method.strip()]
 
 
 class _RoleFiles(BaseModel):
@@ -393,10 +404,10 @@ def _properties(lines: list[tuple[str, str]]) -> str:
 
 
 def coordinator_defaults(settings: Settings) -> dict[str, dict[str, str]]:
-    """The coordinator's defaults: under the `certificate` mode, certificate authentication on
-    HTTPS, which an Admin may replace with any methods -- Apchi signs in over HTTP, so no list
-    locks it out."""
-    if settings.trino_authentication_type != "certificate":
+    """The coordinator's defaults: beside HTTPS, certificate authentication there, which an
+    Admin may replace with any methods -- Apchi signs in over HTTP, so no list locks it out.
+    CERTIFICATE because it needs nothing more than the server certificate's Secret holds."""
+    if settings.trino_https_port is None:
         return DEFAULTS
     config = {**DEFAULTS["config.properties"], AUTHENTICATION_TYPE: "CERTIFICATE"}
     return {**DEFAULTS, "config.properties": config}
@@ -414,8 +425,9 @@ def _with_admin(
     return [*wiring, *sorted(merged.items())]
 
 
-def config_wiring(settings: Settings) -> list[tuple[str, str]]:
-    """The coordinator's config.properties lines that the deployment decides."""
+def config_wiring(settings: Settings, methods: list[str]) -> list[tuple[str, str]]:
+    """The coordinator's config.properties lines that the deployment decides, for the
+    authentication methods HTTPS offers."""
     lines = [
         ("coordinator", "true"),
         ("http-server.http.port", str(settings.trino_http_port)),
@@ -423,11 +435,16 @@ def config_wiring(settings: Settings) -> list[tuple[str, str]]:
         ("catalog.management", "dynamic"),
         ("catalog.store", "file"),
     ]
-    # Which authenticator reads the mapping file is the chart's, because the file is mounted
-    # for it. Turning the authenticator on -- `http-server.authentication.type` and the
-    # truststore it validates client certificates against -- is the Admin's, as it was.
-    variant = settings.trino_authentication_type
-    lines.append((f"http-server.authentication.{variant}.user-mapping.file", USER_MAPPING_PATH))
+    # Which authenticator reads the Certificate Mapping file. Without HTTPS it maps the name a
+    # client sends. Beside HTTPS it maps a certificate's subject, and only while CERTIFICATE is
+    # among the methods: Trino refuses to start on a property no configured authenticator
+    # reads (measured on 483, PASSWORD alone: "was not used").
+    if settings.trino_https_port is None:
+        lines.append(("http-server.authentication.insecure.user-mapping.file", USER_MAPPING_PATH))
+    elif "CERTIFICATE" in methods:
+        lines.append(
+            ("http-server.authentication.certificate.user-mapping.file", USER_MAPPING_PATH)
+        )
     if settings.trino_process_forwarded:
         lines.append(("http-server.process-forwarded", "true"))
     if settings.trino_https_port is not None:
@@ -442,7 +459,6 @@ def config_wiring(settings: Settings) -> list[tuple[str, str]]:
             lines.append(
                 ("http-server.https.truststore.path", settings.trino_https_truststore_path)
             )
-    if settings.trino_authentication_type == "certificate":
         lines.append((ALLOW_INSECURE_OVER_HTTP, "true"))
     lines.append((SHARED_SECRET_KEY, f"${{ENV:{SHARED_SECRET_ENV}}}"))
     # Sizing, by reference. The values are on the pod, beside the memory limit they have to fit.
@@ -552,8 +568,9 @@ def render_coordinator(admin: ServerConfiguration, settings: Settings) -> dict[s
     """Every file the coordinator reads from `/etc/trino` that no Section renders."""
     files = admin.coordinator.by_file()
     listener = admin.coordinator.event_listener_properties
-    wiring = config_wiring(settings)
     defaults = coordinator_defaults(settings)
+    config = {**defaults["config.properties"], **files["config.properties"]}
+    wiring = config_wiring(settings, methods_in(config.get(AUTHENTICATION_TYPE, "")))
     if listener:
         wiring.append((LISTENER_FILES_KEY, LISTENER_PATH))
     rendered = {

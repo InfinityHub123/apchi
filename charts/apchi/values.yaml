@@ -187,8 +187,8 @@ trino:
   # port is exactly 443, so `port: 8443` -- the port Trino's own documentation uses for
   # HTTPS -- sent plaintext at a TLS listener and reported nothing.
   #
-  # Empty means the coordinator Service below, over its HTTP port: under either
-  # authentication type that is the port Apchi uses.
+  # Empty means the coordinator Service below, over its HTTP port: with HTTPS or without,
+  # that is the port Apchi uses.
   url: ""
   # Reaching a coordinator that serves HTTPS.
   #
@@ -341,23 +341,31 @@ trino:
   environment: production
   httpPort: 8080
 
-  # Trino serving HTTPS itself, on the coordinator. Always on under certificate
-  # authentication, which Trino offers only over TLS; `enabled` turns it on without it, for
-  # expose.trino.termination passthrough or reencrypt. Plain HTTP stays on httpPort beside
-  # it, for Apchi and for the workers' internal requests, which the shared secret
-  # authenticates.
+  # How clients outside the namespace reach Trino, and the one switch for how callers sign in.
+  # No Admin input can move a Cluster from one to the other.
+  #
+  # `enabled: true`, the default: the coordinator serves HTTPS, and HTTPS always authenticates
+  # -- CERTIFICATE unless an Admin sets other methods in the coordinator's Server Configuration
+  # (`http-server.authentication.type`: PASSWORD, OAUTH2, a list). Plain HTTP stays on httpPort
+  # beside it and takes the user name a client sends; the NetworkPolicy keeps it to the pods in
+  # this namespace -- Apchi, which so needs no certificate, the workers, a metrics scraper. A
+  # Route or Ingress for Trino has to reach HTTPS: passthrough or reencrypt, never edge.
+  #
+  # `enabled: false`: plain HTTP alone, and the user name a client sends is who it is. For the
+  # quickstart and development, never for a Cluster anyone else can reach.
   #
   # existingSecret is yours to provide: Apchi does not issue certificates. It holds the server
   # certificate and its key apart, the way cert-manager writes them, for the name clients
   # reach Trino by. Trino reads a PEM keystore only as one file holding both, so an
   # initContainer joins them at pod start into a volume only this pod can read.
   https:
-    enabled: false
+    enabled: true
     port: 8443
     existingSecret: ""
     certificateKey: tls.crt
     keyKey: tls.key
-    # Under certificate authentication: the CA a client certificate has to be issued by.
+    # The CA a client certificate has to be issued by, for the CERTIFICATE method. Mounted
+    # whatever the methods are, because the chart cannot know which an Admin will choose.
     # cert-manager writes the issuer's CA into the same Secret as ca.crt.
     clientCaKey: ca.crt
 
@@ -398,24 +406,6 @@ trino:
   runAsUser: 1000
 
 
-  # How callers sign in to Trino. Only this value decides it: no Admin input can move a
-  # Cluster from one to the other.
-  #
-  # `certificate`, the default: Trino serves HTTPS (trino.https) and demands a client
-  # certificate there, unless an Admin sets other methods in the coordinator's Server
-  # Configuration (`http-server.authentication.type=PASSWORD,CERTIFICATE`). The HTTP port
-  # takes the user name a client sends and is kept to Trino's namespace by the
-  # NetworkPolicy; Apchi uses it, so it needs no certificate. A Route or Ingress for Trino
-  # has to reach HTTPS: passthrough or reencrypt, never edge.
-  #
-  # `insecure`: plain HTTP alone, and the user name a client sends is who it is. For the
-  # quickstart and development, never for a Cluster anyone else can reach.
-  #
-  # Both feed the Certificate Mapping file to the same parser, so a pattern proven under one
-  # is proven under the other. §7.6.
-  authentication:
-    type: certificate  # certificate | insecure
-
 # Set on a cluster that forbids pinning fsGroup and assigns each pod an arbitrary uid:
 # OpenShift's restricted-v2 SCC. Three things change, all because a mounted file can then
 # reach the process only by being world-readable:
@@ -432,12 +422,11 @@ trino:
 # as any uid. This setting only decides fsGroup and file modes.
 restrictedPodSecurity: false
 
-# Who may reach Trino's pods. On by default, because under certificate authentication it is
-# what keeps the coordinator's HTTP port -- which trusts the user name a client sends, and is
+# Who may reach Trino's pods. On by default, because with trino.https.enabled it is what keeps the coordinator's HTTP port -- which trusts the user name a client sends, and is
 # how Apchi reaches Trino -- to the pods in Trino's namespace. Everyone outside it uses the
 # HTTPS port, which is open to all because it authenticates them.
 #
-# Under `insecure` authentication there is no HTTPS to send anyone to, so the HTTP port also
+# Without trino.https.enabled there is no HTTPS to send anyone to, so the HTTP port also
 # admits the router or ingress controller when expose.trino is set, and the
 # peers listed below. Egress is never restricted -- Trino reaches databases, object stores and
 # DNS the chart cannot enumerate.
@@ -448,7 +437,7 @@ restrictedPodSecurity: false
 # scraper here, such as Alloy, needs nothing listed.
 networkPolicy:
   enabled: true
-  # Under `insecure` authentication: extra NetworkPolicyPeers outside this namespace allowed to
+  # Without trino.https.enabled: extra NetworkPolicyPeers outside this namespace allowed to
   # the coordinator, e.g.
   #   - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: trino-gateway}}
   coordinator:
@@ -456,8 +445,8 @@ networkPolicy:
   # And to the workers' HTTP port, in either mode -- a scraper in another namespace, say.
   worker:
     from: []
-  # Where the ingress controller runs, when Trino is exposed by an Ingress under `insecure`
-  # authentication. Required then; a Route needs nothing, OpenShift's router namespace is
+  # Where the ingress controller runs, when Trino is exposed by an Ingress without
+  # trino.https.enabled. Required then; a Route needs nothing, OpenShift's router namespace is
   # selected by its own labels.
   ingressControllerNamespaceSelector: {}
 

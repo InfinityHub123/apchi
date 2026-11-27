@@ -87,9 +87,9 @@ def _trino_container() -> DockerContainer:
     )
 
 
-#: The tier 1 Trino is a plain-HTTP container, so the suite runs the `insecure` shape. The
-#: certificate shape's rendering and refusals are tested by naming it.
-_SETTINGS = Settings(trino_authentication_type="insecure")
+#: The tier 1 Trino is a plain-HTTP container, so the suite runs the shape without HTTPS. The
+#: HTTPS shape's rendering and refusals are tested by naming it.
+_SETTINGS = Settings()
 MAPPING_SECRET = _SETTINGS.certificate_mapping_secret_name
 RULES_SECRET = _SETTINGS.access_control_secret_name
 SERVER_CONFIG_SECRET = _SETTINGS.server_configuration_secret_name
@@ -605,7 +605,6 @@ def settings(mongo_container: MongoDbContainer) -> Settings:
     return Settings(
         mongo_uri=mongo_container.get_connection_url(),
         mongo_database=f"apchi_test_{uuid.uuid4().hex}",
-        trino_authentication_type="insecure",
     )
 
 

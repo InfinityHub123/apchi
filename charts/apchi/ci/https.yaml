@@ -1,4 +1,4 @@
-# The smallest install of the default shape, certificate authentication: the server
+# The smallest install of the default shape, HTTPS beside in-namespace HTTP: the server
 # certificate's Secret, by name. What the chart's own checks and tests render as "a default
 # install", since a default install without it refuses to render. The Secret is the
 # installer's.

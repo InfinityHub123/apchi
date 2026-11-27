@@ -64,7 +64,7 @@ helm upgrade --install "$RELEASE" "$ROOT/charts/apchi" \
   --set image.tag="${IMAGE##*:}" \
   --set mongodb.deploy=true \
   --set trino.worker.replicas=1 \
-  --set trino.authentication.type=insecure \
+  --set trino.https.enabled=false \
   --wait --timeout 10m
 
 cat <<EOF

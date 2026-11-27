@@ -8,11 +8,11 @@ annotation emptied the catalog seed, reset the access-control rules to fail-open
 the Event Listener and Resource Groups Secrets while Apchi's mounts still read from them -- so
 the restarted coordinator crash-looped.
 
-It installs the chart's default shape, certificate authentication (#295), so it is also where a
-real coordinator proves that shape: HTTPS refuses a client that sends only a user name and admits
-one with a certificate, while Apchi, which has none, works over the HTTP port; the workers join
-on the shared secret Apchi created; and the sync keeps that secret, which the chart does not
-render.
+It installs the chart's default shape, HTTPS beside in-namespace HTTP (#295), so it is also
+where a real coordinator proves that shape: HTTPS refuses a client that sends only a user name
+and admits one with a certificate, while Apchi, which has none, works over the HTTP port; the
+workers join on the shared secret Apchi created; the sync keeps that secret, which the chart
+does not render; and an Admin can replace the certificate with a password.
 
 So this drives the real chart through a real Argo CD, with automated sync, prune and self-heal:
 Apchi applies a catalog, a permission, an Event Listener, Resource Groups and a Raw File through
@@ -529,3 +529,71 @@ def test_the_coordinator_authenticates_by_certificate(argo: None) -> None:
             timeout=30,
         )
         assert refused.status_code == 401, (refused.status_code, refused.text)
+
+
+#: A user and the bcrypt hash of its password, as Trino's file authenticator reads them.
+PASSWORD_USER, PASSWORD = "analyst", "argo-password"
+PASSWORD_DB = "analyst:$2y$10$hfqOHFL2p1v3OKTrQ5MMnefxvZDE2ZBNrpJbeB5jjjTCbNFF8k2zy\n"
+PASSWORD_FILES = {
+    "/etc/trino/password-authenticator.properties": (
+        "password-authenticator.name=file\nfile.password-file=/etc/trino/password.db\n"
+    ),
+    "/etc/trino/password.db": PASSWORD_DB,
+}
+
+
+def test_an_admin_replaces_certificate_with_password(argo: None) -> None:
+    """Which method HTTPS offers is the Admin's: with PASSWORD alone the coordinator still
+    starts -- nothing renders the certificate mapping no authenticator would read, which Trino
+    refuses -- Apchi still verifies over HTTP, and HTTPS takes a password and refuses a bare
+    name. Put back afterwards, as the shape the module installed."""
+    apchi = _Apchi()
+    before = apchi.http.get("/admin/server-configuration").json()
+    try:
+        for path, content in PASSWORD_FILES.items():
+            written = apchi.http.put(f"/admin/files{path}", json={"content": content})
+            assert written.status_code == 200, written.text
+        coordinator = {
+            **before.get("coordinator", {}),
+            "config.properties": {
+                **before.get("coordinator", {}).get("config.properties", {}),
+                "http-server.authentication.type": "PASSWORD",
+            },
+        }
+        changed = apchi.http.put(
+            "/admin/server-configuration", json={**before, "coordinator": coordinator}
+        )
+        assert changed.status_code == 200, changed.text
+        record = apchi.apply("/admin/applies")
+        assert record["stage"] == "succeeded", record
+
+        rendered = _secret("trino-server-config-coordinator")["config.properties"]
+        assert "http-server.authentication.type=PASSWORD\n" in rendered
+        assert "user-mapping" not in rendered, rendered
+
+        with _Coordinator() as https:
+            statement = f"{https.https}/v1/statement"
+            signed_in = httpx.post(
+                statement,
+                content="SELECT 1",
+                auth=(PASSWORD_USER, PASSWORD),
+                verify=https.ca,
+                timeout=30,
+            )
+            assert signed_in.status_code == 200, (signed_in.status_code, signed_in.text)
+            bare = httpx.post(
+                statement,
+                content="SELECT 1",
+                headers={"X-Trino-User": PASSWORD_USER},
+                verify=https.ca,
+                timeout=30,
+            )
+            assert bare.status_code == 401, (bare.status_code, bare.text)
+    finally:
+        for path in PASSWORD_FILES:
+            apchi.http.delete(f"/admin/files{path}")
+        restored = apchi.http.put("/admin/server-configuration", json=before)
+        assert restored.status_code == 200, restored.text
+        record = apchi.apply("/admin/applies")
+        apchi.close()
+    assert record["stage"] == "succeeded", record

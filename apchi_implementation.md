@@ -1208,7 +1208,10 @@ parse it with the same `UserMapping`. Apchi owns the file; the property that poi
 lives in `config.properties` and is therefore Admin territory (§14). Production sets the
 certificate variant; the development cluster and the validation probe set the insecure one,
 because Trino rejects the certificate property outright unless certificate authentication is
-configured, and a probe with no TLS could not use it.
+configured, and a probe with no TLS could not use it. Beside HTTPS, Apchi wires the certificate
+variant only while CERTIFICATE is among the methods the Admin's `http-server.authentication.type`
+names, for the same reason: with `PASSWORD` alone, Trino 483 refuses to start on it ("was not
+used").
 
 **Java's regex engine is the authority.** Static validation rejects the mistake worth
 catching at request time — a replacement naming a capturing group the pattern does not have,
@@ -1756,12 +1759,12 @@ refuses them as Admin input, naming the chart value that owns each one.
 | `discovery.uri` | `config.properties` | the coordinator Service |
 | `query.max-memory`, `query.max-memory-per-node`, `memory.heap-headroom-per-node` | `config.properties` | sizing, as `${ENV:...}` |
 | `catalog.management`, `catalog.store` | coordinator `config.properties` | fixed: dynamic, file (§7.1) |
-| the user-mapping property | coordinator `config.properties` | `trino.authentication.type` and the mapping mount |
+| the user-mapping property | coordinator `config.properties` | `trino.https.enabled`, the mapping mount, and whether the Admin's methods include CERTIFICATE |
 | `http-server.process-forwarded` | coordinator `config.properties` | `expose.trino` |
-| `http-server.https.enabled`, `.port`, `.keystore.path` | coordinator `config.properties` | `trino.https`, always on under certificate authentication |
-| `http-server.https.truststore.path` | coordinator `config.properties` | `trino.https.clientCaKey`, under certificate authentication |
+| `http-server.https.enabled`, `.port`, `.keystore.path` | coordinator `config.properties` | `trino.https.enabled`, on by default |
+| `http-server.https.truststore.path` | coordinator `config.properties` | `trino.https.clientCaKey`, beside HTTPS |
 | `internal-communication.shared-secret` | both roles' `config.properties` | the Secret Apchi creates when it is missing, as `${ENV:...}` |
-| `http-server.authentication.allow-insecure-over-http` | coordinator `config.properties` | `trino.authentication.type`: Apchi uses the HTTP port |
+| `http-server.authentication.allow-insecure-over-http` | coordinator `config.properties` | `trino.https.enabled`: Apchi uses the HTTP port |
 | `node.environment`, `node.data-dir` | `node.properties` | `trino.environment`, the data volume |
 | `node.id` | `node.properties` | the pod: the image sets it from the hostname |
 | all of `jvm.config` | `jvm.config` | fixed flags and `javaTruststore` |
@@ -1775,13 +1778,13 @@ Two departures from the first draft of this design, both found while building it
   already had the value, and an Admin default would have differed from what every running
   Cluster had -- so the first Apply after an upgrade would have restarted every coordinator
   for nothing. Apchi refuses to start with it empty.
-- **How callers sign in is the chart's; which methods besides Apchi's is the Admin's**
-  (stage 3, #295). `trino.authentication.type` is `certificate` by default and `insecure`
-  otherwise, and no Admin input moves a Cluster between them.
+- **Whether callers sign in is the chart's; which methods HTTPS offers is the Admin's**
+  (stage 3, #295). `trino.https.enabled` is on by default and off for plain HTTP, and no Admin
+  input moves a Cluster between them.
 
-  Under `certificate` the coordinator listens twice. HTTPS is for everyone outside the
+  With HTTPS the coordinator listens twice. HTTPS is for everyone outside the
   namespace: Apchi renders `http-server.authentication.type=CERTIFICATE` as a default the
-  Admin may replace with any methods, and the CA client certificates are checked against
+  Admin may replace with any methods but not with none, and the CA client certificates are checked against
   (`http-server.https.truststore.path`) is wiring, from the server certificate's Secret.
   HTTP stays inside the namespace and takes the user name a client sends
   (`http-server.authentication.allow-insecure-over-http=true`, wiring). Apchi and the workers
@@ -1789,7 +1792,7 @@ Two departures from the first draft of this design, both found while building it
   things keep the HTTP port in the namespace, and the chart enforces both. The NetworkPolicy,
   on by default, admits only the namespace's pods to it while HTTPS admits anyone. And a
   Route or Ingress for Trino must reach HTTPS, so `edge`, which reaches the pod on HTTP, is
-  refused. Under `insecure` none of this is rendered.
+  refused. Without HTTPS none of this is rendered.
 
   The chart provides no certificate. They are the installer's (cert-manager's, typically),
   because a CA in Apchi would make it responsible for rotation and for handing that CA to
