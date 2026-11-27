@@ -41,6 +41,28 @@ MAX_CONTENT_BYTES: Final = 256 * 1024
 #: fifty raw files has stopped using an escape hatch and started maintaining a fork.
 MAX_FILES: Final = 25
 
+#: What Kubernetes lets one Secret hold, summed over its values, and every raw file is in one.
+#: The two bounds above allow several times this, so it is checked on its own.
+SECRET_MAX_BYTES: Final = 1024 * 1024
+
+
+def secret_bytes(files: dict[str, str]) -> int:
+    """What the raw files' Secret would hold: Kubernetes sums its values, not its keys."""
+    return sum(len(content.encode()) for content in files.values())
+
+
+def too_large(files: dict[str, str]) -> str | None:
+    """Why these files cannot be delivered together, or None when they can."""
+    size = secret_bytes(files)
+    if size <= SECRET_MAX_BYTES:
+        return None
+    return (
+        f"The raw files would take {size} bytes, past the {SECRET_MAX_BYTES} one Kubernetes "
+        "Secret may hold, and every raw file is in one. Remove a file that is no longer "
+        "needed, or move what belongs in Trino's own files to "
+        "PUT /api/v1/admin/server-configuration."
+    )
+
 
 class RawFileWrite(BaseModel):
     """What an Admin sends. The path is in the URL; this is the content."""

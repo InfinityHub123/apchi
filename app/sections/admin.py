@@ -28,9 +28,10 @@ migration is finished.
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.sections.certificate_mapping.model import CertificateMappingWrite
+from app.sections.raw_files import too_large
 from app.sections.server_configuration import ServerConfiguration
 
 #: Enough to migrate a Cluster that accumulated conventions over years, few enough that the
@@ -84,6 +85,14 @@ class AdminValues(BaseModel):
             "parse or validate the contents. Never returned with their content."
         ),
     )
+
+    @field_validator("raw_files")
+    @classmethod
+    def _deliverable(cls, files: dict[str, str]) -> dict[str, str]:
+        if (problem := too_large(files)) is not None:
+            raise ValueError(problem)
+        return files
+
     preserved_certificate_mappings: list[CertificateMappingWrite] = Field(
         default_factory=list,
         max_length=MAX_PRESERVED_MAPPINGS,

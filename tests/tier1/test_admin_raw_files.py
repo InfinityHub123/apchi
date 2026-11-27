@@ -28,7 +28,7 @@ from app.api.deps import caller
 from app.auth.identity import Identity
 from app.config import Settings
 from app.main import create_app
-from app.sections.raw_files import MAX_FILES
+from app.sections.raw_files import MAX_CONTENT_BYTES, MAX_FILES
 from tests.conftest import FakeKubernetes
 
 FILES = "/api/v1/admin/files"
@@ -240,6 +240,26 @@ async def test_the_number_of_files_is_bounded(as_admin: AsyncClient) -> None:
 
     assert refused.status_code == 422, refused.text
     assert str(MAX_FILES) in refused.json()["message"]
+
+
+async def test_files_that_would_outgrow_their_secret_are_refused(as_admin: AsyncClient) -> None:
+    """Every raw file lands in one Secret, which Kubernetes caps at 1 MiB, while a file may
+    hold 256 KiB and there may be 25. Refused at the write that would cross it, as a Client
+    Certificate upload is, rather than as an API server error in the middle of an Apply.
+    Replacing a file counts what it replaces, not both."""
+    full = "x" * MAX_CONTENT_BYTES
+    for index in range(4):
+        written = await _write(as_admin, f"/etc/trino/big_{index}.properties", full)
+        assert written.status_code == 200, written.text
+    replaced = await _write(as_admin, "/etc/trino/big_0.properties", full)
+    assert replaced.status_code == 200, replaced.text
+
+    refused = await _write(as_admin, "/etc/trino/one_byte_more.properties", "x")
+
+    assert refused.status_code == 422, refused.text
+    assert "1048576" in refused.json()["message"]
+    listed = (await as_admin.get(FILES)).json()
+    assert "/etc/trino/one_byte_more.properties" not in [entry["path"] for entry in listed]
 
 
 # --- the pre-image a rollback will need ---------------------------------------------------

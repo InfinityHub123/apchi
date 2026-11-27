@@ -38,7 +38,7 @@ from app.sections import SectionName
 from app.sections.admin import MAX_PRESERVED_MAPPINGS, AdminValues
 from app.sections.certificate_mapping.model import CertificateMappingWrite
 from app.sections.certificate_mapping.section import validate_patterns
-from app.sections.raw_files import RawFile, RawFileWrite, normalised
+from app.sections.raw_files import RawFile, RawFileWrite, normalised, too_large
 from app.sections.server_configuration import (
     RENDERED_PATHS,
     ServerConfiguration,
@@ -449,9 +449,16 @@ async def write_raw_file(
         cluster.settings,
         existing=len([p for p in values.raw_files if p != _leading_slash(path)]),
     )
-    updated = values.model_copy(
-        update={"raw_files": {**values.raw_files, normalised_path: write.content}}
-    )
+    files = {**values.raw_files, normalised_path: write.content}
+    # Checked here as well as on the model: `model_copy` does not validate.
+    if (problem := too_large(files)) is not None:
+        raise UnprocessablePayload(
+            problem,
+            details=[
+                {"property": "content", "problem": "the raw files' Secret would be too large"}
+            ],
+        )
+    updated = values.model_copy(update={"raw_files": files})
     await admin.save(updated)
     # The path and the size, never the content -- the same rule the listing follows, and the
     # reason this content is kept out of the log by origin rather than by field name.
