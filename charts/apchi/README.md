@@ -5,8 +5,9 @@ Installs Apchi and the Trino cluster it configures, as one release.
 Published to GHCR on every tag:
 
 ```sh
-helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.4.0 \
-  -n trino --set mongodb.uri=mongodb://your-mongo:27017
+helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.5.0 \
+  -n trino --set mongodb.uri=mongodb://your-mongo:27017 \
+  --set trino.https.existingSecret=trino-tls
 ```
 
 Or from a clone, while changing Apchi itself:

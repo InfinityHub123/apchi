@@ -106,17 +106,19 @@ promotes the lot.
 
 ## Install
 
-The chart and the image publish to GHCR on every tag:
+The chart and the image publish to GHCR on every tag. The coordinator serves HTTPS by
+default, from a TLS Secret you provide (cert-manager writes this shape: `tls.crt`, `tls.key`,
+`ca.crt`):
 
 ```sh
-helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.4.0 \
+helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.5.0 \
   --namespace trino \
-  --set mongodb.uri=mongodb://your-mongo:27017
+  --set mongodb.uri=mongodb://your-mongo:27017 \
+  --set trino.https.existingSecret=trino-tls
 ```
 
 Or from a clone, which is what you want while changing Apchi itself — the chart then
-installs whatever image you have built. Here the coordinator serves HTTPS by default, from a
-TLS Secret you provide (cert-manager writes this shape: `tls.crt`, `tls.key`, `ca.crt`):
+installs whatever image you have built:
 
 ```sh
 helm install apchi charts/apchi \
