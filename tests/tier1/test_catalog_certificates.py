@@ -186,3 +186,23 @@ async def test_the_certificate_is_not_what_an_operator_typed_into_properties(
 
     assert staged["properties"]["connection-url"] == PG
     assert staged["certificate"] == "finance"
+
+
+async def test_the_probe_holds_the_certificates_its_catalogs_present(
+    applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
+) -> None:
+    """Validation connects to every Catalog to see whether it is reachable, and a Catalog that
+    presents a Client Certificate opens the file to do it. Without the file on the probe the
+    driver refused before it reached the database -- found on a PostgreSQL that requires one:
+    "Could not open SSL certificate file". The probe now holds every staged certificate."""
+    await _upload(applying_client)
+    await applying_client.post("/api/v1/catalogs", json=WIRED)
+
+    await _validation(applying_client)
+
+    probe = fake_kubernetes.pod_manifests[fake_kubernetes.pod_history[-1]]
+    mounts = {m["mountPath"] for m in probe["spec"]["containers"][0]["volumeMounts"]}
+    assert f"{MOUNT_DIR}/finance.crt" in mounts, sorted(mounts)
+    assert f"{MOUNT_DIR}/finance.key" in mounts
+    delivered = fake_kubernetes.secret_history[fake_kubernetes.pod_history[-1]]
+    assert any("BEGIN CERTIFICATE" in content for content in delivered.values())
