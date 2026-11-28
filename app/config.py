@@ -27,9 +27,10 @@ _PREFIX = "APCHI_"
 class AuthMode(StrEnum):
     """How a caller proves who they are (§19, #128).
 
-    `NONE` is the default because it is what Apchi does today -- every endpoint open -- and
-    anything else would break every existing install on upgrade. Tokens are not a mode: they
-    are a credential an authenticated user mints, so they need one of the others.
+    `NONE` is the default so that a new install answers with nothing to set up first; the
+    chart's install notes say what it means, and `password` or `sso` is for anything other
+    people can reach. Tokens are not a mode: they are a credential an authenticated user
+    mints, so they need one of the others.
     """
 
     NONE = "none"
@@ -89,9 +90,8 @@ class Settings(BaseSettings):
     #: `effective_log_level`.
     environment: str | None = None
 
-    #: Defaults to `none`, which resolves every caller to an Admin: that is the behaviour
-    #: Apchi has today, and a default of anything else would lock existing installs out of
-    #: their own Admin surface on upgrade.
+    #: Defaults to `none`, which resolves every caller to an Admin, so a new install answers
+    #: with no users or provider to set up first (see `AuthMode`).
     auth_mode: AuthMode = AuthMode.NONE
     #: The one Admin a new install starts with, in `password` mode. A *hash* rather than a
     #: password, so the plaintext is never in values, a Helm release, or `helm get values`.
