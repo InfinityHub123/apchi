@@ -34,6 +34,18 @@ kubectl -n "$NAMESPACE" exec deploy/trino-coordinator -c trino -- \
   trino --execute "SELECT count(*) FROM sales.tiny.nation" 2>/dev/null | grep -q '"25"' \
   || fail "the applied catalog does not answer in Trino"
 
+# Run again, as after changing Apchi: the image is rebuilt under the same tag, so Apchi has to
+# be restarted onto it, and the Snapshot it made has to survive that.
+kill $forward 2>/dev/null || true
+"$ROOT/scripts/quickstart.sh"
+after=$(kubectl -n "$NAMESPACE" get deploy/apchi -o jsonpath='{.spec.template.metadata.annotations.kubectl\.kubernetes\.io/restartedAt}')
+[[ -n "$after" ]] || fail "a re-run did not restart Apchi onto the image it rebuilt"
+kubectl -n "$NAMESPACE" port-forward svc/apchi 8000:8000 >/dev/null 2>&1 &
+forward=$!
+for _ in $(seq 30); do curl -sf "$A/health" >/dev/null && break; sleep 1; done
+snapshots=$(curl -sf "$A/snapshots" | python3 -c 'import sys,json; print([s["number"] for s in json.load(sys.stdin)["items"]])')
+[[ "$snapshots" == "[1]" ]] || fail "the Snapshot did not survive a re-run: $snapshots"
+
 kill $forward 2>/dev/null || true
 "$ROOT/scripts/quickstart.sh" --delete
 ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1 || fail "--delete left the namespace behind"

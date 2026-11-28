@@ -6,11 +6,19 @@
 # Everything lands in one namespace (default: apchi) and `--delete` removes all of it.
 # This is the development path: one replica of everything, no TLS, no authentication,
 # and Snapshots on an emptyDir. docs/getting-started.md says what to do next.
+#
+# Against the current kubectl context: a kind cluster of any name, or a minikube profile of
+# any name. Run it again after changing Apchi and it rebuilds the image and restarts Apchi on
+# it, leaving Trino and the Snapshots as they are. NAMESPACE, RELEASE and IMAGE override the
+# defaults.
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-apchi}"
 RELEASE="${RELEASE:-apchi}"
 IMAGE="${IMAGE:-apchi:dev}"
+# What the chart names Apchi's Deployment and Service: the release, or the release with
+# "-apchi" after it when the release name does not already say apchi.
+[[ "$RELEASE" == *apchi* ]] && APCHI="$RELEASE" || APCHI="$RELEASE-apchi"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
@@ -37,10 +45,23 @@ fi
 # ImagePullBackOff that looks like a registry problem.
 context="$(kubectl config current-context)"
 say "Building $IMAGE into the cluster ($context)"
-case "$context" in
+# A minikube context is named after its profile, so `minikube` is only the default one.
+minikube_profile() {
+  command -v minikube >/dev/null &&
+    minikube profile list -o json 2>/dev/null | grep -q "\"Name\":\"$context\""
+}
+if [[ "$context" == minikube ]] && ! command -v minikube >/dev/null; then
+  die "the context is minikube but minikube is not installed"
+fi
+cluster="$context"
+if [[ "$context" == minikube ]] || minikube_profile; then
+  cluster=minikube
+fi
+case "$cluster" in
   minikube)
-    minikube image build -t "$IMAGE" "$ROOT" ;;
+    minikube -p "$context" image build -t "$IMAGE" "$ROOT" ;;
   kind-*)
+    command -v kind >/dev/null || die "the context is $context but kind is not installed"
     docker build -t "$IMAGE" "$ROOT"
     kind load docker-image "$IMAGE" --name "${context#kind-}" ;;
   *)
@@ -59,6 +80,7 @@ kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -
 # and provides its server certificate. The workers drain for seconds rather than the
 # production two minutes, twice over, which is what --delete and every worker restart wait.
 say "Apchi and Trino"
+installed=$(helm status "$RELEASE" -n "$NAMESPACE" >/dev/null 2>&1 && echo yes || true)
 helm upgrade --install "$RELEASE" "$ROOT/charts/apchi" \
   --namespace "$NAMESPACE" \
   --set image.repository="${IMAGE%:*}" \
@@ -70,11 +92,20 @@ helm upgrade --install "$RELEASE" "$ROOT/charts/apchi" \
   --set trino.worker.terminationGracePeriodSeconds=30 \
   --wait --timeout 10m
 
+# A re-run rebuilt the image under the same tag, which Kubernetes cannot tell from the one
+# already running: the pod template is unchanged, so nothing would restart and the old code
+# would keep serving. Only Apchi's pod -- Trino and the MongoDB holding the Snapshots stay up.
+if [[ -n "$installed" ]]; then
+  say "Restarting Apchi on the image just built"
+  kubectl -n "$NAMESPACE" rollout restart deploy/"$APCHI"
+  kubectl -n "$NAMESPACE" rollout status deploy/"$APCHI" --timeout=5m
+fi
+
 cat <<EOF
 
 $(printf '\033[1mReady.\033[0m') Open the API:
 
-  kubectl -n $NAMESPACE port-forward svc/$RELEASE 8000:8000
+  kubectl -n $NAMESPACE port-forward svc/$APCHI 8000:8000
 
 and in another terminal:
 
