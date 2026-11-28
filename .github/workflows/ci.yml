@@ -182,6 +182,42 @@ jobs:
           kubectl logs deploy/apchi --tail=200
           kubectl logs deploy/trino-coordinator -c trino --tail=100 || true
 
+  operator-sections:
+    # Every Section an Operator configures, on the chart's default shape -- HTTPS, sign-in by
+    # certificate -- checked by connecting as people who hold certificates, against a
+    # PostgreSQL that accepts nothing but a client certificate. Tier 2 never connects a
+    # Catalog to a real database, which is how the Validation probe went without the
+    # certificates its Catalogs present (#314).
+    name: Operator Sections -- real certificates, a real database, real users
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --extra dev
+      - name: Install Helm
+        run: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      - name: Create cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: apchi
+      - name: Build Apchi's image into the cluster
+        run: |
+          docker build -t apchi:operator-sections .
+          kind load docker-image apchi:operator-sections --name apchi
+      - name: The system -- certificates, PostgreSQL, Apchi and Trino
+        run: IMAGE=apchi:operator-sections WORK=/tmp/operator-sections tests/operator_sections/setup.sh
+      - name: Every Operator Section, as its users see it
+        run: WORK=/tmp/operator-sections uv run pytest tests/operator_sections -q -rs --durations=0 --durations-min=5
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl -n trino get pods -o wide
+          kubectl -n trino logs deploy/apchi --tail=200 || true
+          kubectl -n trino logs deploy/trino-coordinator -c trino --tail=150 || true
+          kubectl -n trino logs deploy/postgres --tail=50 || true
+
   network-policy:
     # charts/apchi's NetworkPolicy, enforced. Its own job because the tier 2 clusters run kind's
     # default network plugin, kindnet, which accepts a NetworkPolicy and enforces none of it --

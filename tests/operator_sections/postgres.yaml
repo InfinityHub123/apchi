@@ -1,0 +1,51 @@
+# The PostgreSQL test_operator_sections.py presents a Client Certificate to: TLS required,
+# and a login only with a certificate whose CN is the user (pg_hba "cert").
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: postgres-init}
+data:
+  init.sql: |
+    CREATE USER trino_reader;
+    CREATE TABLE ledger (id int PRIMARY KEY, account text, amount numeric);
+    INSERT INTO ledger VALUES (1, 'payroll', 1200.50), (2, 'rent', 900.00), (3, 'travel', 310.25);
+    GRANT SELECT ON ledger TO trino_reader;
+  pg_hba.conf: |
+    local all all trust
+    hostssl all all 0.0.0.0/0 cert clientcert=verify-full
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: postgres}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: postgres}}
+  template:
+    metadata: {labels: {app: postgres}}
+    spec:
+      initContainers:
+        - name: certs
+          image: postgres:16
+          command: [sh, -c, "cp /in/* /certs/ && chown 999:999 /certs/* && chmod 600 /certs/server.key"]
+          volumeMounts: [{name: tls-in, mountPath: /in}, {name: certs, mountPath: /certs}]
+      containers:
+        - name: postgres
+          image: postgres:16
+          env:
+            - {name: POSTGRES_PASSWORD, value: unused}
+            - {name: POSTGRES_DB, value: finance}
+          args: ["-c", "ssl=on", "-c", "ssl_cert_file=/certs/server.crt", "-c", "ssl_key_file=/certs/server.key",
+                 "-c", "ssl_ca_file=/certs/ca.crt", "-c", "hba_file=/init/pg_hba.conf"]
+          volumeMounts:
+            - {name: certs, mountPath: /certs}
+            - {name: init, mountPath: /docker-entrypoint-initdb.d/init.sql, subPath: init.sql}
+            - {name: init, mountPath: /init/pg_hba.conf, subPath: pg_hba.conf}
+          readinessProbe: {exec: {command: [pg_isready, -U, postgres]}, periodSeconds: 3}
+      volumes:
+        - {name: tls-in, secret: {secretName: postgres-tls}}
+        - {name: certs, emptyDir: {}}
+        - {name: init, configMap: {name: postgres-init}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: postgres}
+spec: {selector: {app: postgres}, ports: [{port: 5432}]}
