@@ -43,7 +43,6 @@ from app.pipeline.applies import ApplyEngine, ApplyRunner, ApplyStore, recover_i
 from app.pipeline.candidate import CandidateStore
 from app.pipeline.engine import AdminEngine, Engine
 from app.pipeline.maintenance import MaintenanceStore
-from app.pipeline.retired import carry_over_event_listener
 from app.pipeline.snapshots import SnapshotStore
 from app.pipeline.validation import VALIDATION_SELECTOR
 from app.pipeline.validations import ValidationRunner, ValidationStore
@@ -93,8 +92,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             url=settings.trino_url,
             user=settings.trino_user,
             ca_file=settings.ca_file,
-            auth_certificate_file=settings.trino_auth_certificate_file,
-            auth_key_file=settings.trino_auth_key_file,
         )
 
     def build(engine: type[Engine], apply_id: str) -> ApplyEngine:
@@ -221,9 +218,6 @@ async def _write_missing_secrets(app: FastAPI, settings: Settings) -> None:
     """
     while True:
         try:
-            # First, so a Secret written below already reflects it. Idempotent: once carried,
-            # the Admin values hold a listener and this does nothing.
-            await carry_over_event_listener(app.state.snapshot_store, app.state.admin_store)
             await secrets_bootstrap.write_missing(
                 app.state.kubernetes, settings, app.state.snapshot_store, app.state.admin_store
             )

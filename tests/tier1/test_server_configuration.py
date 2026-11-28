@@ -632,7 +632,7 @@ async def test_a_failed_admin_apply_puts_the_previous_properties_back_and_restar
 async def test_a_mount_under_the_config_directory_that_is_not_apchis_refuses_the_apply(
     applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
 ) -> None:
-    """The ninth precondition, through the API: a chart that mounts a file of its own under
+    """The foreign-mount precondition, through the API: a chart that mounts a file of its own under
     /etc/trino again is refused before anything is written."""
     fake_kubernetes.pod_spec["containers"][0]["volumeMounts"].append(
         {"name": "chart", "mountPath": "/etc/trino/exchange-manager.properties", "subPath": "x"}

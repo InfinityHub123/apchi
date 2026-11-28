@@ -4,7 +4,7 @@ It configures the Trino this release runs, Trino {{ .Values.trino.image.tag }}:
 
   coordinator  {{ include "trino.coordinatorName" . }}
   workers      {{ include "trino.workerName" . }} ({{ .Values.trino.worker.replicas }})
-  endpoint     {{ include "trino.url" . }}
+  endpoint     {{ include "trino.discoveryUri" . }}
 
 One coordinator, by design rather than by omission: Trino cannot drain a coordinator, so a
 configuration change that needs a restart destroys every running query. See ADR-0003.

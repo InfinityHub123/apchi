@@ -100,11 +100,8 @@ queries disagree. `requests` also reads `REQUESTS_CA_BUNDLE` while httpx reads
 `SSL_CERT_FILE`, so none of this is left to the environment. httpx additionally deprecates
 both a path-valued `verify` and `cert` in favour of an `ssl.SSLContext`.
 
-**Read once, at startup, and never again** — and the certificate Apchi *presents* is a copy
-`app.trust` owns, not the mounted file. Same reason, pointing the other way: `requests` is
-handed the two paths and reopens them at every handshake, where httpx holds the bytes, so
-against a rotating Secret the query session and the liveness check presented two different
-identities. Reloading was rejected: PyMongo keeps the context it builds with the client, so
+**Read once, at startup, and never again.** Apchi presents a certificate only to MongoDB; it
+reaches Trino over the in-namespace HTTP port with a user name (#295). Reloading was rejected: PyMongo keeps the context it builds with the client, so
 MongoDB cannot follow without being rebuilt, and a CA reloaded for Trino alone splits trust
 across destinations. So a rotation needs a pod restart — logged with the file's name, and
 never a refusal, because what Apchi loaded still works until the destination stops accepting
@@ -184,8 +181,7 @@ await self._wait_for_rules_reload()
 
 ## Logging
 
-A `LOG_LEVEL` setting, defaulting to `INFO`, and `LOG_JSON`; `environment` is deprecated and
-decides those two defaults only until it is removed. An `APCHI_` variable that is not a
+A `LOG_LEVEL` setting, defaulting to `INFO`, and `LOG_JSON`. An `APCHI_` variable that is not a
 setting stops Apchi starting -- add a field before you add a variable. A
 `contextvar` carries the id of the Apply in progress into every record, so one id yields the
 whole story of a failure. Log resource names and diff summaries (`catalogs: +finance_pg`); a

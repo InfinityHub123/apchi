@@ -29,7 +29,7 @@ MOUNT_DIR = "/etc/trino/access-control"
 MOUNT_PATH = f"{MOUNT_DIR}/{RULES_KEY}"
 
 #: Where Trino reads which access control to use, and how often to re-read its rules. The
-#: Admin's file, not Apchi's -- but Apchi depends on one property in it, so it checks.
+#: Cluster's copy is rendered with the Server Configuration (ADR-0010).
 PROPERTIES_PATH = "/etc/trino/access-control.properties"
 
 #: Without this, Trino reads the rules once at startup and never again -- and Apchi would
@@ -37,9 +37,7 @@ PROPERTIES_PATH = "/etc/trino/access-control.properties"
 REFRESH_PERIOD = "security.refresh-period"
 
 #: What the validation probe is given, so that it *reads* the rules rather than merely
-#: holding them: a file Trino was not told to read is a file Trino never rejects. The
-#: Cluster's copy of this file is the Admin's, and Apchi checks one property in it (§16);
-#: the probe is Apchi's own, so Apchi writes the whole thing.
+#: holding them: a file Trino was not told to read is a file Trino never rejects.
 PROBE_PROPERTIES = (
     f"access-control.name=file\n{REFRESH_PERIOD}=1s\nsecurity.config-file={MOUNT_PATH}\n"
 )

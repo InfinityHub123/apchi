@@ -25,7 +25,7 @@ from typing import Any, Final, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.errors import UnprocessablePayload
-from app.sections import RETIRED_SECTIONS, SectionName
+from app.sections import SectionName
 from app.sections.admin import AdminValues
 from app.sections.base import Section, ValidationFailure
 from app.sections.registry import REGISTERED, SECTIONS
@@ -196,23 +196,6 @@ def problems_with(sections: dict[str, dict[str, Any]]) -> list[ValidationFailure
         )
     for key in sorted(sections):
         section = known.get(key)
-        if section is None and key in RETIRED_SECTIONS:
-            # Refused rather than dropped, unless empty: an export from before #269 can carry
-            # a listener, and importing it with the listener silently lost would stop query
-            # events with nothing saying so.
-            if sections[key]:
-                problems.append(
-                    ValidationFailure(
-                        reason=(
-                            f"{key!r} is no longer a Section: the Event Listener is the "
-                            "Admin's, as "
-                            "event-listener.properties in the coordinator's Server "
-                            "Configuration. Set it there, and write this Section as {} or "
-                            "leave it out."
-                        ),
-                    )
-                )
-            continue
         if section is None:
             problems.append(
                 ValidationFailure(
@@ -243,8 +226,4 @@ def accepted(document: _Document) -> Sections:
         )
     # Narrowed only now: `problems_with` has established every key is a Section name, which
     # is what the plain-string typing above bought.
-    # And without an empty retired Section, which an old export may still carry.
-    return cast(
-        Sections,
-        {name: value for name, value in document.sections.items() if name not in RETIRED_SECTIONS},
-    )
+    return cast(Sections, document.sections)
