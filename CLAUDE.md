@@ -135,13 +135,16 @@ faked; tier 2 runs against a real cluster and is marked `tier2`.
 
 `pytest tests/tier1` runs the whole suite in one process, in a bit over three minutes.
 
-**Tier 2 is sharded positionally**, four ways, by
-`ls tests/tier2/test_*.py | awk "NR % 4 == <shard> % 4"`. So **adding a tier 2 file reshuffles
-every shard**, and a test that depends on what ran before it starts failing somewhere else.
-Before pushing a new tier 2 file, compute its shard the way CI does and run that shard
-locally -- which is cheaper than three CI cycles, and is how the last two reshuffles were
-caught. A tier 2 test that changes the Cluster deliberately puts it back itself, rather than
-leaving the rest of its shard to tolerate it.
+**Tier 2 is sharded by measured cost**, four ways, by `scripts/tier2_shards.py`: each file's
+seconds are in `tests/tier2/durations.json`, and an unmeasured file counts as the median. So
+**adding or reweighting a tier 2 file can move others between shards**, and a test that depends
+on what ran before it starts failing somewhere else. Before pushing a new tier 2 file, print
+its shard with that script and run that shard locally. A tier 2 test that changes the Cluster
+deliberately puts it back itself, rather than leaving the rest of its shard to tolerate it.
+
+**A tier 2 test is a scenario, not one assertion.** Each Apply that restarts the coordinator
+costs about 40s, and putting the Cluster back after the test costs about 30s more, so tests
+that share a setup share one Apply and assert everything after it (#300).
 
 It used to hang -- 5519s and 18 timeouts, with no assertion ever failing -- which is what
 `scripts/tier1.sh` existed to work around. The cause was the test MongoDB's **open-file

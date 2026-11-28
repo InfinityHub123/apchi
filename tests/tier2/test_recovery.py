@@ -37,76 +37,66 @@ async def _apply(client: AsyncClient, timeout: float = 600.0) -> dict:
     raise AssertionError(f"Apply never settled; last={record.get('stage')}")
 
 
-async def test_a_revert_drops_a_catalog_for_real_and_the_drop_survives_a_restart(
+async def test_reverts_and_a_rollback_on_a_real_cluster(
     e2e_client: AsyncClient, forward: PortForward, real_kubernetes: RealKubernetes
 ) -> None:
-    await e2e_client.post("/api/v1/catalogs", json=ALPHA)
-    await _apply(e2e_client)
-    await e2e_client.post("/api/v1/catalogs", json=BETA)
-    await _apply(e2e_client)
+    """One history, recovered three ways. One scenario, because each recovery here is an Apply
+    and each test pays a restart again to be put back (#300).
 
-    effect = (await e2e_client.post("/api/v1/catalogs/revert", json={"snapshot": 1})).json()
-    assert effect["catalogs_dropped"] == ["beta"]
-    record = await _apply(e2e_client)
-
-    assert record["snapshot"] == 3
-    live = await Trino(url=f"http://127.0.0.1:{forward.port}").catalogs()
-    assert "alpha" in live
-    assert "beta" not in live
-    assert set(await real_kubernetes.read_secret(CATALOG_SEED_SECRET)) == {"alpha.properties"}
-
-    restart_coordinator()
-    forward.restart()
-
-    after_restart = await Trino(url=f"http://127.0.0.1:{forward.port}").catalogs()
-    assert "alpha" in after_restart
-    assert "beta" not in after_restart
-
-
-async def test_reverting_groups_restarts_the_coordinator_and_takes_effect(
-    e2e_client: AsyncClient, forward: PortForward, real_kubernetes: RealKubernetes
-) -> None:
-    """A recovery action for a rollout-required Section is not a paper change: it restarts
-    the Cluster, and the effect says so before an Operator asks for it."""
+    - **A catalog revert drops for real, and the drop survives the pod.** Removing a catalog
+      from Trino while leaving it in the Secret would bring it back at the next restart.
+    - **Reverting a rollout-required Section restarts the Cluster and says so first.** Both
+      reverts land in one Apply, so one restart.
+    - **A full rollback restores a Snapshot without modifying it.** Its content becomes a new
+      Snapshot's; the old one is untouched.
+    """
     from app.sections.resource_groups.generator import RULES_KEY
     from tests.conftest import RESTART_SECTION, change_the_restart, stage_a_restart
     from tests.tier2.conftest import RESOURCE_GROUPS_SECRET
 
+    def live() -> Trino:
+        return Trino(url=f"http://127.0.0.1:{forward.port}")
+
+    await e2e_client.post("/api/v1/catalogs", json=ALPHA)
     await stage_a_restart(e2e_client, limit=10)
     await _apply(e2e_client)
-
+    forward.restart()
+    await e2e_client.post("/api/v1/catalogs", json=BETA)
     await change_the_restart(e2e_client, limit=20)
     await _apply(e2e_client)
+    forward.restart()
 
-    effect = (await e2e_client.post("/api/v1/resource-groups/revert", json={"snapshot": 1})).json()
-    assert effect["cost"]["restarts_coordinator"] is True
-
+    catalogs = (await e2e_client.post("/api/v1/catalogs/revert", json={"snapshot": 1})).json()
+    assert catalogs["catalogs_dropped"] == ["beta"]
+    groups = (await e2e_client.post("/api/v1/resource-groups/revert", json={"snapshot": 1})).json()
+    assert groups["cost"]["restarts_coordinator"] is True
     record = await _apply(e2e_client)
+    forward.restart()
 
     assert record["snapshot"] == 3
     assert record["rolled_out"] is True
+    catalogs_live = await live().catalogs()
+    assert "alpha" in catalogs_live
+    assert "beta" not in catalogs_live
+    assert set(await real_kubernetes.read_secret(CATALOG_SEED_SECRET)) == {"alpha.properties"}
     delivered = await real_kubernetes.read_secret(RESOURCE_GROUPS_SECRET)
     assert '"hardConcurrencyLimit": 10' in delivered[RULES_KEY]
-    original = (await e2e_client.get("/api/v1/snapshots/1")).json()
-    assert (await e2e_client.get("/api/v1/snapshots/3")).json()["sections"][
-        RESTART_SECTION
-    ] == original["sections"][RESTART_SECTION]
+    first = (await e2e_client.get("/api/v1/snapshots/1")).json()
+    third = (await e2e_client.get("/api/v1/snapshots/3")).json()
+    assert third["sections"][RESTART_SECTION] == first["sections"][RESTART_SECTION]
 
+    restart_coordinator()
+    forward.restart()
+    assert "beta" not in await live().catalogs()
 
-async def test_a_full_rollback_restores_a_snapshot_without_modifying_it(
-    e2e_client: AsyncClient, forward: PortForward
-) -> None:
-    """Snapshot 1 becomes Snapshot 3's content. Snapshot 1 itself is untouched."""
-    await e2e_client.post("/api/v1/catalogs", json=ALPHA)
-    await _apply(e2e_client)
     await e2e_client.post("/api/v1/catalogs", json=BETA)
     await _apply(e2e_client)
-
     await e2e_client.post("/api/v1/candidate/rollback", json={"snapshot": 1})
-    await _apply(e2e_client)
+    record = await _apply(e2e_client)
 
-    original = (await e2e_client.get("/api/v1/snapshots/1")).json()
-    restored = (await e2e_client.get("/api/v1/snapshots/3")).json()
-    assert restored["sections"] == original["sections"]
-    assert original["apply_id"] != restored["apply_id"]
-    assert "beta" not in await Trino(url=f"http://127.0.0.1:{forward.port}").catalogs()
+    assert record["snapshot"] == 5
+    restored = (await e2e_client.get("/api/v1/snapshots/5")).json()
+    assert restored["sections"] == first["sections"]
+    assert first["apply_id"] != restored["apply_id"]
+    assert (await e2e_client.get("/api/v1/snapshots/1")).json() == first
+    assert "beta" not in await live().catalogs()

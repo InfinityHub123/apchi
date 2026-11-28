@@ -67,66 +67,6 @@ async def _settled(client: AsyncClient, apply_id: str, timeout: float = 600.0) -
     raise AssertionError(f"apply {apply_id} never finished")
 
 
-async def test_a_raw_file_is_listed_back_from_a_real_cluster(e2e_client: AsyncClient) -> None:
-    """The round trip through a real MongoDB and a real Kubernetes, before anything is
-    applied. Paths and sizes, never content."""
-    await _write(e2e_client, "apchi.raw-test=one\n")
-
-    listed = (await e2e_client.get(FILES)).json()
-
-    assert listed == [{"path": RAW_PATH, "bytes": len(b"apchi.raw-test=one\n")}]
-
-
-async def test_a_raw_file_reaches_the_coordinator(e2e_client: AsyncClient) -> None:
-    """The mount lands on the real Deployment, read back from the live object rather than from
-    Apchi's own record of what it believes it mounted -- the same reason §11 settles rollback
-    as a diff of two durable records: a mechanism that only agrees with itself proves
-    nothing."""
-    await _write(e2e_client, "apchi.raw-test=two\n")
-    started = await e2e_client.post(ADMIN_APPLIES, json={})
-    assert started.status_code == 202, started.text
-    await _settled(e2e_client, started.json()["id"])
-
-    assert RAW_PATH in mounted_paths(RAW_VOLUME)
-
-
-async def test_a_removed_raw_file_loses_its_mount(e2e_client: AsyncClient) -> None:
-    """Removing the content is not enough. Trino refuses to start when a file it was told to
-    read is missing, and a subPath mount of an absent Secret key becomes a directory it dies
-    reading -- so the mount has to go, not just the key."""
-    await _write(e2e_client, "apchi.raw-test=three\n")
-    first = await e2e_client.post(ADMIN_APPLIES, json={})
-    await _settled(e2e_client, first.json()["id"])
-
-    assert (await e2e_client.delete(f"{FILES}{RAW_PATH}")).status_code == 204
-    second = await e2e_client.post(ADMIN_APPLIES, json={})
-    await _settled(e2e_client, second.json()["id"])
-
-    assert RAW_PATH not in mounted_paths(RAW_VOLUME)
-
-
-async def test_a_file_trino_does_not_read_is_delivered_and_harmless(
-    e2e_client: AsyncClient,
-) -> None:
-    """Worth asserting, because assuming otherwise is what made this file wrong first time.
-
-    An arbitrary `.properties` file in `/etc/trino` is ignored by Trino, so nonsense in one is
-    delivered, changes nothing, and the Apply succeeds. That is not a hole in "if it works it
-    works" -- the file does work, in that nothing breaks. It does mean **Validation cannot
-    catch a typo in a path**: an Admin who means `config.properties` and writes
-    `config.propertie` gets a clean Apply and no effect. The listing reporting paths is what
-    makes that visible.
-    """
-    await _write(e2e_client, "this-is-not-a-trino-property=whatever\n")
-
-    started = await e2e_client.post(ADMIN_APPLIES, json={})
-    assert started.status_code == 202, started.text
-    record = await _settled(e2e_client, started.json()["id"])
-
-    assert record["stage"] == "succeeded", record
-    assert record["snapshot"] is None, "an Admin Apply creates no Snapshot (§14)"
-
-
 def _coordinator_pod() -> str:
     pods = json.loads(
         kubectl("get", "pods", "-l", "app.kubernetes.io/component=coordinator", "-o", "json")
@@ -142,20 +82,42 @@ async def _admin_apply(client: AsyncClient) -> dict:
     return await _settled(client, started.json()["id"], timeout=900.0)
 
 
-async def test_trino_reads_raw_files_delivered_with_the_server_configuration(
+async def test_raw_files_from_delivery_through_a_sync_to_removal(
     e2e_client: AsyncClient, forward: PortForward, settings: Settings
 ) -> None:
-    """The assertion that proves delivery: Trino's own session property manager, configured
-    entirely by two raw files, sets a session default for Apchi's identity -- and a Server
-    Configuration property arrives in the same Admin Apply, for one restart."""
+    """One Admin Apply carrying every kind of raw file, then what happens to them after.
+
+    One scenario rather than a test per assertion, because each Apply here restarts the
+    coordinator and each test pays a restart again to be put back (#300).
+
+    - **Listed back** through a real MongoDB and Kubernetes before anything is applied: paths
+      and sizes, never content.
+    - **Delivered**: the mount lands on the live Deployment, read back from the object rather
+      than from Apchi's own record -- a mechanism that only agrees with itself proves nothing.
+    - **Read by Trino**: its own session property manager, configured entirely by two raw
+      files, sets a session default for Apchi's identity, and a Server Configuration property
+      arrives in the same Apply, for one restart.
+    - **A file Trino does not read is harmless.** Nonsense in an arbitrary `.properties` file
+      is delivered and changes nothing, which also means Validation cannot catch a typo in a
+      path; the listing is what makes that visible. And an Admin Apply makes no Snapshot.
+    - **It survives a sync** of the Deployment as the chart renders it, client- and
+      server-side, as Argo CD's sync does.
+    - **Removed, it loses its mount.** Removing the key is not enough: a subPath mount of an
+      absent key becomes a directory Trino dies reading.
+    """
+    nonsense = "this-is-not-a-trino-property=whatever\n"
     rules = [
         {
             "user": f"{settings.trino_user}.*",
             "sessionProperties": {"query_max_execution_time": "7h"},
         }
     ]
+    await _write(e2e_client, nonsense)
     await _write(e2e_client, SESSION_CONTENT, path=SESSION_CONFIG)
     await _write(e2e_client, json.dumps(rules), path=SESSION_RULES)
+    listed = {entry["path"]: entry["bytes"] for entry in (await e2e_client.get(FILES)).json()}
+    assert listed[RAW_PATH] == len(nonsense.encode())
+    assert set(listed) == {RAW_PATH, SESSION_CONFIG, SESSION_RULES}
     response = await e2e_client.put(
         "/api/v1/admin/server-configuration",
         json={"coordinator": {"config.properties": {"query.max-run-time": "5h"}}},
@@ -165,12 +127,27 @@ async def test_trino_reads_raw_files_delivered_with_the_server_configuration(
     record = await _admin_apply(e2e_client)
 
     assert record["stage"] == "succeeded", record
+    assert record["snapshot"] is None, "an Admin Apply creates no Snapshot (§14)"
     assert [event["stage"] for event in record["history"]].count("rolling_out") == 1
+    assert {RAW_PATH, SESSION_CONFIG, SESSION_RULES} <= set(mounted_paths(RAW_VOLUME))
     forward.restart()
     trino = Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
     shown = {row[0]: row[1] for row in await trino.query("SHOW SESSION LIKE 'query_max_%'")}
     assert shown["query_max_execution_time"] == "7h", "the raw files were not read"
     assert shown["query_max_run_time"] == "5.00h", "the server configuration was not read"
+
+    server_config = _live_secret(SERVER_CONFIG_SECRET)
+    coordinator = str(Path(__file__).resolve().parents[2] / "deploy/trino-dev/10-coordinator.yaml")
+    kubectl("apply", "-f", coordinator)
+    kubectl("apply", "--server-side", "--force-conflicts", "-f", coordinator)
+    kubectl("rollout", "status", COORDINATOR, "--timeout=600s")
+    assert {RAW_PATH, SESSION_CONFIG, SESSION_RULES} <= set(mounted_paths(RAW_VOLUME))
+    assert _live_secret(SERVER_CONFIG_SECRET) == server_config
+
+    for path in (RAW_PATH, SESSION_CONFIG, SESSION_RULES):
+        assert (await e2e_client.delete(f"{FILES}{path}")).status_code == 204
+    assert (await _admin_apply(e2e_client))["stage"] == "succeeded"
+    assert not {RAW_PATH, SESSION_CONFIG, SESSION_RULES} & set(mounted_paths(RAW_VOLUME))
 
 
 @pytest.mark.parametrize(
@@ -220,24 +197,3 @@ async def test_a_raw_file_at_a_file_apchi_renders_is_refused(
 
     assert response.status_code == 422, response.text
     assert "/api/v1/admin/server-configuration" in response.json()["message"]
-
-
-async def test_a_raw_file_survives_a_sync_of_the_deployment(
-    e2e_client: AsyncClient, settings: Settings
-) -> None:
-    """What Argo CD's sync does: re-apply the Deployment as the chart renders it, which does not
-    know about the raw file's mount. Measured on kind, both client- and server-side, before
-    this was written: a mount at a path the manifest does not name is left alone."""
-    await _write(e2e_client, SESSION_CONTENT, path=SESSION_CONFIG)
-    await _write(e2e_client, "[]", path=SESSION_RULES)
-    assert (await _admin_apply(e2e_client))["stage"] == "succeeded"
-    server_config = _live_secret(SERVER_CONFIG_SECRET)
-
-    coordinator = str(Path(__file__).resolve().parents[2] / "deploy/trino-dev/10-coordinator.yaml")
-    kubectl("apply", "-f", coordinator)
-    kubectl("apply", "--server-side", "--force-conflicts", "-f", coordinator)
-    kubectl("rollout", "status", COORDINATOR, "--timeout=600s")
-
-    assert SESSION_CONFIG in mounted_paths(RAW_VOLUME)
-    assert SESSION_RULES in mounted_paths(RAW_VOLUME)
-    assert _live_secret(SERVER_CONFIG_SECRET) == server_config

@@ -69,19 +69,24 @@ async def test_a_pattern_java_rejects_fails_validation_saying_why(e2e_client: As
     assert failure["reason"], "and given Trino's own words, which exist only in the pod's log"
 
 
-async def test_an_applied_pattern_maps_a_principal_on_the_real_cluster(
-    e2e_client: AsyncClient, forward: PortForward
+async def test_an_applied_pattern_in_force_on_the_real_cluster(
+    e2e_client: AsyncClient, forward: PortForward, settings: Settings
 ) -> None:
-    """The whole slice end to end: staged, validated, written, rolled out, in force.
+    """The whole slice end to end -- staged, validated, written, rolled out, in force -- and
+    what that does to three callers. One Apply, because each restarts the coordinator and each
+    test pays a restart again to be put back (#300).
 
-    What the mapped identity looks like from outside takes a moment to explain. Insecure
-    authentication takes the principal from `X-Trino-User`, which is also where the session
-    user comes from -- so a pattern that renames leaves the two disagreeing, and Trino
-    refuses the query as an impersonation attempt. The refusal names the identity the
-    mapping produced, which is exactly what this test needs to see: with no pattern applied
-    the principal would have stayed `Alice@example.com` and there would be nothing to
-    impersonate. Under certificate authentication the two come from different places -- the
-    certificate and the header -- and a client simply presents its mapped name.
+    - **A principal the pattern matches is mapped.** Insecure authentication takes the
+      principal from `X-Trino-User`, which is also where the session user comes from -- so a
+      pattern that renames leaves the two disagreeing, and Trino refuses the query as an
+      impersonation attempt naming the mapped identity. With no pattern applied the principal
+      would have stayed `Alice@example.com` and there would be nothing to impersonate. Under
+      certificate authentication the two come from different places and a client simply
+      presents its mapped name.
+    - **Apchi can still reach a Cluster whose pattern excludes it.** Its reserved rule is
+      first, and first match wins; Verification passing is already the proof.
+    - **A principal no pattern matches keeps the name it presented.** Apchi's catch-all is
+      last, so configuring a pattern does not start refusing everyone it does not cover.
     """
     await e2e_client.put("/api/v1/certificate-mapping", json=EXCLUDES_APCHI)
 
@@ -89,37 +94,11 @@ async def test_an_applied_pattern_maps_a_principal_on_the_real_cluster(
 
     assert record["stage"] == "succeeded", record
     forward.restart()
-    alice = Trino(url=f"http://127.0.0.1:{forward.port}", user="Alice@example.com")
+
+    def caller(user: str) -> Trino:
+        return Trino(url=f"http://127.0.0.1:{forward.port}", user=user)
+
     with pytest.raises(TrinoUserError, match="User alice cannot impersonate"):
-        await alice.query("SELECT current_user")
-
-
-async def test_apchi_can_still_reach_a_cluster_whose_pattern_excludes_it(
-    e2e_client: AsyncClient, forward: PortForward, settings: Settings
-) -> None:
-    """An Operator pattern naming only their own certificates must not lock Apchi out of
-    the Cluster it manages. Verification passing is the proof it does not: Apchi's reserved
-    rule is first, and first match wins."""
-    await e2e_client.put("/api/v1/certificate-mapping", json=EXCLUDES_APCHI)
-
-    record = await _apply(e2e_client)
-
-    assert record["stage"] == "succeeded", record
-    forward.restart()
-    apchi = Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
-    assert await apchi.query("SELECT current_user") == [[settings.trino_user]]
-
-
-async def test_a_principal_no_pattern_matches_keeps_the_name_it_presented(
-    e2e_client: AsyncClient, forward: PortForward
-) -> None:
-    """Apchi's catch-all is last, so configuring a pattern does not start refusing everyone
-    it does not cover. What a caller may then do is Permissions' answer, not this file's."""
-    await e2e_client.put("/api/v1/certificate-mapping", json=EXCLUDES_APCHI)
-
-    record = await _apply(e2e_client)
-
-    assert record["stage"] == "succeeded", record
-    forward.restart()
-    stranger = Trino(url=f"http://127.0.0.1:{forward.port}", user="nobody")
-    assert await stranger.query("SELECT current_user") == [["nobody"]]
+        await caller("Alice@example.com").query("SELECT current_user")
+    assert await caller(settings.trino_user).query("SELECT current_user") == [[settings.trino_user]]
+    assert await caller("nobody").query("SELECT current_user") == [["nobody"]]
