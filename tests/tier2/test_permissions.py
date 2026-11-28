@@ -71,11 +71,19 @@ async def _until(trino: Trino, sql: str, allowed: bool) -> bool:
     return False
 
 
-async def test_a_grant_is_enforced_without_restarting_the_coordinator(
-    e2e_client: AsyncClient, forward: PortForward, real_kubernetes
+async def test_a_grant_is_enforced_as_written_without_restarting_the_coordinator(
+    e2e_client: AsyncClient, forward: PortForward, settings
 ) -> None:
-    """The whole point of this Section's engine: Trino re-reads the rules on a timer, so a
-    permission change reaches a busy Cluster without destroying a single query."""
+    """One Apply of one grant, and what it means on a real Trino. One scenario, because a
+    changed rules file costs each test a coordinator restart to be put back (#300).
+
+    - **No restart.** The whole point of this Section's engine: Trino re-reads the rules on a
+      timer, so a permission change reaches a busy Cluster without destroying a query.
+    - **A grant on one table is a grant on that table.** The names Apchi anchors are why: an
+      unanchored pattern would have granted more than the Operator wrote.
+    - **Nobody loses access.** The catch-all is still there: staging a grant records intent.
+    - **Apchi can still read what Verification needs**, which is the reserved rule's job.
+    """
     before = pod_template()
     assert (await e2e_client.post("/api/v1/catalogs", json=BENCH)).status_code == 201
     await e2e_client.post("/api/v1/permissions", json=READ_NATION)
@@ -84,28 +92,9 @@ async def test_a_grant_is_enforced_without_restarting_the_coordinator(
 
     assert record["stage"] == "succeeded", record
     assert pod_template() == before, "the pod template was never touched"
-
     alice = Trino(url=f"http://127.0.0.1:{forward.port}", user="alice")
     assert await _until(alice, "SELECT count(*) FROM bench.tiny.nation", allowed=True)
-
-
-async def test_the_generated_file_is_one_a_real_trino_enforces_as_written(
-    e2e_client: AsyncClient, forward: PortForward, settings
-) -> None:
-    """A grant on one table is a grant on that table. The names Apchi anchors are why: an
-    unanchored pattern would have granted more than the Operator wrote."""
-    assert (await e2e_client.post("/api/v1/catalogs", json=BENCH)).status_code == 201
-    await e2e_client.post("/api/v1/permissions", json=READ_NATION)
-
-    record = await _apply(e2e_client)
-
-    assert record["stage"] == "succeeded", record
-    alice = Trino(url=f"http://127.0.0.1:{forward.port}", user="alice")
-    assert await _until(alice, "SELECT count(*) FROM bench.tiny.nation", allowed=True)
-    # Still allowed on everything else, because the catch-all is still there: staging a
-    # grant records intent, it does not revoke anyone's access.
     assert await _answers(alice, "SELECT count(*) FROM bench.tiny.region")
-    # And Apchi can still read what Verification needs, which is the reserved rule's job.
     apchi = Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
     assert await _answers(apchi, "SELECT 1 FROM system.runtime.nodes LIMIT 1")
 

@@ -36,11 +36,18 @@ async def _apply(client: AsyncClient, timeout: float = 900.0) -> dict:
     raise AssertionError("Apply never settled")
 
 
-async def test_a_selector_routing_apchi_is_verified_on_the_real_cluster(
+async def test_selectors_route_apchi_and_everyone_else_on_the_real_cluster(
     e2e_client: AsyncClient, forward: PortForward, settings
 ) -> None:
-    """The Apply passes because the coordinator really did adopt the file: the query landed
-    in the group the selectors named, and Verification read that back from Trino."""
+    """One Apply and both sides of the selector. One scenario, because the Apply restarts the
+    coordinator and each test pays a restart again to be put back (#300).
+
+    - **Apchi's own queries are routed by its own source**, and the Apply passes because the
+      coordinator really did adopt the file: Verification read the group back from Trino.
+    - **Another identity falls through to the Operator's own rule.** Apchi's rule is nothing
+      reserved: it is the Operator's selector, and everyone else goes where the rules beneath
+      it say.
+    """
     for group in (VERIFICATION, EVERYTHING):
         created = await e2e_client.post("/api/v1/resource-groups", json=group)
         assert created.status_code == 201, created.json()
@@ -58,38 +65,15 @@ async def test_a_selector_routing_apchi_is_verified_on_the_real_cluster(
 
     assert record["stage"] == "succeeded", record
     forward.restart()
-    trino = Trino(url=f"http://127.0.0.1:{forward.port}", user=settings.trino_user)
-    ran = await trino.run("SELECT 1")
-    group = await trino.query(
-        f"SELECT resource_group_id FROM system.runtime.queries WHERE query_id = '{ran.query_id}'"
-    )
-    assert group[0][0] == ["verification"], "Apchi's own queries are routed by its own source"
 
+    async def group_of(user: str) -> list[str]:
+        trino = Trino(url=f"http://127.0.0.1:{forward.port}", user=user)
+        ran = await trino.run("SELECT 1")
+        rows = await trino.query(
+            "SELECT resource_group_id FROM system.runtime.queries "
+            f"WHERE query_id = '{ran.query_id}'"
+        )
+        return list(rows[0][0])
 
-async def test_another_identity_falls_through_to_the_operators_own_rule(
-    e2e_client: AsyncClient, forward: PortForward, settings
-) -> None:
-    """Apchi's reserved-looking rule is nothing of the kind: it is the Operator's own
-    selector, and everyone else goes where the rules beneath it say."""
-    for group in (VERIFICATION, EVERYTHING):
-        await e2e_client.post("/api/v1/resource-groups", json=group)
-    await e2e_client.put(
-        "/api/v1/resource-groups/selectors",
-        json={
-            "selectors": [
-                {"user": settings.trino_user, "group": "verification"},
-                {"group": "everything"},
-            ]
-        },
-    )
-
-    record = await _apply(e2e_client)
-
-    assert record["stage"] == "succeeded", record
-    forward.restart()
-    other = Trino(url=f"http://127.0.0.1:{forward.port}", user="someone")
-    ran = await other.run("SELECT 1")
-    group = await other.query(
-        f"SELECT resource_group_id FROM system.runtime.queries WHERE query_id = '{ran.query_id}'"
-    )
-    assert group[0][0] == ["everything"]
+    assert await group_of(settings.trino_user) == ["verification"]
+    assert await group_of("someone") == ["everything"]

@@ -22,13 +22,9 @@ from app.adapters.kubernetes import (
     KubernetesAdapter,
 )
 from app.config import Settings
-from app.pipeline.coordinator import Container, PodSpec, Volume, VolumeMount, content_at, provides
+from app.pipeline.coordinator import Container, PodSpec, Volume, VolumeMount
 from app.pipeline.files import admin_mounted_secrets, credential_secrets, owned_paths
-from app.sections.permissions.generator import PROPERTIES_PATH, REFRESH_PERIOD
 from app.sections.registry import REGISTERED
-from app.sections.server_configuration import (
-    CONFIG_PROPERTIES as _CONFIG_PROPERTIES,
-)
 from app.sections.server_configuration import LISTENER_DIR, ROLE_PATHS, Role, secret_name
 
 __all__ = [
@@ -52,10 +48,6 @@ class PreconditionFailed(Exception):
         super().__init__(" ".join(problems))
 
 
-#: The directory `access-control.properties` sits in, for the message when nothing provides
-#: either it or the file.
-_PROPERTIES_DIR = str(PurePosixPath(PROPERTIES_PATH).parent)
-
 _CONFIG_DIR = "/etc/trino"
 
 
@@ -68,9 +60,8 @@ def _covers(mount_path: str, directory: str) -> bool:
 async def check(kubernetes: KubernetesAdapter, spec: PodSpec, settings: Settings) -> None:
     """Raises PreconditionFailed listing everything wrong, not just the first thing.
 
-    Takes the adapter because one of these cannot be answered from the pod template alone:
-    whether Trino was told to re-read the rules file Apchi writes is in the Admin's
-    configuration, which has to be read.
+    Takes the adapter because the workers' pod template is read as well as the
+    coordinator's.
     """
     volumes = {volume.name: volume for volume in spec.volumes}
     # Read from the registry rather than named here, so a Section that starts writing a
@@ -145,13 +136,7 @@ async def check(kubernetes: KubernetesAdapter, spec: PodSpec, settings: Settings
                     f"removes its own volume {expected!r} there; remove this mount."
                 )
 
-    # 5. Trino must be told to re-read the rules. Without `security.refresh-period` it reads
-    #    them once at startup and never again, so Apchi would write a permission change,
-    #    report success, and the Cluster would never see it (§13.4). The one precondition
-    #    that reads the Admin's configuration rather than their pod template.
-    problems.extend(await _refresh_period_problems(kubernetes, spec, volumes))
-
-    # 6. Apchi's single-file mounts need a parent directory the kubelet can bind into. A
+    # 5. Apchi's single-file mounts need a parent directory the kubelet can bind into. A
     #    subPath mount of one key at a path inside a ConfigMap or Secret directory mount has
     #    no file to bind onto -- the key is not in that read-only volume -- and runc fails
     #    the container with "not a directory". The pod never starts, so Trino logs nothing
@@ -159,7 +144,7 @@ async def check(kubernetes: KubernetesAdapter, spec: PodSpec, settings: Settings
     #    official trino/trino chart, which mounts the whole of /etc/trino (§16).
     problems.extend(_directory_mounts_over_apchis_files(spec, volumes, apchi_owned))
 
-    # 7. A volume holding a credential must be restricted, and still readable. The kubelet
+    # 6. A volume holding a credential must be restricted, and still readable. The kubelet
     #    writes a Secret volume's files 0644 and root-owned unless the pod asks otherwise,
     #    so the default for a private key is world-readable -- and libpq refuses a key file
     #    like that outright, which makes this one visible as a broken connector rather than
@@ -167,14 +152,7 @@ async def check(kubernetes: KubernetesAdapter, spec: PodSpec, settings: Settings
     #    because it is the only one whose subject is on both Deployments (#184).
     problems.extend(await _credential_exposure_problems(kubernetes, spec, settings))
 
-    # 8. Trino must be willing to accept the connection Apchi is configured to make. Every
-    #    authentication type Trino supports requires TLS, and with an authenticator enabled
-    #    alongside HTTPS it disables plain HTTP for all clients -- so a Cluster that
-    #    authenticates its callers does not answer Apchi on http at all, and the symptom is
-    #    every query timing out with nothing to read (#188).
-    problems.extend(await _unreachable_coordinator_problems(kubernetes, spec, settings))
-
-    # 9. Nothing under /etc/trino is mounted from a volume Apchi does not write. Apchi renders
+    # 7. Nothing under /etc/trino is mounted from a volume Apchi does not write. Apchi renders
     #    every file there (ADR-0010), and a file of anyone else's would either be replaced by
     #    Apchi's mount at the same path -- Kubernetes merges mounts by path, measured on kind --
     #    or would put back into the directory a second owner that Apchi cannot see.
@@ -241,9 +219,6 @@ def apchi_secrets(settings: Settings) -> set[str]:
         settings.server_configuration_secret_name,
         settings.worker_server_configuration_secret_name,
         settings.raw_files_secret_name,
-        # Not written any more, but an older Apchi mounted it under /etc/trino, and it stays
-        # there until the first Admin Apply takes it off (#269).
-        settings.event_listener_secret_name,
     }
 
 
@@ -291,22 +266,17 @@ async def _credential_exposure_problems(
 ) -> list[str]:
     """Credential-bearing volumes either role would expose on disk.
 
-    **Both Deployments**, unlike every other precondition here. The rest are about files only
-    a coordinator reads -- the seed initContainer, the access-control properties, the
-    pointers -- and asserting them on a worker would refuse every correct deployment. This one
+    **Both Deployments**, like the check that every file is Apchi's. The rest are about what
+    only a coordinator has -- the seed initContainer, the catalog store -- and asserting them
+    on a worker would refuse every correct deployment. This one
     is about a private key, and a worker holds those: a connector presenting a certificate to
     a data source runs there (ADR-0005), so the chart mounts the certificate volume on both
     roles and a key leaks on a worker exactly as it does on a coordinator.
     """
-    # Apchi's own volumes are the coordinator's and nowhere else: `deliver` patches one
-    # Deployment. So the worker is passed an empty set and every credential volume on it is
-    # the Admin's, which is the only reason the exemption below is safe to give at all.
-    problems = _exposure_in(
-        spec, "coordinator", settings, set(owned_paths(REGISTERED, settings).values())
-    )
+    problems = _exposure_in(spec, "coordinator", settings)
     worker = await _worker_spec(kubernetes, settings)
     if worker is not None:
-        problems.extend(_exposure_in(worker, "worker", settings, set()))
+        problems.extend(_exposure_in(worker, "worker", settings))
     return problems
 
 
@@ -329,9 +299,7 @@ async def _worker_spec(kubernetes: KubernetesAdapter, settings: Settings) -> Pod
     return pod_spec(raw)
 
 
-def _exposure_in(
-    spec: PodSpec, role: str, settings: Settings, apchi_mounted: set[str]
-) -> list[str]:
+def _exposure_in(spec: PodSpec, role: str, settings: Settings) -> list[str]:
     """One role's credential-bearing volumes, and what is wrong with them.
 
     Two halves, because each is useless alone: without a mode the kubelet writes 0644, and
@@ -340,13 +308,8 @@ def _exposure_in(
     reachable at all: the kubelet ORs `roMask` 0440 into the mode of a readOnly mount, which
     was measured on a live cluster rather than inferred (§13.2).
 
-    Only the volumes the **Admin** mounts are checked for their mode -- `apchi_mounted`
-    names the rest -- and that is a correctness requirement rather than politeness. Apchi
-    sets the mode on its own mounts itself, during Apply, so refusing one of those here
-    would refuse the only thing that could fix it and an upgrade from a version that
-    mounted them bare would deadlock. The `fsGroup` is checked for everyone, because Apchi
-    cannot add one: the pod's securityContext is the Admin's, and a 0640 file with no group
-    Trino belongs to is a pod that cannot read its own keys.
+    Every credential volume is the chart's to mount, so the fix for each is the chart's too:
+    Apchi mounts none of them during an Apply.
 
     Both the absent mode and the permissive one are reported, and on a live cluster it is
     always the second: the API server fills `defaultMode` in with 0644 when a Secret volume
@@ -367,27 +330,21 @@ def _exposure_in(
         return []
 
     if settings.restricted_pod_security:
-        return _restricted_exposure(mounted, role, apchi_mounted)
+        return _restricted_exposure(mounted, role)
 
     if spec.fs_group is None:
-        # The closing clause only on the coordinator, because Apply patches one Deployment:
-        # telling an Admin that Apchi will restrict the worker's files would be a promise
-        # Apchi does not keep, and the whole of the fix there is theirs.
-        follows = " Apchi then restricts the files it mounts itself." if apchi_mounted else ""
         return [
             f"The {role} mounts {', '.join(sorted(volume.name for volume in mounted))}, which "
             f"hold credentials, but sets no securityContext.fsGroup. A Secret volume's files "
             f"are owned by root whatever the container runs as, so without a group Trino "
             f"belongs to they can only be world-readable or unreadable. Set "
-            f"securityContext.fsGroup to the group Trino runs as ({TRINO_GROUP}).{follows}"
+            f"securityContext.fsGroup to the group Trino runs as ({TRINO_GROUP})."
         ]
 
     # The volume is named rather than the Secret behind it, because the fix -- a file mode --
     # is made on the volume.
     problems: list[str] = []
     for volume in mounted:
-        if volume.name in apchi_mounted:
-            continue
         mode = volume.default_mode
         if mode is None:
             problems.append(
@@ -406,7 +363,7 @@ def _exposure_in(
     return problems
 
 
-def _restricted_exposure(mounted: list[Volume], role: str, apchi_mounted: set[str]) -> list[str]:
+def _restricted_exposure(mounted: list[Volume], role: str) -> list[str]:
     """The same check where the platform forbids an `fsGroup`, as restricted-v2 does.
 
     There a credential can only be world-readable or unreadable -- the pod runs as an
@@ -416,7 +373,7 @@ def _restricted_exposure(mounted: list[Volume], role: str, apchi_mounted: set[st
     """
     problems: list[str] = []
     for volume in mounted:
-        if volume.name in apchi_mounted or volume.default_mode is None:
+        if volume.default_mode is None:
             continue
         if volume.default_mode & _WRITE_OR_EXECUTE:
             problems.append(
@@ -472,121 +429,6 @@ def _directory_mounts_over_apchis_files(
                 f"{mount.mount_path} one at a time instead of mounting the whole directory."
             )
     return problems
-
-
-async def _refresh_period_problems(
-    kubernetes: KubernetesAdapter, spec: PodSpec, volumes: dict[str, Volume]
-) -> list[str]:
-    """Whether the access-control properties Trino reads set a refresh period.
-
-    Found through the pod template rather than configured in Apchi: whichever volume
-    provides Trino's `access-control.properties` is the file in force, and its content is in
-    the ConfigMap or Secret behind that volume. Apchi reads it and nothing else from there --
-    the rest of that file is the Admin's business.
-
-    "Provides" means the file itself or the directory containing it, and getting that wrong
-    refused a deployment for a file that was mounted all along. `coordinator` owns that
-    question, so the preconditions answer it one way.
-    """
-    for container in spec.containers:
-        mount = provides(container, PROPERTIES_PATH)
-        if mount is None:
-            continue
-        if volumes.get(mount.name) is None:
-            continue
-        content = await content_at(kubernetes, spec, PROPERTIES_PATH, container.name)
-        if content is None:
-            return [
-                f"Container {container.name!r} mounts {mount.name!r} at "
-                f"{mount.mount_path}, which should provide {PROPERTIES_PATH}, but Apchi "
-                f"cannot read what is in it, so it cannot tell whether {REFRESH_PERIOD} "
-                "is set."
-            ]
-        if any(line.strip().startswith(f"{REFRESH_PERIOD}=") for line in content.splitlines()):
-            return []
-        return [
-            f"{PROPERTIES_PATH} does not set {REFRESH_PERIOD}. Without it Trino reads "
-            "the access-control rules once at startup and never again, so Apchi would "
-            "write a permission change, report success, and the Cluster would never "
-            "see it."
-        ]
-    return [
-        f"Nothing provides {PROPERTIES_PATH} -- neither that path nor the "
-        f"{_PROPERTIES_DIR} directory is mounted -- so Trino is not configured to read "
-        "the access-control rules Apchi writes. Every permission Apchi applies would be "
-        "written and ignored."
-    ]
-
-
-#: The properties that decide whether Trino will talk to Apchi at all. All three live in
-#: `config.properties`, which is the Admin's file, so reading it is the only way to know.
-_AUTHENTICATION_TYPE = "http-server.authentication.type"
-_ALLOW_INSECURE_OVER_HTTP = "http-server.authentication.allow-insecure-over-http"
-_HTTPS_ENABLED = "http-server.https.enabled"
-
-
-async def _unreachable_coordinator_problems(
-    kubernetes: KubernetesAdapter, spec: PodSpec, settings: Settings
-) -> list[str]:
-    """Whether the coordinator will refuse the scheme `trino_url` names.
-
-    Silent when `config.properties` cannot be read. A deployment that keeps it somewhere
-    Apchi cannot see gets no opinion here rather than a guess, which is why this is the one
-    precondition that can hold and still have missed something.
-    """
-    content = await content_at(kubernetes, spec, _CONFIG_PROPERTIES)
-    if content is None:
-        return []
-
-    def enabled(prop: str) -> bool:
-        return (_property_in(content, prop) or "false").strip().lower() == "true"
-
-    authenticator = _property_in(content, _AUTHENTICATION_TYPE)
-    apchi_uses_tls = settings.trino_url.startswith("https://")
-
-    if apchi_uses_tls and not enabled(_HTTPS_ENABLED):
-        # Logged, not refused. TLS terminated in front of Trino -- a sidecar, a mesh -- is a
-        # legitimate shape in which this property is absent and Apchi's https URL is still
-        # correct, so refusing here would reject a working Cluster. §16 refuses only what it
-        # knows is broken.
-        logger.warning(
-            "trino_url is https but the coordinator does not set %s; assuming TLS is "
-            "terminated in front of Trino",
-            _HTTPS_ENABLED,
-            extra={"trino_url": settings.trino_url},
-        )
-        return []
-
-    # The documented rule is conjunctive: HTTP is disabled when an authenticator is enabled
-    # *alongside HTTPS*. An authenticator without HTTPS is a coordinator that refuses to
-    # start, which is Verification's to report and not a scheme problem.
-    if authenticator and enabled(_HTTPS_ENABLED) and not enabled(_ALLOW_INSECURE_OVER_HTTP):
-        if not apchi_uses_tls:
-            return [
-                f"{_CONFIG_PROPERTIES} sets {_AUTHENTICATION_TYPE}={authenticator} with "
-                f"{_HTTPS_ENABLED}=true, and Trino then refuses plain HTTP from every client "
-                f"unless {_ALLOW_INSECURE_OVER_HTTP} is true -- which it is not. Apchi's "
-                f"trino_url is {settings.trino_url!r}, so no query it issues would be "
-                f"answered. Point trino_url at the coordinator's https:// URL."
-            ]
-        if settings.trino_auth_certificate_file is None and authenticator.upper() == "CERTIFICATE":
-            return [
-                f"{_CONFIG_PROPERTIES} sets {_AUTHENTICATION_TYPE}=CERTIFICATE, so Trino "
-                f"requires a certificate from every client including Apchi, and Apchi has "
-                f"none: trino_auth_certificate_file is unset. Give Apchi a certificate this "
-                f"Cluster's truststore accepts."
-            ]
-    return []
-
-
-def _property_in(content: str, prop: str) -> str | None:
-    """A Java properties value, or None. Last wins, as Trino's own loader does."""
-    found = None
-    for line in content.splitlines():
-        stripped = line.strip()
-        if stripped.startswith(f"{prop}="):
-            found = stripped.split("=", 1)[1].strip()
-    return found
 
 
 def pod_spec(raw: dict[str, Any]) -> PodSpec:

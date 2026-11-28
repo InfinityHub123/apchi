@@ -4,7 +4,7 @@ It configures the Trino this release runs, Trino {{ .Values.trino.image.tag }}:
 
   coordinator  {{ include "trino.coordinatorName" . }}
   workers      {{ include "trino.workerName" . }} ({{ .Values.trino.worker.replicas }})
-  endpoint     {{ include "trino.url" . }}
+  endpoint     {{ include "trino.discoveryUri" . }}
 
 One coordinator, by design rather than by omission: Trino cannot drain a coordinator, so a
 configuration change that needs a restart destroys every running query. See ADR-0003.
@@ -20,6 +20,8 @@ takes one catalog through review, validation, apply and rollback.
 
 Trino's pods wait in ContainerCreating until Apchi has started once: Apchi writes the Secrets
 they read -- its rules, its catalogs, Trino's own files -- and this chart creates none of them.
+Apchi writes a Secret only when it is missing, so after an upgrade that changes Trino's wiring
+-- trino.https.*, a port, a mount -- an Admin Apply delivers it: POST /api/v1/admin/applies.
 {{- if .Values.mongodb.deploy }}
 
 NOTE: mongodb.deploy is on, so this release includes a single-replica MongoDB on an
@@ -32,6 +34,13 @@ NOTE: rbac.create is off, so nothing granted this release access to Secrets, pod
 coordinator Deployment. Bind an equivalent Role to {{ include "apchi.serviceAccountName" . }}
 or every Apply will fail on the API server.
 {{- end }}
+{{- if eq .Values.auth.mode "none" }}
 
-Apchi has no authentication yet: every endpoint is open, the Admin ones included. Keep it
-reachable only by platform staff.
+NOTE: auth.mode is none, so every caller is treated as an Admin. Set auth.mode to password or
+sso before anyone but platform staff can reach Apchi.
+{{- end }}
+{{- if not .Values.trino.https.enabled }}
+
+NOTE: trino.https.enabled is off, so Trino serves plain HTTP and takes the user name a client
+sends as who it is. That is for development.
+{{- end }}

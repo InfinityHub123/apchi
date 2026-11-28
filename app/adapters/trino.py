@@ -14,7 +14,7 @@ from typing import Any, NamedTuple
 import httpx
 from fastapi.concurrency import run_in_threadpool
 
-from app.trust import bundled_ca, presented, verification
+from app.trust import bundled_ca, verification
 
 #: What Apchi's own queries report as their source. The client would otherwise send
 #: "trino-python-client", which says nothing about who is asking. Named so that an Operator
@@ -80,24 +80,7 @@ class Trino:
         url: str,
         user: str = "apchi",
         ca_file: str | None = None,
-        auth_certificate_file: str | None = None,
-        auth_key_file: str | None = None,
     ) -> None:
-        if (auth_certificate_file is None) != (auth_key_file is None):
-            raise ValueError(
-                "trino_auth_certificate_file and trino_auth_key_file go together: a "
-                "certificate without its key cannot be presented, and a key without its "
-                "certificate names nobody"
-            )
-        if auth_certificate_file is not None and not url.startswith("https://"):
-            # The client raises TrinoAuthError for this at connect time, which is once per
-            # query inside an Apply. Trino requires TLS under every authenticator it has, so
-            # the combination is wrong from the first second and is worth saying so then.
-            raise ValueError(
-                f"trino_url is {url!r}, but Apchi was given a certificate to authenticate "
-                "with and Trino requires TLS under every authentication type it supports. "
-                "Use an https:// URL"
-            )
         self._user = user
         # Passed to the client as its `host`, which takes a URL and derives the scheme, the
         # host and the port from it. That is the fix for #188: the client's own inference
@@ -108,16 +91,9 @@ class Trino:
         # store with whatever path it is given, so handing it the raw CA would make queries
         # distrust everything `is_starting` still trusted. See app.trust.
         self._ca_bundle = bundled_ca(ca_file)
-        # Copies app.trust owns, not the mounted paths. The client hands `requests` these
-        # two as paths and `requests` reopens them at every handshake, while httpx is given a
-        # context holding the bytes -- so against a rotating mount the two would present
-        # different certificates until the pod restarted (#193).
-        self._auth_certificate_file, self._auth_key_file = presented(
-            auth_certificate_file, auth_key_file
-        )
         # Built once, at startup: a path that does not exist should stop Apchi here rather
         # than inside `is_starting`, which reports every failure as "unreachable".
-        self._verification = verification(ca_file, self._auth_certificate_file, self._auth_key_file)
+        self._verification = verification(ca_file)
         self._connectors: frozenset[str] | None = None
         self._connectors_read_at: float | None = None
 
@@ -151,22 +127,11 @@ class Trino:
 
     def _execute(self, sql: str, patience: _Patience | None) -> Query:
         import trino
-        import trino.auth
 
-        # The constructor refuses one without the other, so the key is known to be present
-        # wherever the certificate is.
-        auth = (
-            trino.auth.CertificateAuthentication(
-                self._auth_certificate_file, str(self._auth_key_file)
-            )
-            if self._auth_certificate_file is not None
-            else None
-        )
         conn = trino.dbapi.connect(
             host=self._base,
             user=self._user,
             source=SOURCE,
-            auth=auth,
             # A path, where httpx needed a context. `requests` ignores SSL_CERT_FILE and
             # reads REQUESTS_CA_BUNDLE, so leaving this to the environment would mean two
             # variables for one coordinator.

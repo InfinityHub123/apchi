@@ -31,45 +31,7 @@ async def deliver(cluster: "Cluster") -> None:
             secret_name(role, cluster.settings),
             role_secret(role, cluster.admin.server_configuration, cluster.settings),
         )
-    await take_off_the_old_listener(cluster)
     logger.info("delivered the server configuration")
-
-
-async def take_off_the_old_listener(cluster: "Cluster") -> bool:
-    """Remove the mount the Event Listeners Section put on the coordinator, and its Secret.
-
-    The last time Apchi edits the coordinator's pod template for a listener (#269). Harmless
-    left in place -- with `event-listener.config-files` set, Trino ignores its default path
-    (measured on 483) -- but it is a volume the chart does not render, which Argo CD shows as
-    drift, over a Secret holding the listener's credentials that nothing writes any more.
-    Here rather than at startup, because restarting Apchi must never change the Cluster: an
-    Admin Apply is about to restart the coordinator anyway.
-    """
-    settings = cluster.settings
-    spec = await cluster.kubernetes.deployment_pod_spec(settings.coordinator_deployment_name)
-    volume = settings.event_listener_volume_name
-    if not any(v.get("name") == volume for v in spec.get("volumes", [])):
-        return False
-    paths = [
-        mount["mountPath"]
-        for container in spec.get("containers", [])
-        if container.get("name") == settings.trino_container_name
-        for mount in container.get("volumeMounts", [])
-        if mount.get("name") == volume
-    ]
-    await cluster.kubernetes.unmount_secret_files(
-        settings.coordinator_deployment_name,
-        settings.trino_container_name,
-        volume,
-        paths,
-        drop_volume=True,
-    )
-    await cluster.kubernetes.delete_secret(settings.event_listener_secret_name)
-    logger.warning(
-        "took the retired Event Listener mount off the coordinator",
-        extra={"volume": volume, "secret": settings.event_listener_secret_name},
-    )
-    return True
 
 
 async def changed_roles(cluster: "Cluster") -> set[Role]:

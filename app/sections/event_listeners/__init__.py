@@ -1,9 +1,6 @@
-"""Event Listener property schemas, and the name of the Section that held listeners once.
+"""Event Listener property schemas.
 
-The listener is the Admin's now, as `event-listener.properties` in the coordinator's Server
-Configuration (#269). What is left here is what that still uses -- the schemas a curated
-listener's properties are checked against -- and the retired Section's name, which a Snapshot
-written before the move still holds.
+The listener is the Admin's, as `event-listener.properties` in the coordinator's Server
+Configuration (#269). What is here is what that uses: the schemas a curated listener's
+properties are checked against.
 """
-
-SECTION = "event_listeners"

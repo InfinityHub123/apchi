@@ -36,19 +36,14 @@ from pymongo.asynchronous.database import AsyncDatabase
 
 from app.api.pages import BadCursor, Page, after, bounded, decode_cursor, encode_cursor
 from app.auth.identity import Via
-from app.sections import RetiredSectionName, SectionName
+from app.sections import SectionName
 
 logger = logging.getLogger(__name__)
 
 #: Where a change landed. The Sections, plus the two things that are not Sections: `admin` for
 #: low-level configuration and the mutation freeze (§3, §14), and `pipeline` for an Apply,
 #: which is about the whole Candidate rather than one Section.
-#:
-#: And every Section that has been retired, because the audit is history and outlives what it
-#: was about: an install that ran Event Listeners as a Section holds events in that category,
-#: and one unreadable event fails the whole page it is on (#269). Nothing records into it any
-#: more.
-Category = SectionName | RetiredSectionName | Literal["admin", "pipeline"]
+Category = SectionName | Literal["admin", "pipeline"]
 
 #: What was done. Past tense, because an event records something that already happened --
 #: writing one before the change lands would name an actor for something that never did.

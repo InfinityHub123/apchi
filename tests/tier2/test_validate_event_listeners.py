@@ -52,14 +52,20 @@ async def _admin_apply(client: AsyncClient, listener: dict[str, str]) -> dict:
     raise AssertionError(f"Apply never settled; last={record.get('stage')}")
 
 
-async def test_a_listener_a_real_trino_accepts_is_probed_and_applied(
-    e2e_client: AsyncClient, forwarded_kubernetes: ForwardedKubernetes
+async def test_a_listener_a_real_trino_accepts_is_probed_applied_and_cleaned_up(
+    e2e_client: AsyncClient,
+    forwarded_kubernetes: ForwardedKubernetes,
+    real_kubernetes: RealKubernetes,
 ) -> None:
-    """The probe starts with the listener file in place, and starting is the check."""
+    """The probe starts with the listener file in place, and starting is the check. A probe
+    brings a Secret with it, and an orphan of either kind is a leak. One Apply for both,
+    because it restarts the coordinator and each test pays a restart to be put back (#300)."""
     record = await _admin_apply(e2e_client, HTTP)
 
     assert record["stage"] == "succeeded", record.get("failure_reason")
     assert forwarded_kubernetes.created_pods, "the listener was never probed"
+    leftover = await real_kubernetes.delete_secrets(VALIDATION_SELECTOR)
+    assert leftover == [], f"validation Secrets left behind: {leftover}"
 
 
 async def test_a_kafka_listener_with_unreachable_brokers_never_reaches_the_cluster(
@@ -76,13 +82,3 @@ async def test_a_kafka_listener_with_unreachable_brokers_never_reaches_the_clust
     assert record["rollback"] is None, "nothing was touched, so nothing is owed"
     after = await real_kubernetes.rollout_state("trino-coordinator")
     assert after.generation == before.generation, "the pod template was never patched"
-
-
-async def test_the_probe_and_its_secret_are_both_gone_afterwards(
-    e2e_client: AsyncClient, real_kubernetes: RealKubernetes
-) -> None:
-    """A probe brings a Secret with it, and an orphan of either kind is a leak."""
-    await _admin_apply(e2e_client, HTTP)
-
-    leftover = await real_kubernetes.delete_secrets(VALIDATION_SELECTOR)
-    assert leftover == [], f"validation Secrets left behind: {leftover}"
