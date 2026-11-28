@@ -135,6 +135,12 @@ faked; tier 2 runs against a real cluster and is marked `tier2`.
 
 `pytest tests/tier1` runs the whole suite in one process, in a bit over three minutes.
 
+`tests/operator_sections` is a third suite with a CI job of its own: every Operator Section on
+the chart's default shape (HTTPS, sign-in by certificate), checked by connecting as people who
+hold certificates, against a PostgreSQL that accepts only a client certificate.
+`tests/operator_sections/setup.sh` builds that system on a kind cluster first. It is the only
+place a Catalog reaches a real database.
+
 **Tier 2 is sharded by measured cost**, four ways, by `scripts/tier2_shards.py`: each file's
 seconds are in `tests/tier2/durations.json`, and an unmeasured file counts as the median. So
 **adding or reweighting a tier 2 file can move others between shards**, and a test that depends
