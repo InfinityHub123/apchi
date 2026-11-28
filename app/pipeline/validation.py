@@ -47,6 +47,7 @@ from app.sections.base import (
     ValidationFailure,
 )
 from app.sections.catalogs import SECTION as CATALOGS
+from app.sections.client_certificates import SECTION as CLIENT_CERTIFICATES
 from app.sections.registry import REGISTERED
 from app.sections.server_configuration import (
     CONFIG_PROPERTIES,
@@ -594,6 +595,18 @@ async def validate_candidate(
             # stopped configuring the probe to read it -- and a probe holding a file nothing
             # points at passes everything.
             properties.update(spec.probe_config)
+    # The Catalogs' certificates, though Trino reads none at startup: the reachability check
+    # below connects to every Catalog, and one that presents a Client Certificate opens the
+    # file to do it. Without it the driver refused before reaching the database -- "Could not
+    # open SSL certificate file", measured against a PostgreSQL that requires a certificate --
+    # so a working Catalog warned and a broken one could not be told apart from it.
+    if sections.get(CATALOGS) and sections.get(CLIENT_CERTIFICATES):
+        certificates = next(s for s in REGISTERED if s.name == CLIENT_CERTIFICATES)
+        files.update(
+            probe_files(
+                certificates, cluster.settings, sections[CLIENT_CERTIFICATES], cluster.admin
+            )
+        )
     # The Admin's raw files (§14) are validated like everything else: they are the class of
     # configuration most able to stop Trino booting, so the probe is where that should be
     # found out rather than the Cluster. None can be at a path Apchi renders -- those are
