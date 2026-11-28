@@ -93,7 +93,8 @@ jobs:
           cat > /tmp/notes.md <<EOF
           \`\`\`sh
           helm install apchi oci://$REGISTRY/$owner/charts/apchi --version $version \\
-            --namespace trino --set mongodb.uri=mongodb://your-mongo:27017
+            --namespace trino --set mongodb.uri=mongodb://your-mongo:27017 \\
+            --set trino.https.existingSecret=trino-tls
           \`\`\`
 
           Image: \`$REGISTRY/$owner/apchi:$version\` (linux/amd64, linux/arm64)

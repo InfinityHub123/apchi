@@ -20,6 +20,20 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ## Unreleased
 
+## 0.5.0 — 2026-11-28
+
+Trino serves HTTPS and authenticates its callers by default, by certificate unless an Admin
+picks other methods, while Apchi uses the in-namespace HTTP port with no certificate of its own
+(#295). The NetworkPolicy is on by default. Apchi creates Trino's shared secret. Each Trino
+Deployment records what its pods were started from (#290), and Review says when the chart
+rewired Trino's files (#308). Code for earlier designs and every upgrade path is gone (#298).
+
+**Upgrading from 0.4:** the chart now refuses to render without `trino.https.existingSecret`,
+a TLS Secret holding `tls.crt`, `tls.key` and `ca.crt` (the shape cert-manager writes), unless
+you set `trino.https.enabled=false`. After the upgrade, run an Admin Apply
+(`POST /api/v1/admin/applies`): the coordinator restarts on its old files until one delivers
+the new wiring, and Review shows that as `rewired`.
+
 ### Breaking
 
 - Apchi presents no certificate to Trino (#298): `APCHI_TRINO_AUTH_CERTIFICATE_FILE`,
@@ -53,6 +67,10 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ### Added
 
+- **Review says when the chart rewired Trino's files** (#308). The cost carries `rewired`
+  when Trino's files on the Cluster differ from what the Admin values last applied render to:
+  nothing anyone staged moved them, so the chart's wiring did, or a hand edit. An Admin Apply
+  delivers them.
 - **Apchi creates Trino's shared secret** (#295), `trino-internal-shared-secret`, with a
   random value, the first time it starts without one, and never touches it after. Both roles
   read it, so internal requests are authenticated in either mode.
@@ -73,6 +91,18 @@ Two breaks the committed contract cannot show you, and which belong here when th
   `system_information` block with read for everyone, beneath any an Admin preserved. Before,
   every scrape got 403. It reaches the coordinator at the next Apply, without a restart: Trino
   re-reads its rules on `security.refresh-period`.
+
+### Fixed
+
+- **Two Applies asked for at once both ran** against one Cluster (#304). One starts now, and the
+  others get a `409` naming it.
+- **A brief MongoDB outage during an Apply left the Candidate frozen** until Apchi restarted
+  (#304). The Apply is resolved once MongoDB answers: failed, the Cluster put back, the
+  Candidate released.
+- **Raw Files could outgrow the one Secret they share**, and failed the Admin Apply at the
+  Secret write (#304). A write or an import that would take them past 1 MiB is refused.
+- **A catalog named `system` was accepted**, then failed Validation as one Apchi could adopt
+  (#304). It is Trino's own, and is refused when staged.
 
 ## 0.4.0 — 2026-11-26
 
