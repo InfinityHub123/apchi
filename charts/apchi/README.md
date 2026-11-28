@@ -46,7 +46,7 @@ write.
 | `image.tag` | `""` | Empty means the chart's `appVersion`, so an install gets the image that chart version was released with rather than whatever `latest` is today |
 | `image.pullPolicy`, `imagePullSecrets` | `IfNotPresent`, `[]` | |
 | `replicaCount` | `1` | Leave it. An Apply is in-process state, so a second Apchi runs a second pipeline against one Trino |
-| `auth.mode` | `none` | `none`/`password`/`sso`. **`none` means every caller is treated as an Admin**, which is what Apchi has always done |
+| `auth.mode` | `none` | `none`/`password`/`sso`. **`none` means every caller is treated as an Admin**: the default, so a new install answers with nothing to set up first. Use `password` or `sso` for anything other people can reach |
 | `auth.initialAdmin.username` | `admin` | The one Admin a new install starts with, in `password` mode |
 | `auth.initialAdmin.passwordHash` | `""` | An Argon2id **hash**, never the password. Applied only when Apchi has no users, so it cannot resurrect a deleted account or reset a changed password |
 | `auth.initialAdmin.existingSecret`, `.existingSecretKey` | `""`, `password-hash` | A Secret holding that hash, preferred over the value above: the hash is offline-crackable, so it is worth keeping out of the release |
