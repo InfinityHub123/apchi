@@ -15,9 +15,17 @@ from fastapi.sse import EventSourceResponse, format_sse_event
 from app.api.deps import ApplyStoreDep, CandidateStoreDep, MutationsEnabled
 from app.api.errors import Conflict, NotFound, bad_cursor
 from app.api.pages import DEFAULT_LIMIT, BadCursor, BeforeParam, LimitParam, Page
-from app.pipeline.applies import ApplyRecord, ApplyRunner
+from app.pipeline.applies import ApplyInFlight, ApplyRecord, ApplyRunner
 
 router = APIRouter(prefix="/applies", tags=["applies"])
+
+
+def in_flight_conflict(busy: ApplyInFlight) -> Conflict:
+    """The refusal both kinds of Apply give while another holds the Candidate frozen."""
+    return Conflict(
+        f"Apply {busy.running.id} is already in flight. The Candidate is frozen until it finishes."
+    )
+
 
 #: How often the stream re-reads the record. The stream is a view over durable
 #: state, so it polls MongoDB rather than holding progress in memory -- which is
@@ -37,12 +45,11 @@ POLL_SECONDS = 0.25
 async def start_apply(
     request: Request, applies: ApplyStoreDep, candidate_store: CandidateStoreDep
 ) -> ApplyRecord:
-    if (running := await applies.in_flight()) is not None:
-        raise Conflict(
-            f"Apply {running.id} is already in flight. The Candidate is frozen until it finishes."
-        )
     candidate = await candidate_store.load()
-    record = await applies.create(base_snapshot=candidate.base_snapshot)
+    try:
+        record = await applies.create(base_snapshot=candidate.base_snapshot)
+    except ApplyInFlight as busy:
+        raise in_flight_conflict(busy) from busy
     runner: ApplyRunner = request.app.state.apply_runner
     runner.start(record)
     return record

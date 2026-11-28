@@ -153,3 +153,23 @@ async def test_a_record_from_before_kind_was_kept_reads_as_an_operator_apply(
 
     assert legacy.kind == "apply"
     assert legacy.started_by is None
+
+
+async def test_two_applies_asked_for_at_once_start_one(client: AsyncClient) -> None:
+    """Both requests used to find nothing in flight before either had written its record, so
+    two pipelines ran against one Cluster. Asked for together -- an Operator's and an Admin's
+    included -- exactly one starts and the others are told which one is running."""
+    responses = await asyncio.gather(
+        client.post("/api/v1/applies"),
+        client.post("/api/v1/applies"),
+        client.post("/api/v1/admin/applies"),
+        client.post("/api/v1/admin/applies"),
+    )
+
+    started = [response for response in responses if response.status_code == 202]
+    refused = [response for response in responses if response.status_code == 409]
+    assert len(started) == 1, [response.status_code for response in responses]
+    assert len(refused) == 3
+    running = started[0].json()["id"]
+    assert all(running in response.json()["message"] for response in refused)
+    await _settled(client, running, timeout=30.0)

@@ -208,9 +208,22 @@ class ApplyRecord(BaseModel):
         return self.stage not in TERMINAL
 
 
+class ApplyInFlight(Exception):
+    """Another Apply holds the Candidate frozen."""
+
+    def __init__(self, running: ApplyRecord) -> None:
+        self.running = running
+        super().__init__(running.id)
+
+
 class ApplyStore:
     def __init__(self, database: AsyncDatabase[dict[str, Any]]) -> None:
         self._collection = database["applies"]
+        # Finding nothing in flight and recording the new Apply are one step: with an await
+        # between them, requests that arrived together each found nothing, and as many
+        # pipelines as requests ran against one Cluster. A lock in the process, because one
+        # Apchi is the supported shape -- a second replica is a second pipeline anyway.
+        self._starting = asyncio.Lock()
 
     @staticmethod
     def _as_record(document: dict[str, Any]) -> ApplyRecord:
@@ -218,6 +231,13 @@ class ApplyStore:
         return ApplyRecord.model_validate(document)
 
     async def create(self, base_snapshot: int | None, kind: ApplyKind = "apply") -> ApplyRecord:
+        """Record a new Apply, or raise `ApplyInFlight` naming the one already running."""
+        async with self._starting:
+            if (running := await self.in_flight()) is not None:
+                raise ApplyInFlight(running)
+            return await self._insert(base_snapshot, kind)
+
+    async def _insert(self, base_snapshot: int | None, kind: ApplyKind) -> ApplyRecord:
         now = datetime.now(UTC)
         # Read on the request that asked for the Apply, where the caller is known -- the
         # same reason `ApplyRunner.start` reads it there rather than inside its task.
@@ -519,12 +539,49 @@ class ApplyRunner:
                 outcome="failed",
                 detail=f"failed in {reached.value}: {reason}",
             )
-            if reached in ROLLED_BACK_FROM:
-                await self._roll_back(apply_id, engine, reason, who)
-            else:
-                await self._store.fail(apply_id, reason)
+            try:
+                if reached in ROLLED_BACK_FROM:
+                    await self._roll_back(apply_id, engine, reason, who)
+                else:
+                    await self._store.fail(apply_id, reason)
+            except PyMongoError:
+                # MongoDB stopped answering, so this Apply can be neither finished nor recorded
+                # as failed, and it holds the Candidate frozen. An outage long enough for the
+                # liveness probe restarts Apchi and startup recovery resolves it; a shorter one
+                # left it in flight until somebody restarted the pod.
+                logger.exception(
+                    "could not record how this apply ended; resolving it once MongoDB answers"
+                )
+                self._resolve_when_reachable(apply_id)
         finally:
             apply_id_var.reset(token)
+
+    def _resolve_when_reachable(self, apply_id: str) -> None:
+        """Resolve the Apply as startup recovery would, as soon as MongoDB answers."""
+
+        async def resolve() -> None:
+            while True:
+                try:
+                    await recover_interrupted(
+                        self._store,
+                        self._engine_factory,
+                        self._audit,
+                        # This runner's own kind, which is the kind of the Apply it ran.
+                        admin_engine_factory=self._engine_factory,
+                        reason=UNRECORDED_REASON,
+                    )
+                except PyMongoError:
+                    await asyncio.sleep(STORE_RETRY_SECONDS)
+                else:
+                    logger.warning(
+                        "resolved an apply MongoDB had stopped recording",
+                        extra={"resolved_apply": apply_id},
+                    )
+                    return
+
+        task = asyncio.create_task(resolve())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def _roll_back(
         self, apply_id: str, engine: ApplyEngine, reason: str, who: Identity
@@ -571,6 +628,12 @@ class ApplyRunner:
 
 
 INTERRUPTED_REASON = "Apchi restarted while this Apply was in flight; it was not completed."
+UNRECORDED_REASON = (
+    "MongoDB stopped answering while this Apply was in flight; it was not completed."
+)
+
+#: How often a runner retries resolving an Apply it could not record, while MongoDB is down.
+STORE_RETRY_SECONDS = 5.0
 
 
 async def recover_interrupted(
@@ -578,8 +641,9 @@ async def recover_interrupted(
     engine_factory: EngineFactory,
     audit: AuditStore | None = None,
     admin_engine_factory: EngineFactory | None = None,
+    reason: str = INTERRUPTED_REASON,
 ) -> list[str]:
-    """Resolve Applies left in flight by a restart.
+    """Resolve Applies left in flight by a restart, or by a MongoDB that stopped answering.
 
     The Candidate is frozen for the whole of an Apply, so an Apchi crash mid-flight
     would freeze it permanently. Whatever else recovery decides, the Candidate must
@@ -597,7 +661,7 @@ async def recover_interrupted(
     while (record := await store.in_flight()) is not None:
         reached = record.stage
         await store.mark_interrupted(record.id)
-        await store.fail(record.id, INTERRUPTED_REASON)
+        await store.fail(record.id, reason)
         logger.warning(
             "recovered interrupted apply",
             extra={"recovered_apply": record.id, "reached": reached.value},
@@ -614,7 +678,7 @@ async def recover_interrupted(
                     "pipeline",
                     "applied",
                     outcome="failed",
-                    detail=f"interrupted in {reached.value} by a restart; not completed",
+                    detail=f"interrupted in {reached.value}: {reason}",
                     apply_id=record.id,
                 )
             except PyMongoError:
@@ -631,12 +695,12 @@ async def recover_interrupted(
                 if record.kind == "admin_apply" and admin_engine_factory is not None
                 else engine_factory
             )
-            await _restore_after_interruption(store, factory, record.id)
+            await _restore_after_interruption(store, factory, record.id, reason)
     return recovered
 
 
 async def _restore_after_interruption(
-    store: ApplyStore, engine_factory: EngineFactory, apply_id: str
+    store: ApplyStore, engine_factory: EngineFactory, apply_id: str, reason: str
 ) -> None:
     """The same bounded attempt Auto Rollback makes, from a process that did not run
     the Apply."""
@@ -648,9 +712,9 @@ async def _restore_after_interruption(
         except Exception as exc:
             logger.exception("rollback of an interrupted apply failed")
             await store.record_rollback(apply_id, Rollback.FAILED)
-            reason = f"{INTERRUPTED_REASON} Auto Rollback then failed: {exc}"
-            await engine.declare_incident(reason)
-            await store.declare_incident(apply_id, reason, INCIDENT_MESSAGE)
+            failed = f"{reason} Auto Rollback then failed: {exc}"
+            await engine.declare_incident(failed)
+            await store.declare_incident(apply_id, failed, INCIDENT_MESSAGE)
             return
         await store.record_rollback(apply_id, Rollback.SUCCEEDED)
         logger.info("cluster returned to its latest snapshot after a restart")

@@ -20,19 +20,17 @@ from typing import NamedTuple
 import certifi
 import httpx
 import pytest
-import requests
 from cryptography import x509
 from pymongo.ssl_support import get_ssl_context
 from urllib3.util.ssl_ import create_urllib3_context
 
 from app import trust
 from app.adapters.mongo import _tls_options
-from app.adapters.trino import Trino
 from app.auth.oidc import OidcError, OidcProvider
 from app.config import Settings
 from app.pipeline.applies import TERMINAL
 from app.pipeline.auto_rollback import _alert
-from app.trust import bundled_ca, presented, verification
+from app.trust import bundled_ca, verification
 from tests.certificates import TlsChain, certificate_pem, key_pair, key_pem, tls_chain
 
 
@@ -126,36 +124,6 @@ def test_every_destination_reads_the_same_setting(private_ca: str) -> None:
 
     assert _tls_options(settings) == {"tlsCAFile": bundled_ca(private_ca)}
     assert isinstance(verification(settings.ca_file), ssl.SSLContext)
-
-
-def test_a_client_certificate_without_a_ca_still_verifies_against_the_default_store(
-    tmp_path: Path,
-) -> None:
-    """`cafile=None` loads the platform's own CAs, so a certificate presented to a publicly
-    signed destination needs no bundle of its own.
-
-    Asserted through `verify_mode` and not by counting `get_ca_certs()`, which cannot see a
-    default store at all when the platform hands OpenSSL a **hashed CA directory** rather
-    than a bundle file: those certificates are loaded on demand and never enumerated.
-    `create_default_context(capath=...)` reports 0 where `cafile=...` reports 146, and that
-    difference is the platform's, not the behaviour's -- it is why the first version of this
-    test passed locally and failed in CI.
-    """
-    chain = tls_chain()
-    certificate = tmp_path / "client.pem"
-    certificate.write_bytes(chain.client)
-    key = tmp_path / "client-key.pem"
-    key.write_bytes(chain.client_key)
-
-    context = verification(None, str(certificate), str(key))
-
-    assert isinstance(context, ssl.SSLContext)
-    # A verifying context, which is what distinguishes this from the `verify=False` shape:
-    # a client certificate must never be the thing that turns verification off.
-    assert context.verify_mode == ssl.CERT_REQUIRED
-    assert context.check_hostname is True
-    # And no bundle was built for it, so nothing replaced the platform's store.
-    assert bundled_ca(None) is None
 
 
 class _Collector(http.server.BaseHTTPRequestHandler):
@@ -336,41 +304,15 @@ def test_a_missing_ca_names_the_setting_rather_than_only_the_path() -> None:
 
 
 # --------------------------------------------------------------------------------------
-# Rotation: everything above is read once, at startup, and these hold that it is read
-# once by *both* libraries that reach the coordinator (#193).
+# Rotation: everything above is read once, at startup, and a file changed since is reported
+# rather than reread (#193).
 # --------------------------------------------------------------------------------------
 
 
-class _Identifier(http.server.BaseHTTPRequestHandler):
-    """Reports the common name of the certificate the client presented.
-
-    The only answer worth asserting on. Inspecting a client's own options says which path it
-    was handed, never which bytes it put on the wire -- and the whole defect here was two
-    libraries reading different bytes from the same path.
-    """
-
-    def do_GET(self) -> None:
-        peer = self.connection.getpeercert() or {}
-        common_name = "none"
-        for rdn in peer.get("subject", ()):
-            for attribute, value in rdn:
-                if attribute == "commonName":
-                    common_name = value
-        body = common_name.encode()
-        self.send_response(200)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, *args: object) -> None:
-        """Silent."""
-
-
 class _Mount(NamedTuple):
-    """A server that demands a certificate, and the mounted files Apchi is pointed at."""
+    """The mounted certificate and key Apchi is pointed at -- MongoDB's, the one destination
+    Apchi presents a certificate to."""
 
-    url: str
-    ca: str
     certificate: str
     key: str
     chain: TlsChain
@@ -382,116 +324,13 @@ class _Mount(NamedTuple):
 
 
 @pytest.fixture
-def mount(tmp_path: Path) -> Iterator[_Mount]:
+def mount(tmp_path: Path) -> _Mount:
     chain = tls_chain(rotated_client_name="apchi-rotated")
-    server_certificate = tmp_path / "server.pem"
-    server_certificate.write_bytes(chain.server)
-    server_key = tmp_path / "server-key.pem"
-    server_key.write_bytes(chain.server_key)
-    ca = tmp_path / "ca.pem"
-    ca.write_bytes(chain.ca)
     certificate = tmp_path / "client.pem"
     certificate.write_bytes(chain.client)
     key = tmp_path / "client-key.pem"
     key.write_bytes(chain.client_key)
-
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(str(server_certificate), str(server_key))
-    context.load_verify_locations(cafile=str(ca))
-    context.verify_mode = ssl.CERT_REQUIRED
-    server = http.server.HTTPServer(("127.0.0.1", 0), _Identifier)
-    server.socket = context.wrap_socket(server.socket, server_side=True)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield _Mount(
-            url=f"https://localhost:{server.server_address[1]}/",
-            ca=str(ca),
-            certificate=str(certificate),
-            key=str(key),
-            chain=chain,
-        )
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-
-
-def _presented_over_requests(certificate: str | None, key: str | None, mount: _Mount) -> str:
-    """What the Trino client's session shows, built the way the adapter builds it."""
-    session = requests.Session()
-    session.verify = bundled_ca(mount.ca)
-    session.cert = (str(certificate), str(key))
-    return session.get(mount.url).text
-
-
-async def _presented_over_httpx(context: ssl.SSLContext | bool, mount: _Mount) -> str:
-    """What the liveness check shows, from the context `verification` built."""
-    async with httpx.AsyncClient(verify=context) as client:
-        return (await client.get(mount.url)).text
-
-
-async def test_the_mounted_paths_alone_would_diverge_on_a_rotation(mount: _Mount) -> None:
-    """Not a test of Apchi but of the premise it is built on, like the trust-store counts
-    above. `requests` is handed the two paths and reopens them at every handshake; httpx is
-    handed a context with the bytes already in it. So the same rotation moves one and not the
-    other, and this says so rather than leaving the copying in `presented` unjustified."""
-    context = verification(mount.ca, mount.certificate, mount.key)
-    assert _presented_over_requests(mount.certificate, mount.key, mount) == "apchi"
-    assert await _presented_over_httpx(context, mount) == "apchi"
-
-    mount.rotate()
-
-    assert _presented_over_requests(mount.certificate, mount.key, mount) == "apchi-rotated"
-    assert await _presented_over_httpx(context, mount) == "apchi"
-
-
-async def test_both_halves_of_one_destination_agree_across_a_rotation(mount: _Mount) -> None:
-    """The regression #193 is about. One coordinator reached through two libraries must not
-    present two identities, so the adapter hands both of them copies `app.trust` owns.
-
-    The certificate that wins is the one loaded at startup, deliberately: rotating needs a
-    pod restart, which is what keeps MongoDB -- whose context cannot be rebuilt without
-    rebuilding the client -- from being left behind trusting an older CA.
-    """
-    adapter = Trino(
-        url=mount.url.rstrip("/"),
-        ca_file=mount.ca,
-        auth_certificate_file=mount.certificate,
-        auth_key_file=mount.key,
-    )
-    assert (
-        _presented_over_requests(adapter._auth_certificate_file, adapter._auth_key_file, mount)
-        == "apchi"
-    )
-    assert await _presented_over_httpx(adapter._verification, mount) == "apchi"
-
-    mount.rotate()
-
-    assert (
-        _presented_over_requests(adapter._auth_certificate_file, adapter._auth_key_file, mount)
-        == "apchi"
-    )
-    assert await _presented_over_httpx(adapter._verification, mount) == "apchi"
-
-
-def test_the_presented_certificate_is_a_copy_apchi_owns(mount: _Mount) -> None:
-    """0600, which the mount cannot be: the kubelet ORs 0440 into every file's mode in a
-    readOnly volume, so 0640 is the floor there (§13.2). A copy Apchi writes itself is the
-    one place the key can be as closed as it should be."""
-    certificate, key = presented(mount.certificate, mount.key)
-
-    assert certificate is not None and key is not None
-    assert (certificate, key) != (mount.certificate, mount.key)
-    assert Path(certificate).read_bytes() == Path(mount.certificate).read_bytes()
-    assert Path(key).read_bytes() == Path(mount.key).read_bytes()
-    assert Path(certificate).stat().st_mode & 0o777 == 0o600
-    assert Path(key).stat().st_mode & 0o777 == 0o600
-
-
-def test_nothing_is_copied_when_no_certificate_is_configured() -> None:
-    """The default shape. Plaintext Apchi writes no files and reads none."""
-    assert presented(None, None) == (None, None)
+    return _Mount(certificate=str(certificate), key=str(key), chain=chain)
 
 
 def test_a_rotation_is_reported_and_not_refused(
@@ -501,8 +340,8 @@ def test_a_rotation_is_reported_and_not_refused(
     until the destination stops accepting it. Refusing the Apply would block work that would
     have succeeded, and would do it in the middle of a correct rotation."""
     monkeypatch.setattr(trust, "_loaded", {})
-    presented.cache_clear()
-    presented(mount.certificate, mount.key)
+    trust.combined.cache_clear()
+    trust.combined(mount.certificate, mount.key)
     assert trust.rotated() == []
 
     mount.rotate()
@@ -520,8 +359,8 @@ def test_a_vanished_file_counts_as_a_rotation(
     """A Secret key removed, or a volume no longer mounted. Unreadable is a change: Apchi is
     still presenting something the deployment no longer describes."""
     monkeypatch.setattr(trust, "_loaded", {})
-    presented.cache_clear()
-    presented(mount.certificate, mount.key)
+    trust.combined.cache_clear()
+    trust.combined(mount.certificate, mount.key)
     Path(mount.certificate).unlink()
 
     assert mount.certificate in trust.rotated()
@@ -536,10 +375,7 @@ def test_mongodbs_pem_is_remembered_without_being_copied(
     monkeypatch.setattr(trust, "_loaded", {})
     combined = Path(mount.certificate).with_name("mongo.pem")
     combined.write_bytes(Path(mount.certificate).read_bytes() + Path(mount.key).read_bytes())
-    settings = Settings(
-        ca_file=mount.ca,
-        mongo_certificate_key_file=str(combined),
-    )
+    settings = Settings(mongo_certificate_key_file=str(combined))
 
     assert _tls_options(settings)["tlsCertificateKeyFile"] == str(combined)
     assert trust.rotated() == []
@@ -563,9 +399,9 @@ def test_the_expiry_of_a_presented_certificate_is_logged(
     """On a deployment that rotates by restarting, the restart is the only moment an Admin
     can be told what was loaded and when it dies."""
     monkeypatch.setattr(trust, "_loaded", {})
-    presented.cache_clear()
+    trust.combined.cache_clear()
     with caplog.at_level(logging.INFO, logger="app.trust"):
-        presented(mount.certificate, mount.key)
+        trust.combined(mount.certificate, mount.key)
 
     expiry = x509.load_pem_x509_certificate(mount.chain.client).not_valid_after_utc
     assert "CN=apchi" in caplog.text
@@ -687,8 +523,8 @@ def test_an_expired_certificate_is_reported_more_loudly_than_an_expiring_one(
 def test_a_file_with_no_certificate_in_it_says_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A private key on its own. `presented` registers both halves, so this is the common
-    case rather than an edge one."""
+    """A private key on its own. MongoDB's certificate and key are registered as two files
+    when an issuer writes them apart, so this is the common case rather than an edge one."""
     monkeypatch.setattr(trust, "_loaded", {})
     key_only = tmp_path / "client-key.pem"
     key_only.write_bytes(key_pem(key_pair("apchi")[1]))
@@ -704,7 +540,7 @@ def test_a_file_with_no_certificate_in_it_says_nothing(
 def test_the_expiry_reported_is_the_one_apchi_loaded_not_the_one_on_the_mount(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The #193 trap, one layer up. Apchi presents the copy it made at startup, so reading
+    """The #193 trap, one layer up. Apchi presents what it read at startup, so reading
     the mount to answer "am I about to expire?" would describe a replacement Apchi is not
     using -- and would fall silent exactly when a rotation had been staged but not applied by
     a restart."""

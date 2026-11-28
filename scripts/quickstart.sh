@@ -24,9 +24,9 @@ kubectl cluster-info >/dev/null 2>&1 || die "kubectl cannot reach a cluster; sta
 if [[ "${1:-}" == "--delete" ]]; then
   say "Removing everything"
   helm uninstall "$RELEASE" -n "$NAMESPACE" 2>/dev/null || true
-  # Deleting the namespace is what removes the bootstrap Secrets: they are pre-install
-  # hooks, so helm uninstall deliberately leaves them -- they hold the Cluster's
-  # configuration and the only durable copy of its catalogs.
+  # Deleting the namespace is what removes the Secrets Apchi writes: no release owns them,
+  # so helm uninstall leaves them -- they hold the Cluster's configuration and the only
+  # durable copy of its catalogs.
   kubectl delete namespace "$NAMESPACE" --ignore-not-found
   echo "Gone."
   exit 0
@@ -55,8 +55,9 @@ say "Namespace $NAMESPACE"
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
 # One release: Apchi, its Trino and a MongoDB. Plain HTTP and the name a client sends, so
-# there are no certificates to make first; a real install keeps the chart's default,
-# certificate authentication, and provides them.
+# there are no certificates to make first; a real install keeps the chart's default, HTTPS,
+# and provides its server certificate. The workers drain for seconds rather than the
+# production two minutes, twice over, which is what --delete and every worker restart wait.
 say "Apchi and Trino"
 helm upgrade --install "$RELEASE" "$ROOT/charts/apchi" \
   --namespace "$NAMESPACE" \
@@ -65,6 +66,8 @@ helm upgrade --install "$RELEASE" "$ROOT/charts/apchi" \
   --set mongodb.deploy=true \
   --set trino.worker.replicas=1 \
   --set trino.https.enabled=false \
+  --set trino.worker.gracefulShutdown.gracePeriodSeconds=5 \
+  --set trino.worker.terminationGracePeriodSeconds=30 \
   --wait --timeout 10m
 
 cat <<EOF

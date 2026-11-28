@@ -105,9 +105,9 @@ def provides(container: Container, path: str) -> VolumeMount | None:
 
     Layering is a fact about *directory* mounts, and it does not license Apchi's single-file
     mounts: a subPath mount of one key at a path inside a read-only ConfigMap or Secret
-    directory has nothing to bind onto and fails the container outright. Precondition 6
-    refuses that shape; this function only answers which mount serves a path, including the
-    paths that shape makes unusable.
+    directory has nothing to bind onto and fails the container outright. The single-file-mount
+    precondition refuses that shape; this function only answers which mount serves a path,
+    including the paths that shape makes unusable.
     """
     wanted = path.rstrip("/")
     candidates = [

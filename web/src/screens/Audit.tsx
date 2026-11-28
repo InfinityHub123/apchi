@@ -10,7 +10,7 @@ import { ErrorNote, Loading, PageHead } from "../ui/States";
 type Filters = { category: string; actor: string; outcome: string; action: string; resource: string; since: string; until: string };
 const EMPTY: Filters = { category: "", actor: "", outcome: "", action: "", resource: "", since: "", until: "" };
 
-const CATEGORIES = ["catalogs", "client_certificates", "certificate_mapping", "permissions", "resource_groups", "event_listeners", "admin", "pipeline", "audit"];
+const CATEGORIES = ["catalogs", "client_certificates", "certificate_mapping", "permissions", "resource_groups", "admin", "pipeline", "audit"];
 const ACTIONS = ["attempted", "created", "updated", "removed", "reset", "imported", "reverted", "applied", "rolled_back", "engaged", "released", "minted", "revoked", "exported"];
 
 /** Turns the form into the query both the listing and the export take. */

@@ -80,25 +80,11 @@ async def test_a_rollout_that_exceeds_its_timeout_puts_the_configuration_back(
         "no Snapshot was created"
     )
 
-
-async def test_the_coordinator_comes_back_on_the_restored_configuration(
-    e2e_client: AsyncClient,
-    settings: Settings,
-    forwarded_kubernetes: ForwardedKubernetes,
-    forward: PortForward,
-) -> None:
-    """The timeout was Apchi giving up, not the Cluster failing. Once the rollouts settle,
-    the coordinator is serving what the Snapshot said -- which here is no resource groups."""
-    impatient = settings.model_copy(update={"rollout_timeout_seconds": 1.0})
-
-    async with running_apchi(impatient, forwarded_kubernetes, forward) as client:
-        await stage_a_restart(client)
-        started = await client.post("/api/v1/applies")
-        await _settled(client, started.json()["id"])
-
+    # The timeout was Apchi giving up, not the Cluster failing. Once the rollouts settle, the
+    # coordinator serves what the Snapshot said -- here, no resource groups. In the same test,
+    # because a second one would pay for this whole failure again (#300).
     from tests.tier2.conftest import kubectl
 
     kubectl("rollout", "status", "deploy/trino-coordinator", "--timeout=600s")
     forward.restart()
-
     assert await Trino(url=f"http://127.0.0.1:{forward.port}").is_starting() is False

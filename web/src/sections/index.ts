@@ -35,15 +35,8 @@ export function section(key: SectionName) {
   return found;
 }
 
-/**
- * Sections that no longer exist, by the name a stored record may still carry. The Event
- * Listener became part of the Admin's Server Configuration (#269), and an audit event or a
- * validation failure recorded before that still names it -- history reads as it was written.
- */
-const RETIRED: Record<string, string> = { event_listeners: "Event listeners" };
-
-/** A Section's label -- or a retired one's, from a record that outlived it. */
-export const sectionLabel = (key: string) => BY_KEY.get(key as SectionName)?.label ?? RETIRED[key] ?? key;
+/** A Section's label, or the key itself for anything that is not a Section. */
+export const sectionLabel = (key: string) => BY_KEY.get(key as SectionName)?.label ?? key;
 
 /**
  * A resource's name as a person reads it. Resource Groups keeps its selector list and its

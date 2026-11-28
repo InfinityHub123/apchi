@@ -39,16 +39,21 @@ async def _apply(
     raise AssertionError("Apply never settled")
 
 
-async def test_a_cluster_mid_migration_serves_every_preserved_pattern(
+async def test_a_cluster_mid_migration_and_the_admin_apply_that_onboards_it(
     e2e_client: AsyncClient, forward: PortForward
 ) -> None:
-    """The whole ticket: three conventions live on one coordinator, and no client is locked
-    out while it migrates to the one Apchi models.
+    """Three conventions on one coordinator, then an Admin narrowing them. One scenario,
+    because each Apply restarts the coordinator and each test pays a restart again to be put
+    back (#300).
 
-    Each identity is read out of an impersonation refusal, for the reason spelled out in
-    test_certificate_mapping: insecure authentication takes the principal and the session
-    user from the same header, so a pattern that renames leaves the two disagreeing and
-    Trino names the mapped identity when it refuses.
+    - **Every preserved pattern is served** alongside the one Apchi models, so no client is
+      locked out while it migrates. Each identity is read out of an impersonation refusal:
+      insecure authentication takes the principal and the session user from the same header,
+      so a pattern that renames leaves the two disagreeing and Trino names the mapped
+      identity when it refuses.
+    - **An Admin Apply delivers them and commits no Snapshot.** An Admin onboarding a Cluster
+      cannot be made to wait for an Operator, and what they did is recorded as an Apply
+      rather than as a Snapshot (section 14).
     """
     await e2e_client.put("/api/v1/certificate-mapping", json=DESTINATION)
     await e2e_client.put(
@@ -69,12 +74,6 @@ async def test_a_cluster_mid_migration_serves_every_preserved_pattern(
         with pytest.raises(TrinoUserError, match=f"User {mapped} cannot impersonate"):
             await client.query("SELECT current_user")
 
-
-async def test_an_admin_apply_delivers_them_and_commits_no_snapshot(
-    e2e_client: AsyncClient, forward: PortForward
-) -> None:
-    """An Admin onboarding a Cluster cannot be made to wait for an Operator, and what they
-    did is recorded as an Apply rather than as a Snapshot (section 14)."""
     before = (await e2e_client.get("/api/v1/snapshots")).json()["items"]
     await e2e_client.put(
         "/api/v1/admin/certificate-mapping/preserved", json={"patterns": [LEGACY_CN]}
@@ -89,3 +88,7 @@ async def test_an_admin_apply_delivers_them_and_commits_no_snapshot(
     bob = Trino(url=f"http://127.0.0.1:{forward.port}", user="CN=bob, OU=data, O=acme")
     with pytest.raises(TrinoUserError, match="User bob cannot impersonate"):
         await bob.query("SELECT current_user")
+    carol = Trino(url=f"http://127.0.0.1:{forward.port}", user="Carol.clients.internal")
+    assert await carol.query("SELECT current_user") == [["Carol.clients.internal"]], (
+        "the pattern the Admin dropped no longer maps"
+    )

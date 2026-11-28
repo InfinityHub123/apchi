@@ -228,34 +228,6 @@ async def test_the_restricted_mode_is_accepted(
     await check(fake_kubernetes, pod_spec(spec), settings)
 
 
-async def test_a_volume_apchi_mounts_itself_is_not_refused_for_its_mode(
-    settings: Settings, fake_kubernetes: FakeKubernetes
-) -> None:
-    """The deadlock this precondition has to avoid. Apchi sets the mode on its own mounts
-    during Apply, so refusing one here would refuse the only thing that could fix it --
-    and an upgrade from a version that mounted them bare would never get past this check.
-    The `fsGroup` is what makes the next Apply restrict it, and that is checked above.
-
-    The one such volume is the Event Listener's, which an older Apchi mounted and the first
-    Admin Apply after upgrading takes off (#269) -- so it has to get past this check first."""
-    spec = healthy_pod_spec()
-    spec["volumes"].append(
-        {
-            "name": settings.event_listener_volume_name,
-            "secret": {"secretName": settings.event_listener_secret_name},
-        }
-    )
-    spec["containers"][0]["volumeMounts"].append(
-        {
-            "name": settings.event_listener_volume_name,
-            "mountPath": "/etc/trino/event-listener.properties",
-            "subPath": "event-listener.properties",
-        }
-    )
-
-    await check(fake_kubernetes, pod_spec(spec), settings)
-
-
 async def test_a_volume_holding_no_credential_needs_no_mode(
     settings: Settings, fake_kubernetes: FakeKubernetes
 ) -> None:

@@ -106,16 +106,17 @@ async def test_a_mount_above_the_config_directory_is_refused(
     assert "not a directory" in str(raised.value)
 
 
-async def test_a_nested_directory_mount_below_the_config_directory_is_not_the_sixths_problem(
+async def test_a_nested_directory_mount_is_not_the_single_file_mount_problem(
     settings: Settings, fake_kubernetes: FakeKubernetes
 ) -> None:
     """A directory inside a directory mount layers correctly -- verified with a two-volume
     pod, and relied on by the official chart's own /etc/trino/catalog. Apchi's two
-    CoordinatorDirectory Sections are this shape, so the sixth precondition must not refuse it.
+    CoordinatorDirectory Sections are this shape, so the single-file-mount precondition must
+    not refuse it.
 
-    The ninth does, when the directory is not Apchi's: nothing but Apchi's Secrets may be
-    mounted under /etc/trino (ADR-0010). Which one refuses it is the point -- the remedy for
-    each is different."""
+    The foreign-mount precondition does, when the directory is not Apchi's: nothing but Apchi's
+    Secrets may be mounted under /etc/trino (ADR-0010). Which one refuses it is the point -- the
+    remedy for each is different."""
     spec = _with_mount(
         healthy_pod_spec(),
         {"name": "catalogs", "mountPath": "/etc/trino/catalog"},

@@ -2,14 +2,14 @@
 
 This brings up a Trino cluster and an Apchi on your own machine and takes one catalog
 through the whole configuration loop. Every command and every response below was run
-against minikube with Trino 483; nothing here is illustrative.
+against kind with Trino 483; nothing here is illustrative.
 
 Expect about ten minutes, most of it waiting for Trino to start.
 
 ## What you need
 
 - `kubectl` and `helm`, and a cluster to point them at. minikube or kind is fine; this
-  walkthrough uses minikube.
+  walkthrough was run on kind.
 - Memory. Every JVM gets `-Xmx2G`, and during a validation there are
   three of them — coordinator, worker, and the throwaway coordinator the validation starts —
   so leave 6 GB free rather than 4. Short of that the probe pod takes longer than the 300s
@@ -29,8 +29,8 @@ If you just want it running:
 ./scripts/quickstart.sh
 ```
 
-That builds the image into your cluster, deploys the reference Trino, installs the Helm
-chart with a MongoDB alongside it, and prints what to do next. `--delete` removes all of it.
+That builds the image into your cluster, installs the Helm chart — Apchi, its Trino and a
+MongoDB — and prints what to do next. `--delete` removes all of it.
 The rest of this page is the same thing done a step at a time, which is worth reading once
 because each step explains what Apchi is doing.
 
@@ -40,12 +40,11 @@ Apchi has to run **inside** the cluster, in the same namespace as Trino. A valid
 a throwaway Trino coordinator and talks to it by pod IP, so an Apchi on your laptop reaches
 Kubernetes fine and then times out every validation.
 
-It also goes in **before** Trino, which is worth understanding rather than just following.
-Apchi's chart creates the six Secrets Trino mounts its configuration from, because those
-Secrets are Apchi's data — Apchi rewrites them on every apply. Trino reads two of them while
-loading and refuses to boot when either is missing, so it cannot start and wait. Apchi has no
+Apchi writes the Secrets Trino mounts its configuration from, when it starts, because those
+Secrets are Apchi's data — it rewrites them on every apply. Trino reads some of them while
+loading, so its pods wait in `ContainerCreating` until Apchi has written them. Apchi has no
 such problem: its readiness depends on MongoDB and nothing else, so it starts perfectly well
-against a Trino that does not exist yet.
+against a Trino that is not up yet.
 
 Build the image into your cluster's daemon:
 
@@ -68,13 +67,17 @@ one for anything else.
 helm install apchi charts/apchi -n apchi \
   --set image.repository=apchi --set image.tag=dev \
   --set mongodb.deploy=true --set trino.worker.replicas=1 \
-  --set trino.https.enabled=false --wait
+  --set trino.https.enabled=false \
+  --set trino.worker.gracefulShutdown.gracePeriodSeconds=5 \
+  --set trino.worker.terminationGracePeriodSeconds=30 --wait
 ```
 
 That one release is Apchi, its MongoDB and the Trino cluster it configures. The two `image`
 settings are because you built the image locally; the chart otherwise defaults to the
 published one, which your cluster cannot pull a locally built tag from. One worker instead of
-two is for a laptop.
+two is for a laptop, and so is the short drain: a worker that stops waits its grace period
+twice, two minutes each by default, which is what keeps queries alive through a production
+rollout and is only a wait here.
 
 `trino.https.enabled=false` is plain HTTP, and Trino takes the user name a client sends as
 who it is. That is what lets this walkthrough start with no certificates. The chart's default
@@ -91,8 +94,7 @@ people can reach. `concepts.md` covers `password` and `sso`.
 ## 2. The Trino it configures
 
 The release installed a Trino beside Apchi, and the chart arranges it the way Apchi needs: a
-catalog store it can write, the Secrets Apchi writes mounted where Apchi will put them, and an
-access control file with a refresh period on it. CI proves it by rendering the chart and
+catalog store it can write, and the Secrets Apchi writes mounted where Trino reads each file. CI proves it by rendering the chart and
 running Apchi's own precondition checker against the result, and `charts/apchi/README.md`
 lists each guarantee. Apchi is configured with the same names the chart gives Trino, so
 there is nothing to line up.
@@ -174,7 +176,7 @@ curl -s $A/review | python3 -m json.tool
     {"section": "permissions", "changes": []},
     {"section": "resource_groups", "changes": []}
   ],
-  "cost": {"restarts_coordinator": false, "rollout_sections": [],
+  "cost": {"restarts_coordinator": false, "rollout_sections": [], "restarts_workers": false,
            "queries_at_risk": null, "warning": null}
 }
 ```
@@ -201,7 +203,7 @@ curl -s -X POST $A/validations
 ```
 
 ```json
-{"id":"val_51feb6583e064d6f","outcome":"running","failures":[],
+{"id":"val_51feb6583e064d6f","outcome":"running","failures":[],"warnings":[],
  "base_snapshot":null,"started_at":"2026-10-04T07:42:16.672797Z","finished_at":null}
 ```
 
@@ -212,7 +214,7 @@ curl -s $A/validations/val_51feb6583e064d6f
 ```
 
 ```json
-{"id":"val_51feb6583e064d6f","outcome":"passed","failures":[],"base_snapshot":null,
+{"id":"val_51feb6583e064d6f","outcome":"passed","failures":[],"warnings":[],"base_snapshot":null,
  "started_at":"2026-10-04T07:42:16.672797Z","finished_at":"2026-10-04T07:42:24.632677Z"}
 ```
 
@@ -300,19 +302,24 @@ curl -s $A/snapshots | python3 -m json.tool
 ```
 
 ```json
-[
-  {
-    "number": 1,
-    "sections": {
-      "catalogs": {"sales": {"connector": "tpch", "properties": {"tpch.splits-per-node": "4"}}},
-      "client_certificates": {}, "certificate_mapping": {}, "permissions": {},
-      "resource_groups": {}
-    },
-    "created_at": "2026-10-04T07:42:48.495229Z",
-    "apply_id": "apl_7526623bbb2f4f96"
-  }
-]
+{
+  "items": [
+    {
+      "number": 1,
+      "sections": {
+        "catalogs": {"sales": {"connector": "tpch", "properties": {"tpch.splits-per-node": "4"}}},
+        "client_certificates": {}, "certificate_mapping": {}, "permissions": {},
+        "resource_groups": {}
+      },
+      "created_at": "2026-10-04T07:42:48.495229Z",
+      "apply_id": "apl_7526623bbb2f4f96"
+    }
+  ],
+  "next": null
+}
 ```
+
+Newest first, a page at a time: `next` is the cursor for the page after this one.
 
 A Snapshot is the whole configuration, not a diff, and it is immutable. It is what rollback
 rolls back to and what an auto rollback restores.
@@ -335,6 +342,7 @@ curl -s $A/review | python3 -c 'import sys,json; print(json.dumps(json.load(sys.
 {
   "restarts_coordinator": true,
   "rollout_sections": ["resource_groups"],
+  "restarts_workers": false,
   "queries_at_risk": 0,
   "warning": "Applying this restarts the Trino coordinator, which terminates every running and queued query. Trino cannot drain a coordinator, so there is no way to avoid it."
 }
@@ -347,7 +355,7 @@ not what the cluster has mounted.
 
 `queries_at_risk` is counted from the cluster at the moment you asked, so on a busy cluster
 it is a real number and the decision is yours. Apply it the same way; the stage list now has
-`rolling_out` in it, and the whole thing takes about 45 seconds:
+`rolling_out` in it, and the whole thing takes about 40 seconds:
 
 ```
 validating → applying → rolling_out → verifying → committing → succeeded
@@ -369,6 +377,7 @@ curl -s $A/review | python3 -c 'import sys,json; d=json.load(sys.stdin); print(j
   "cost": {
     "restarts_coordinator": true,
     "rollout_sections": ["resource_groups"],
+    "restarts_workers": false,
     "queries_at_risk": 0,
     "warning": "Applying this restarts the Trino coordinator, which terminates every running and queued query. Trino cannot drain a coordinator, so there is no way to avoid it."
   }
@@ -376,7 +385,7 @@ curl -s $A/review | python3 -c 'import sys,json; d=json.load(sys.stdin); print(j
 ```
 
 Rollback is an ordinary apply: it validates, it verifies, and it costs whatever undoing the
-change costs. Once it succeeds the snapshot list reads `[3, 2, 1]` — rolling back to
+change costs. Once it succeeds the snapshot numbers read `[3, 2, 1]` — rolling back to
 Snapshot 1 produced Snapshot **3**. History is never rewritten, so a rollback is itself
 something you can roll back.
 
@@ -387,7 +396,7 @@ same body, so the two recovery actions cannot drift apart:
 curl -s -X POST $A/catalogs/revert -H 'content-type: application/json' -d '{"snapshot":1}'
 ```
 
-That stages the catalogs from Snapshot 1 and leaves the other five sections exactly as they
+That stages the catalogs from Snapshot 1 and leaves the other four sections exactly as they
 are. It is the routine recovery: one catalog broke, the rest is nobody's business. To throw
 away what you staged without applying anything at all, `POST $A/candidate/reset`.
 
@@ -403,8 +412,8 @@ curl -s -X POST $A/permissions -H 'content-type: application/json' \
  "privileges":["SELECT"],"key":"analyst:sales:*:*"}
 ```
 
-That applies with no restart — the access control file has a refresh period on it and Trino
-re-reads it on its own timer. But it does not yet restrict anybody. Apchi ships a catch-all
+That applies with no restart — Apchi renders Trino's access control with a refresh period, and
+Trino re-reads the rules on that timer. But it does not yet restrict anybody. Apchi ships a catch-all
 rule allowing everything no grant mentions, because writing grants on a cluster already
 serving users must not cut off everyone you have not got to yet. Enforcement is a separate,
 deliberate switch, and it is an Admin's:
@@ -443,8 +452,9 @@ with it.
 
 ## Trusting a private CA
 
-Apchi makes four outbound TLS connections — to the Trino coordinator, to MongoDB, to an OIDC
-provider and to the alert webhook. One bundle covers all four:
+Apchi can make TLS connections to MongoDB, to an OIDC provider and to the alert webhook, and
+to the coordinator when `APCHI_TRINO_URL` is `https://` (the chart's is not). One bundle covers
+every one of them:
 
 ```sh
 kubectl create secret generic apchi-ca -n apchi --from-file=ca.crt=internal-ca.pem
@@ -464,8 +474,8 @@ file does not need to be a complete bundle.
 one root for all four. If you need several — an internal CA and a partner's — concatenate them
 into the one file.
 
-This is separate from `trino.tls` and `mongodb.tls` below, which are the certificates Apchi
-*presents* rather than the ones it trusts.
+This is separate from `mongodb.tls` below, which is the certificate Apchi *presents* rather
+than the ones it trusts.
 
 ## Reaching a MongoDB that requires TLS
 
@@ -482,8 +492,9 @@ helm upgrade apchi charts/apchi -n apchi --reuse-values \
 ```
 
 **`client.pem` holds the certificate and its key in one file.** That is PyMongo's
-`tlsCertificateKeyFile` shape, and it differs from `trino.tls` below, which wants the two
-apart. `cat cert.pem key.pem > client.pem` is the whole of it.
+`tlsCertificateKeyFile` shape, and `cat cert.pem key.pem > client.pem` is the whole of it. An
+issuer that writes them apart, as cert-manager does, can use `mongodb.tls.certificateKey` and
+`mongodb.tls.keyKey` instead, and Apchi joins them.
 
 **Either file turns TLS on.** There is no `tls=true` to remember — PyMongo builds its SSL
 context from these.
@@ -511,16 +522,37 @@ The chart's default, `trino.https.enabled`. The coordinator listens twice:
 
 The server certificate is yours to provide, because Apchi issues none. Put it in
 `trino.https.existingSecret` as `tls.crt`, `tls.key` and `ca.crt`, the CA client
-certificates have to be issued by. That is the shape cert-manager writes.
+certificates have to be issued by. That is the shape cert-manager writes. The server
+certificate's names have to include the Service, `trino`, for clients inside the cluster to
+verify it.
 
 ```sh
-helm upgrade --install apchi charts/apchi -n apchi \
-  --set mongodb.uri=mongodb://mongo:27017 \
-  --set trino.https.existingSecret=trino-server-tls
+kubectl create secret generic trino-server-tls -n apchi \
+  --from-file=tls.crt --from-file=tls.key --from-file=ca.crt
+
+helm upgrade apchi charts/apchi -n apchi --reuse-values \
+  --set trino.https.enabled=true --set trino.https.existingSecret=trino-server-tls --wait
+```
+
+On a new install that is all. On one already running, as here, the coordinator restarts with
+the HTTPS port and its certificate mounted but its old `config.properties`: Apchi writes a
+Secret only when it is missing, and never at startup over one that exists. Review shows the
+difference as a pending coordinator restart, and an Admin Apply delivers it:
+
+```sh
+curl -s -X POST $A/admin/applies
 ```
 
 A client certificate's subject is the identity Trino sees, `CN=analyst` for example. Map it to
-a user name with the Certificate Mapping (`CN=(.*)` to `$1`).
+a user name with the Certificate Mapping (`CN=(.*)` to `$1`). From inside the cluster, or
+through `kubectl -n apchi port-forward deploy/trino-coordinator 8443:8443`:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' --cacert ca.crt --cert analyst.crt --key analyst.key \
+  -X POST https://localhost:8443/v1/statement -d 'SELECT 1'      # 200
+curl -s -o /dev/null -w '%{http_code}\n' --cacert ca.crt -H 'X-Trino-User: analyst' \
+  -X POST https://localhost:8443/v1/statement -d 'SELECT 1'      # 401: a name is not enough
+```
 
 The workers' requests to the coordinator are authenticated with a shared secret. Apchi creates
 it, `trino-internal-shared-secret`, the first time it starts without one, and never touches it
@@ -528,16 +560,28 @@ after.
 
 **The sign-in method is the Admin's.** CERTIFICATE is the default because it needs nothing
 beyond the server certificate's Secret. The coordinator's Server Configuration can replace it
-with any of Trino's methods, or a list of them: `http-server.authentication.type=PASSWORD`,
-`OAUTH2`, `PASSWORD,CERTIFICATE`. An empty list is refused, because HTTPS would then take any
-name it is sent. What a method needs beyond that is the Admin's too. For `PASSWORD`, the two
-files Trino's file authenticator reads, as Raw Files:
+with any of Trino's methods, or a list of them: `PASSWORD`, `OAUTH2`, `PASSWORD,CERTIFICATE`.
+An empty list is refused, because HTTPS would then take any name it is sent. What a method
+needs beyond that is the Admin's too. For `PASSWORD`, the two files Trino's file authenticator
+reads, as Raw Files, then the method, then an Admin Apply:
 
 ```sh
-curl -X PUT $APCHI/api/v1/admin/files/etc/trino/password-authenticator.properties \
+J='content-type: application/json'
+curl -s -X PUT $A/admin/files/etc/trino/password-authenticator.properties -H "$J" \
   -d '{"content": "password-authenticator.name=file\nfile.password-file=/etc/trino/password.db\n"}'
-curl -X PUT $APCHI/api/v1/admin/files/etc/trino/password.db \
+curl -s -X PUT $A/admin/files/etc/trino/password.db -H "$J" \
   -d "{\"content\": \"$(htpasswd -nbBC 10 analyst secret)\\n\"}"
+curl -s -X PUT $A/admin/server-configuration -H "$J" \
+  -d '{"coordinator": {"config.properties": {"http-server.authentication.type": "PASSWORD"}}}'
+curl -s -X POST $A/admin/applies
+```
+
+The Server Configuration is replaced whole, so send every property you have set, not only this
+one; `GET $A/admin/server-configuration` is the current document. Then:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' --cacert ca.crt -u analyst:secret \
+  -X POST https://localhost:8443/v1/statement -d 'SELECT 1'      # 200
 ```
 
 The Certificate Mapping applies only while CERTIFICATE is among the methods: Trino refuses to
@@ -545,47 +589,14 @@ start on a mapping no authenticator reads, so Apchi wires it only then. Validati
 these methods, because the probe serves plain HTTP; the Cluster does, and Auto Rollback
 restores the previous properties if the coordinator does not come up.
 
-## Reaching a coordinator over HTTPS
-
-Apchi reaches Trino over HTTP in both shapes. Point it at HTTPS only for a coordinator this
-chart does not run, one that authenticates every port:
-
-```sh
-kubectl create secret generic apchi-trino-tls -n apchi \
-  --from-file=tls.crt=apchi.pem --from-file=tls.key=apchi-key.pem
-
-helm upgrade apchi charts/apchi -n apchi --reuse-values \
-  --set trino.url=https://trino:8443 \
-  --set trino.tls.existingSecret=apchi-trino-tls \
-  --set trino.tls.certificateKey=tls.crt --set trino.tls.keyKey=tls.key
-```
-
-Three things are worth knowing about how Apchi connects:
-
-**It is a URL, not a port.** The Trino client reads `https` from a port only when the port is
-*exactly* 443, so setting a port of 8443 — the one Trino's own documentation uses — produced
-plaintext requests against a TLS listener and reported nothing. `trino.url` carries the
-scheme so that cannot happen.
-
-**A private CA goes in `caBundle`, not here.** One bundle covers every outbound
-connection Apchi makes — see *Trusting a private CA* above. `trino.tls` is only the
-certificate Apchi presents.
-
-**`trino.tls` is the certificate Apchi presents.** Its subject must be one the coordinator's
-CA accepts. It is not a Client Certificate in Apchi's sense — that term means a
-certificate *Trino* presents when it connects outward to a data source, and points the other
-way. Apchi mounts this one `0640` with an `fsGroup` matching the user it runs as, which is the
-only combination that is both restricted and readable — a Secret volume's files are root-owned
-whatever their mode, so `0600` would lock Apchi out of its own key.
-
 ## Rotating any of it
 
 Apchi reads every certificate and CA above **once, when it starts**, so replacing the
 contents of a Secret changes nothing by itself:
 
 ```sh
-kubectl create secret generic apchi-trino-tls -n apchi \
-  --from-file=tls.crt=new.pem --from-file=tls.key=new-key.pem \
+kubectl create secret generic apchi-mongo-tls -n apchi \
+  --from-file=client.pem=new-client.pem \
   --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl rollout restart -n apchi deploy/apchi
@@ -593,8 +604,8 @@ kubectl rollout restart -n apchi deploy/apchi
 
 The restart is the part that matters, and Apchi will tell you if you forget: the next Apply
 logs a warning naming the file that changed. It is a warning and not a refusal on purpose —
-the certificate Apchi is still presenting works until your Trino or MongoDB stops accepting
-it, so there is no reason to block an Apply that would succeed.
+the certificate Apchi is still presenting works until MongoDB stops accepting it, so there is
+no reason to block an Apply that would succeed.
 
 **Why it does not just reload.** One of Apchi's destinations cannot. MongoDB's client loads
 its certificate into an SSL context when the client is built and keeps it, so picking up a
@@ -606,7 +617,7 @@ touches all four, a restart was needed either way.
 Each restart logs what it loaded and when it expires, which is worth reading:
 
 ```
-loaded certificate from /etc/apchi/trino-tls/tls.crt, subject CN=apchi, expires 2027-04-18T09:12:00+00:00
+loaded certificate from /etc/apchi/mongo-tls/client.pem, subject CN=apchi, expires 2027-04-18T09:12:00+00:00
 ```
 
 **You will also be reminded before it expires.** Every Apply checks the certificates Apchi
@@ -614,7 +625,7 @@ loaded and warns about any inside `certificates.expiringWithinDays` (30 by defau
 `ERROR` once one is actually past it:
 
 ```
-the certificate at /etc/apchi/trino-tls/tls.crt expires on 2026-11-20T09:12:00+00:00, in 18 days
+the certificate at /etc/apchi/mongo-tls/client.pem expires on 2026-11-20T09:12:00+00:00, in 18 days
 ```
 
 The limit is worth knowing: that check runs during an Apply, so a cluster you have not
@@ -630,14 +641,10 @@ reachable at all, startup takes about a minute before it starts answering — Py
 its own server-selection timeout first.
 
 **Apchi crashloops instead of reporting `503`.** The TLS settings above are read at startup
-and not per request, so a `trino.tls` or `mongodb.tls` key naming a file the Secret does not
+and not per request, so a `mongodb.tls` or `caBundle` key naming a file the Secret does not
 hold stops the process rather than degrading. `kubectl logs` names the path and which setting
 put it there. This is the one startup failure that is not a 503, because there is nothing left
 to serve it from — a 503 means MongoDB is unreachable, which is a different thing.
-
-**Every Apply is refused with "Trino then refuses plain HTTP from every client".** The
-coordinator authenticates its callers and Apchi is configured for `http://`. See
-*HTTPS and sign-in* above.
 
 **A rotated certificate seems to have been ignored.** It was. See *Rotating any of it*
 above — the Secret's new contents reach the pod within about a minute, and Apchi keeps using

@@ -26,7 +26,7 @@ spec:
       # own Service is called apchi -- so every pod gets APCHI_PORT, APCHI_SERVICE_HOST and
       # sixteen more that are not settings. Apchi tolerates them; it is simply noise.
       enableServiceLinks: false
-      {{- if and (or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret) (not .Values.restrictedPodSecurity) }}
+      {{- if and .Values.mongodb.tls.existingSecret (not .Values.restrictedPodSecurity) }}
       # A Secret volume's files are root-owned whatever their mode, so a key restricted to
       # 0640 is unreadable to uid 10001 without this. Only rendered when something is
       # mounted: an fsGroup on a pod with no volumes changes nothing and would still cost
@@ -47,13 +47,6 @@ spec:
             - containerPort: 8000
               name: http
           env:
-            {{- with .Values.environment }}
-            # Deprecated: it now decides only the log defaults below, and Apchi warns while
-            # it is set. Rendered so an existing values file keeps its log level for one
-            # more release.
-            - name: APCHI_ENVIRONMENT
-              value: {{ . | quote }}
-            {{- end }}
             - name: APCHI_AUTH_MODE
               value: {{ .Values.auth.mode | quote }}
             - name: APCHI_AUTH_INITIAL_ADMIN_USERNAME
@@ -150,18 +143,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: APCHI_TRINO_URL
-              value: {{ include "trino.url" . | quote }}
-            {{- $tls := .Values.trino.tls }}
-            {{- if $tls.existingSecret }}
-            # Each path is the mount point plus the Secret's own key, so a file is named
-            # once in values and nothing has to agree with a literal twice.
-            {{- if $tls.certificateKey }}
-            - name: APCHI_TRINO_AUTH_CERTIFICATE_FILE
-              value: {{ printf "%s/%s" $tls.mountPath $tls.certificateKey | quote }}
-            - name: APCHI_TRINO_AUTH_KEY_FILE
-              value: {{ printf "%s/%s" $tls.mountPath (required "trino.tls.keyKey is required when trino.tls.certificateKey is set" $tls.keyKey) | quote }}
-            {{- end }}
-            {{- end }}
+              value: {{ include "trino.discoveryUri" . | quote }}
             - name: APCHI_TRINO_USER
               value: {{ .Values.trino.user | quote }}
             # The Trino this chart runs, by the same helpers that name it, so the two cannot
@@ -213,16 +195,12 @@ spec:
               value: {{ .Values.secrets.catalogSeed | quote }}
             - name: APCHI_ACCESS_CONTROL_SECRET_NAME
               value: {{ .Values.secrets.accessControl | quote }}
-            - name: APCHI_EVENT_LISTENER_SECRET_NAME
-              value: {{ .Values.secrets.eventListener | quote }}
             - name: APCHI_CERTIFICATE_MAPPING_SECRET_NAME
               value: {{ .Values.secrets.certificateMapping | quote }}
             - name: APCHI_CLIENT_CERTIFICATE_SECRET_NAME
               value: {{ .Values.secrets.clientCertificates | quote }}
             - name: APCHI_RESOURCE_GROUPS_SECRET_NAME
               value: {{ .Values.secrets.resourceGroups | quote }}
-            - name: APCHI_EVENT_LISTENER_VOLUME_NAME
-              value: {{ .Values.volumes.eventListener | quote }}
             - name: APCHI_RESOURCE_GROUPS_VOLUME_NAME
               value: {{ .Values.volumes.resourceGroups | quote }}
             - name: APCHI_CATALOG_CONNECTIVITY_BLOCKS_APPLY
@@ -290,37 +268,26 @@ spec:
           {{- with .Values.resources }}
           resources: {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret (include "apchi.hasCaBundle" .) }}
+          {{- if or .Values.mongodb.tls.existingSecret (include "apchi.hasCaBundle" .) }}
           volumeMounts:
             {{- include "apchi.trustMounts" (dict "root" $ "java" false) | trim | nindent 12 }}
-            {{- if .Values.trino.tls.existingSecret }}
-            - name: trino-tls
-              mountPath: {{ .Values.trino.tls.mountPath | quote }}
-              readOnly: true
-            {{- end }}
             {{- if .Values.mongodb.tls.existingSecret }}
             - name: mongo-tls
               mountPath: {{ .Values.mongodb.tls.mountPath | quote }}
               readOnly: true
             {{- end }}
           {{- end }}
-      {{- if or .Values.trino.tls.existingSecret .Values.mongodb.tls.existingSecret (include "apchi.hasCaBundle" .) }}
+      {{- if or .Values.mongodb.tls.existingSecret (include "apchi.hasCaBundle" .) }}
       volumes:
         {{- include "apchi.trustVolumes" (dict "root" $ "java" false) | trim | nindent 8 }}
-        {{- if .Values.trino.tls.existingSecret }}
-        - name: trino-tls
-          secret:
-            secretName: {{ .Values.trino.tls.existingSecret | quote }}
-            # A credential, and 0640 is the floor: the kubelet ORs 0440 into the mode of
-            # every file in a readOnly volume, so 0600 is unreachable. Under restricted pod
-            # security it is 0644, the only mode an arbitrary uid can read, in a pod with one
-            # container that reads each key once at startup.
-            defaultMode: {{ include "apchi.credentialFileMode" . }}
-        {{- end }}
         {{- if .Values.mongodb.tls.existingSecret }}
         - name: mongo-tls
           secret:
             secretName: {{ .Values.mongodb.tls.existingSecret | quote }}
+            # A credential, and 0640 is the floor: the kubelet ORs 0440 into the mode of
+            # every file in a readOnly volume, so 0600 is unreachable. Under restricted pod
+            # security it is 0644, the only mode an arbitrary uid can read, in a pod with one
+            # container that reads each key once at startup.
             defaultMode: {{ include "apchi.credentialFileMode" . }}
         {{- end }}
       {{- end }}

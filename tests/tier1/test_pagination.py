@@ -68,9 +68,10 @@ async def _seed(client: AsyncClient, collection: str, count: int, tie: bool = Tr
     elif collection == "applies":
         for index in range(count):
             record = await app.state.apply_store.create(base_snapshot=None)
+            # Finished, as a page of history is: one in flight refuses the next.
             await app.state.apply_store._collection.update_one(
                 {"_id": record.id},
-                {"$set": {"started_at": now - _offset(count, index, tie)}},
+                {"$set": {"started_at": now - _offset(count, index, tie), "stage": "succeeded"}},
             )
     elif collection == "tokens":
         for index in range(count):

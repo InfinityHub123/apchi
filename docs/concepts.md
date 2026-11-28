@@ -71,7 +71,7 @@ Four different things, deliberately not one:
 | **Full rollback** | Replaces the whole Candidate with an earlier Snapshot | Only when you then apply |
 | **Auto rollback** | Returns the cluster to the latest Snapshot after a failure | Yes, by itself |
 
-Section revert is the routine recovery: one catalog broke, the other five sections are
+Section revert is the routine recovery: one catalog broke, the other four sections are
 nobody's business. Full rollback is for a disaster and is never implicit.
 
 Neither rewrites history. Rolling back to Snapshot 1 while Snapshot 2 is current produces
@@ -114,7 +114,7 @@ another cluster, from last month, from a colleague — and you want it here to e
 | `GET /api/v1/snapshots/{n}/export` | one committed Snapshot's configuration |
 | `GET /api/v1/candidate/export` | what is staged right now, which is in no Snapshot |
 | `PUT /api/v1/candidate` | replace everything staged with a document |
-| `GET /api/v1/admin/configuration/export` | the six sections **and** the admin values |
+| `GET /api/v1/admin/configuration/export` | the five sections **and** the admin values |
 | `PUT /api/v1/admin/configuration` | replace both |
 
 The only difference between the two scopes is the admin values. They are applied through the
@@ -144,7 +144,7 @@ Not included: the numbered history (that is MongoDB's, and your platform's), mai
 
 ## Sections, and what an apply costs
 
-A **section** is one managed area of the configuration, and the unit of revert. There are six,
+A **section** is one managed area of the configuration, and the unit of revert. There are five,
 and which of three apply engines a section uses is a fact about how Trino consumes that
 configuration — never about when your edit takes effect. Everything waits for apply.
 
@@ -172,7 +172,7 @@ written correctly and the cluster is healthy. Expect the grant itself a minute o
 
 ## Who owns what
 
-**Operators** are the platform staff Apchi is for. They own all six sections, which is most
+**Operators** are the platform staff Apchi is for. They own all five sections, which is most
 of the API.
 
 **Admins** run the underlying platform. They own the few decisions that are not an operator's

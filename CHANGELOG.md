@@ -22,6 +22,13 @@ Two breaks the committed contract cannot show you, and which belong here when th
 
 ### Breaking
 
+- Apchi presents no certificate to Trino (#298): `APCHI_TRINO_AUTH_CERTIFICATE_FILE`,
+  `APCHI_TRINO_AUTH_KEY_FILE` and the chart's `trino.tls` and `trino.url` are gone, and an
+  `APCHI_` variable Apchi does not read stops it starting. Apchi reaches the chart's coordinator
+  over its in-namespace HTTP port.
+- `APCHI_ENVIRONMENT` and the chart's `environment` are gone: set `logging.level` and
+  `logging.json`. `event_listeners` is no longer an audit category or a `ValidationFailure`
+  section, and an import carrying it is refused as an unknown Section.
 - `management.user` and `management.user.https-enabled` are refused in the workers' Server
   Configuration: they replace the identity of the drain Apchi sends a worker before it stops,
   and Trino then refuses it.

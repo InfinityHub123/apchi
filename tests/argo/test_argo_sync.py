@@ -546,7 +546,8 @@ def test_an_admin_replaces_certificate_with_password(argo: None) -> None:
     """Which method HTTPS offers is the Admin's: with PASSWORD alone the coordinator still
     starts -- nothing renders the certificate mapping no authenticator would read, which Trino
     refuses -- Apchi still verifies over HTTP, and HTTPS takes a password and refuses a bare
-    name. Put back afterwards, as the shape the module installed."""
+    name. Then PASSWORD and CERTIFICATE as a list, where both sign in. Put back afterwards, as
+    the shape the module installed."""
     apchi = _Apchi()
     before = apchi.http.get("/admin/server-configuration").json()
     try:
@@ -572,6 +573,44 @@ def test_an_admin_replaces_certificate_with_password(argo: None) -> None:
         assert "user-mapping" not in rendered, rendered
 
         with _Coordinator() as https:
+            statement = f"{https.https}/v1/statement"
+            signed_in = httpx.post(
+                statement,
+                content="SELECT 1",
+                auth=(PASSWORD_USER, PASSWORD),
+                verify=https.ca,
+                timeout=30,
+            )
+            assert signed_in.status_code == 200, (signed_in.status_code, signed_in.text)
+            bare = httpx.post(
+                statement,
+                content="SELECT 1",
+                headers={"X-Trino-User": PASSWORD_USER},
+                verify=https.ca,
+                timeout=30,
+            )
+            assert bare.status_code == 401, (bare.status_code, bare.text)
+
+        # Then both, as a list: each method signs in, the certificate mapping is wired again
+        # because CERTIFICATE is among them, and a bare name is still refused.
+        both = {
+            **coordinator,
+            "config.properties": {
+                **coordinator["config.properties"],
+                "http-server.authentication.type": "PASSWORD,CERTIFICATE",
+            },
+        }
+        changed = apchi.http.put(
+            "/admin/server-configuration", json={**before, "coordinator": both}
+        )
+        assert changed.status_code == 200, changed.text
+        record = apchi.apply("/admin/applies")
+        assert record["stage"] == "succeeded", record
+        rendered = _secret("trino-server-config-coordinator")["config.properties"]
+        assert "certificate.user-mapping.file" in rendered, rendered
+
+        with _Coordinator() as https:
+            assert https.query("SELECT 1") == [[1]], "a certificate signs in"
             statement = f"{https.https}/v1/statement"
             signed_in = httpx.post(
                 statement,
