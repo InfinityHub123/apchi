@@ -54,29 +54,25 @@ lives as Secrets; and Trino itself, which it talks to as an ordinary SQL client.
                                                         from the mounted files
 ```
 
-Each of those connections can be TLS, and a coordinator that authenticates its callers
-requires it. Apchi takes a **URL** for the coordinator rather than a host and a port, so
-`https://trino:8443` means what it says; it presents a client certificate to a Trino that
-authenticates by one, and to a MongoDB that does; and a private certificate authority is one
-setting covering every destination — the coordinator, MongoDB, your identity provider and the
-alert webhook — **added to** the public trust store rather than replacing it, so trusting your
-own CA cannot break a public one. [`docs/getting-started.md`](docs/getting-started.md) has the
-values.
+Apchi reaches the coordinator over its HTTP port inside the namespace, with a user name; the
+chart keeps that port to the namespace and serves HTTPS, which authenticates every caller, to
+everyone else. MongoDB, your identity provider and the alert webhook can each be TLS, Apchi
+presents a client certificate to a MongoDB that asks for one, and a private certificate
+authority is one setting covering every destination — **added to** the public trust store
+rather than replacing it, so trusting your own CA cannot break a public one.
+[`docs/getting-started.md`](docs/getting-started.md) has the values.
 
-Nothing about Trino's deployment belongs to Apchi. The Admin owns the Deployment, the heap
-sizes and the image; Apchi owns the configuration files inside it, delivered through Secrets
-the coordinator mounts. That is the whole coupling, and it is why installing Apchi is just
-installing Apchi — there is no sidecar, no operator and no webhook.
+The chart installs Trino beside Apchi, and the split is by files: the chart owns the
+Deployments, the heap sizes and the image, and Apchi owns every file under `/etc/trino`,
+delivered through Secrets the pods mount (ADR-0010). That is the whole coupling — there is no
+sidecar, no operator and no webhook.
 
-So two things have to agree. **Names**: the Secrets Apchi writes must be the Secrets the
-coordinator mounts — the chart's `secrets.*` values are those names, and `deploy/trino-dev/`
-is a Trino that mounts exactly them. And **mount shape**: most of what Apchi writes goes into
-a directory the Admin mounts, which works on any deployment, but Resource Groups and Event
-Listeners are single-file mounts Apchi makes itself, because Trino pins their pointer files to
-that directory and no property relocates them. So the coordinator has to mount `/etc/trino`
-file by file, as the chart's Trino does; a deployment that mounts it whole, as the official
-`trino/trino` chart does, is not supported (§16). Apchi checks all of this before an Apply and
-names what is wrong rather than half-applying.
+Two things have to agree, and the chart makes them agree. **Names**: the Secrets Apchi writes
+are the Secrets the pods mount, from the same `secrets.*` values. And **mount shape**: Resource
+Groups is a single-file mount Apchi makes itself, because Trino pins its pointer file to
+`/etc/trino`, so the pods mount that directory file by file. A Trino that mounts it whole, as
+the official `trino/trino` chart does, is not supported (§16). Apchi checks all of this before
+an Apply and names what is wrong rather than half-applying.
 
 ### What using it looks like
 
@@ -113,24 +109,28 @@ promotes the lot.
 The chart and the image publish to GHCR on every tag:
 
 ```sh
-helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.3.0 \
+helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.4.0 \
   --namespace trino \
   --set mongodb.uri=mongodb://your-mongo:27017
 ```
 
 Or from a clone, which is what you want while changing Apchi itself — the chart then
-installs whatever image you have built:
+installs whatever image you have built. Here the coordinator serves HTTPS by default, from a
+TLS Secret you provide (cert-manager writes this shape: `tls.crt`, `tls.key`, `ca.crt`):
 
 ```sh
 helm install apchi charts/apchi \
   --namespace trino \
-  --set mongodb.uri=mongodb://your-mongo:27017
+  --set mongodb.uri=mongodb://your-mongo:27017 \
+  --set trino.https.existingSecret=trino-tls
 ```
 
-The release is Apchi and the Trino cluster it configures: a coordinator, its workers, and
-the six Secrets Trino mounts its configuration from, created before Trino starts. Apchi is
-told the same names the chart gives Trino, so there is nothing to line up. The chart defaults
-to the image it was released with, for `linux/amd64` and `linux/arm64`.
+`trino.https.enabled=false` instead is plain HTTP with no authentication, for trying it out.
+
+The release is Apchi and the Trino cluster it configures: a coordinator and its workers. Apchi
+writes the Secrets Trino mounts its configuration from when it starts, and Trino waits for
+them. Apchi is told the same names the chart gives Trino, so there is nothing to line up. The
+chart defaults to the image it was released with, for `linux/amd64` and `linux/arm64`.
 
 `charts/apchi/README.md` documents every value and what the chart guarantees about its Trino;
 the ones you are most likely to change are Trino's sizing and your MongoDB.
@@ -150,10 +150,7 @@ MongoDB and tells you what to do next:
   half-applying. Apchi is developed and tested
   against Trino **483**, and several things it relies on were established by reading that
   version rather than its documentation — another version may well work, but no other
-  version has been tried. A cluster that authenticates its callers also requires TLS of them
-  — that is Trino's rule, not Apchi's — so there the coordinator URL must be `https://`, and
-  Apchi refuses an apply it can see would never be answered rather than letting every query
-  time out.
+  version has been tried.
 - MongoDB, for Apchi's own Snapshots and in-flight state. TLS and `MONGODB-X509`
   authentication are supported, and x509 is worth preferring where it is on offer — the
   connection URI is a Helm value, so an x509 one carries no secret where a password would.
@@ -179,7 +176,7 @@ published at
 ```
 app/
   pipeline/   review, validate, apply, verify, commit, auto rollback
-  sections/   the six sections above, plus the Admin's raw files
+  sections/   the five sections above, the Admin's server configuration and raw files
   adapters/   kubernetes, trino, mongo
   auth/       identities, passwords, sessions, tokens, OIDC
   audit/      who changed what, and when
@@ -214,8 +211,7 @@ firms up at 1.0. There is no `/api/v2` planned and no deprecation window — §1
 and `openapi.json` in this repository is the contract itself.
 
 The backend is complete. The configuration loop is tested end to end against a real Trino on a
-real Kubernetes for all six Sections, on both of the deployment shapes Trino clusters come in
-(§16).
+real Kubernetes for all five Sections.
 
 Built, and covered end to end:
 
@@ -225,13 +221,16 @@ Built, and covered end to end:
   sessions in MongoDB so logout takes effect immediately) or `sso` (OIDC authorization code
   with PKCE, every endpoint discovered from the issuer), plus opaque revocable API tokens.
   Every route carries a gate, and a test walks the published contract so a route added later
-  cannot ship ungated. Operators own all six Sections; Admins additionally write Raw Files and
-  engage Maintenance Mode.
-- **TLS on everything Apchi connects to.** HTTPS to the coordinator, with a client
-  certificate where Trino authenticates by one; TLS and x509 to MongoDB; and one CA bundle
-  for all four outbound destinations, added to the public store rather than substituted for
-  it. Covered against a real Trino 483 with certificate authentication, a real MongoDB
-  requiring TLS, and real HTTPS servers for the provider and the webhook.
+  cannot ship ungated. Operators own all five Sections; Admins additionally set the Server
+  Configuration, write Raw Files and engage Maintenance Mode.
+- **Trino authenticates its callers by default.** The coordinator serves HTTPS and
+  authenticates everyone there, by client certificate unless an Admin picks other methods;
+  its HTTP port takes a user name and a NetworkPolicy keeps it to the namespace (#295).
+  Covered against a real Trino 483 under Argo CD and an enforcing NetworkPolicy.
+- **TLS where Apchi connects out.** TLS and x509 to MongoDB, and one CA bundle for every
+  outbound destination, added to the public store rather than substituted for it. Covered
+  against a real MongoDB requiring TLS and real HTTPS servers for the provider and the
+  webhook.
 - **An audit trail.** Who changed what, and when, recorded at the one chokepoint an edit
   cannot skip — so a shared Candidate is still attributable. Refusals are recorded too.
 - **Trino's own files.** Apchi renders `config.properties`, `node.properties`,
@@ -245,8 +244,6 @@ Built, and covered end to end:
 Not built:
 
 - **No web UI.** The REST API is the whole interface. `/docs` serves an interactive reference.
-- **No API change policy.** Breaking changes, deprecated endpoints and fields, and new API
-  versions are undecided (§19, §27).
 - **Keeping MongoDB is yours to do.** Apchi's Snapshots live there, and operating that
   database is your platform's job — the same division Apchi draws for the Trino deployment
   it configures. Point `mongodb.uri` at something durable; the MongoDB the chart can deploy

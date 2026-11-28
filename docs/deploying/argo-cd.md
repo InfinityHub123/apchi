@@ -15,7 +15,9 @@ spec:
     targetRevision: main
     path: charts/apchi
     helm:
-      valuesObject: {}   # your values
+      valuesObject:      # your values
+        mongodb: {uri: mongodb://mongo:27017}
+        trino: {https: {existingSecret: trino-server-tls}}
   destination: {server: https://kubernetes.default.svc, namespace: trino}
   syncPolicy:
     automated: {prune: true, selfHeal: true}

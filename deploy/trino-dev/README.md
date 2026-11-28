@@ -29,8 +29,8 @@ generated output. If you have a cluster from before that, `kubectl apply` will r
 Deployments with `spec.selector: field is immutable` — delete them once and re-apply. The
 tier 2 fixture does this for you.
 
-`01-secrets.yaml` is the one file here written by hand. The chart creates these Secrets as
-install hooks, beside Apchi; tier 2 runs Apchi on the test host and installs no chart, so the
+`01-secrets.yaml` is the one file here written by hand. In the chart, Apchi writes these
+Secrets when it starts; tier 2 runs Apchi on the test host and installs no chart, so the
 fixture ships its own copies.
 
 `05-access-control.yaml` and `06-user-mapping.yaml` are **generated** —
