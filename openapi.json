@@ -209,6 +209,12 @@
             "title": "Restarts Workers",
             "type": "boolean"
           },
+          "rewired": {
+            "default": false,
+            "description": "Whether Trino's own files on the Cluster differ from what the Admin values last applied render to. Nothing an Operator or an Admin staged moved them: the chart changed what it wires -- `trino.https.*`, a port, a mount -- or someone edited the Secret by hand. The pods run the old files until an Apply delivers, and an Admin Apply does that without the Candidate (POST /api/v1/admin/applies).",
+            "title": "Rewired",
+            "type": "boolean"
+          },
           "warning": {
             "anyOf": [
               {
