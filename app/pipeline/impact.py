@@ -60,6 +60,16 @@ class ApplyCost(BaseModel):
     warning: str | None = Field(
         default=None, description="What to show an Operator before they Apply."
     )
+    rewired: bool = Field(
+        default=False,
+        description=(
+            "Whether Trino's own files on the Cluster differ from what the Admin values last "
+            "applied render to. Nothing an Operator or an Admin staged moved them: the chart "
+            "changed what it wires -- `trino.https.*`, a port, a mount -- or someone edited "
+            "the Secret by hand. The pods run the old files until an Apply delivers, and an "
+            "Admin Apply does that without the Candidate (POST /api/v1/admin/applies)."
+        ),
+    )
 
 
 async def sections_needing_rollout(
@@ -117,6 +127,7 @@ async def cost_of(
     whoever starts it. An Operator is told before they commit to that, not after.
     """
     coordinator_files, workers = await _admin_files_move(cluster)
+    rewired = await _rewired(cluster)
     behind = await _behind(cluster, desired)
     coordinator_files = coordinator_files or "coordinator" in behind
     workers = workers or "worker" in behind
@@ -126,6 +137,7 @@ async def cost_of(
             restarts_coordinator=False,
             restarts_workers=workers,
             warning=WORKER_RESTART_WARNING if workers else None,
+            rewired=rewired,
         )
 
     try:
@@ -141,6 +153,7 @@ async def cost_of(
         restarts_workers=workers,
         queries_at_risk=at_risk,
         warning=RESTART_WARNING,
+        rewired=rewired,
     )
 
 
@@ -162,6 +175,22 @@ async def _admin_files_move(cluster: Cluster) -> tuple[bool, bool]:
             exc_info=True,
         )
         return False, False
+
+
+async def _rewired(cluster: Cluster) -> bool:
+    """Whether the files moved under the Admin values last applied. Unreadable, or with no
+    record of those values, answers no, as the checks above do."""
+    if cluster.admin_applied is None:
+        return False
+    try:
+        return bool(await server_configuration.rewired_roles(cluster, cluster.admin_applied))
+    except Exception:
+        logger.warning(
+            "could not read Trino's files on the Cluster; Review leaves out whether the "
+            "chart rewired them",
+            exc_info=True,
+        )
+        return False
 
 
 async def _behind(cluster: Cluster, desired: dict[SectionName, Resources]) -> set[Role]:
