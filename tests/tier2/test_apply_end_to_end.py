@@ -39,60 +39,39 @@ async def _apply(client: AsyncClient) -> dict:
     return record
 
 
-async def test_an_apply_reaches_a_real_coordinator_and_commits_a_snapshot(
-    e2e_client: AsyncClient, forward: PortForward
+async def test_a_catalog_applied_restarted_dropped_and_restarted(
+    e2e_client: AsyncClient, forward: PortForward, real_kubernetes: RealKubernetes
 ) -> None:
+    """A catalog's whole life on a real coordinator. One scenario, because the restarts are
+    the expensive part and each test paid its own (#300).
+
+    - **An Apply reaches a real coordinator and commits a Snapshot**, and the seed Secret
+      holds what was applied.
+    - **It survives a coordinator restart.** CREATE CATALOG writes the coordinator's store,
+      an emptyDir, so the pod takes it to the grave; it comes back only because Apply also
+      patched the Secret the initContainer seeds from.
+    - **Dropped, it does not come back after a restart.** The one a merging Secret patch
+      gets wrong: dropping has to remove the key, or the next restart seeds it back in.
+    """
+
+    async def live() -> set[str]:
+        return set(await Trino(url=f"http://127.0.0.1:{forward.port}").catalogs())
+
     await e2e_client.post("/api/v1/catalogs", json=MEMORY)
 
     record = await _apply(e2e_client)
 
     assert record["snapshot"] == 1
-    live = await Trino(url=f"http://127.0.0.1:{forward.port}").catalogs()
-    assert "scratch" in live
-
-
-async def test_an_applied_catalog_survives_a_coordinator_restart(
-    e2e_client: AsyncClient, forward: PortForward
-) -> None:
-    """The vanishing catalog. CREATE CATALOG writes the coordinator's store, which is
-    an emptyDir, so the pod takes it to the grave. The catalog comes back only
-    because Apply also patched the Secret the initContainer seeds from.
-    """
-    await e2e_client.post("/api/v1/catalogs", json=MEMORY)
-    await _apply(e2e_client)
+    assert "scratch" in await live()
+    seed = await real_kubernetes.read_secret(CATALOG_SEED_SECRET)
+    assert seed["scratch.properties"] == "connector.name=memory\n"
 
     restart_coordinator()
     forward.restart()
-
-    live = await Trino(url=f"http://127.0.0.1:{forward.port}").catalogs()
-    assert "scratch" in live
-
-
-async def test_a_dropped_catalog_does_not_come_back_after_a_restart(
-    e2e_client: AsyncClient, forward: PortForward
-) -> None:
-    """The inverse, and the one a merging Secret patch gets wrong: dropping the
-    catalog has to remove its key from the Secret, or the next restart seeds it
-    straight back in."""
-    await e2e_client.post("/api/v1/catalogs", json=MEMORY)
-    await _apply(e2e_client)
+    assert "scratch" in await live()
 
     await e2e_client.delete("/api/v1/catalogs/scratch")
     await _apply(e2e_client)
-
     restart_coordinator()
     forward.restart()
-
-    live = await Trino(url=f"http://127.0.0.1:{forward.port}").catalogs()
-    assert "scratch" not in live
-
-
-async def test_the_seed_secret_holds_what_was_applied(
-    e2e_client: AsyncClient, real_kubernetes: RealKubernetes
-) -> None:
-    await e2e_client.post("/api/v1/catalogs", json=MEMORY)
-    await _apply(e2e_client)
-
-    seed = await real_kubernetes.read_secret(CATALOG_SEED_SECRET)
-
-    assert seed["scratch.properties"] == "connector.name=memory\n"
+    assert "scratch" not in await live()

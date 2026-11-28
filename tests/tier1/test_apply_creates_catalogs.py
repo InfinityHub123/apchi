@@ -122,3 +122,61 @@ async def test_an_unknown_snapshot_is_not_found(applying_client: AsyncClient) ->
 
     assert missing.status_code == 404
     assert missing.json()["code"] == "not_found"
+
+
+async def test_a_reserved_word_is_a_catalog_name_like_any_other(
+    applying_client: AsyncClient,
+) -> None:
+    """The DDL quotes the name, so `select` reaches Trino as an identifier, not a keyword."""
+    staged = await applying_client.post(
+        "/api/v1/catalogs", json={"name": "select", "connector": "memory", "properties": {}}
+    )
+    assert staged.status_code == 201, staged.text
+
+    record = await _apply(applying_client)
+
+    assert record["stage"] == "succeeded", record.get("failure_reason")
+    trino = applying_client._transport.app.state.trino  # type: ignore[attr-defined]
+    assert "select" in await trino.catalogs()
+
+
+async def test_the_longest_name_is_accepted_and_one_more_is_refused(
+    applying_client: AsyncClient,
+) -> None:
+    longest = "a" * 63
+    accepted = await applying_client.post(
+        "/api/v1/catalogs", json={"name": longest, "connector": "memory", "properties": {}}
+    )
+    refused = await applying_client.post(
+        "/api/v1/catalogs", json={"name": longest + "a", "connector": "memory", "properties": {}}
+    )
+
+    assert accepted.status_code == 201, accepted.text
+    assert refused.status_code == 422, refused.text
+    record = await _apply(applying_client)
+    assert record["stage"] == "succeeded", record.get("failure_reason")
+
+
+async def test_a_name_with_capitals_is_refused_rather_than_folded(
+    applying_client: AsyncClient,
+) -> None:
+    """Trino folds an unquoted name to lower case, so `Sales` and `sales` would be one catalog
+    under two names in the Candidate."""
+    refused = await applying_client.post(
+        "/api/v1/catalogs", json={"name": "Sales", "connector": "memory", "properties": {}}
+    )
+
+    assert refused.status_code == 422, refused.text
+
+
+async def test_trinos_own_system_catalog_cannot_be_staged(
+    applying_client: AsyncClient,
+) -> None:
+    """`system` is Trino's, always there and impossible to create or drop: staged, it would
+    fail every Apply after it."""
+    refused = await applying_client.post(
+        "/api/v1/catalogs", json={"name": "system", "connector": "memory", "properties": {}}
+    )
+
+    assert refused.status_code == 422, refused.text
+    assert "system" in refused.text

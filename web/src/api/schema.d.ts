@@ -1686,7 +1686,7 @@ export interface components {
              */
             at: string;
             /** Category */
-            category: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups") | "event_listeners" | ("admin" | "pipeline" | "audit");
+            category: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups") | ("admin" | "pipeline" | "audit");
             /**
              * Detail
              * @description Why it was refused, or how it failed. Never a configuration value.
@@ -1734,9 +1734,10 @@ export interface components {
          * AuthMode
          * @description How a caller proves who they are (§19, #128).
          *
-         *     `NONE` is the default because it is what Apchi does today -- every endpoint open -- and
-         *     anything else would break every existing install on upgrade. Tokens are not a mode: they
-         *     are a credential an authenticated user mints, so they need one of the others.
+         *     `NONE` is the default so that a new install answers with nothing to set up first; the
+         *     chart's install notes say what it means, and `password` or `sso` is for anything other
+         *     people can reach. Tokens are not a mode: they are a credential an authenticated user
+         *     mints, so they need one of the others.
          * @enum {string}
          */
         AuthMode: "none" | "password" | "sso";
@@ -3092,7 +3093,7 @@ export interface components {
             /** Resource */
             resource?: string | null;
             /** Section */
-            section?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups") | "event_listeners" | null;
+            section?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups") | null;
         };
         /** ValidationRecord */
         ValidationRecord: {
@@ -4013,7 +4014,7 @@ export interface operations {
                 limit?: number;
                 /** @description A `next` from a previous page. Omit for the newest page. */
                 before?: string | null;
-                category?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups") | "event_listeners" | ("admin" | "pipeline" | "audit") | null;
+                category?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups") | ("admin" | "pipeline" | "audit") | null;
                 actor?: string | null;
                 /** @description `refused` is the one people come here for: a frozen Candidate, Maintenance Mode, a rejected payload. It is Apchi working correctly, which is why it is recorded and why it is worth being able to ask for on its own. */
                 outcome?: ("succeeded" | "refused" | "failed") | null;
@@ -4063,7 +4064,7 @@ export interface operations {
     export_api_v1_audit_export_get: {
         parameters: {
             query?: {
-                category?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups") | "event_listeners" | ("admin" | "pipeline" | "audit") | null;
+                category?: ("catalogs" | "client_certificates" | "certificate_mapping" | "permissions" | "resource_groups") | ("admin" | "pipeline" | "audit") | null;
                 actor?: string | null;
                 /** @description `refused` is the one people come here for: a frozen Candidate, Maintenance Mode, a rejected payload. It is Apchi working correctly, which is why it is recorded and why it is worth being able to ask for on its own. */
                 outcome?: ("succeeded" | "refused" | "failed") | null;

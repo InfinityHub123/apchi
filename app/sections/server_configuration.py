@@ -54,7 +54,7 @@ CATALOG_STORE_PROPERTIES: Final = f"{CONFIG_DIR}/catalog-store.properties"
 #: file here is a subPath mount, and a subPath mount of a key the Secret does not hold is not
 #: "no file" but a pod that cannot start. Trino finds it because config.properties names it in
 #: `event-listener.config-files` -- and with that set, Trino ignores its default path
-#: (measured on 483), so a file left there by an older Apchi is never read.
+#: (measured on 483).
 LISTENER_DIR: Final = f"{CONFIG_DIR}/apchi"
 LISTENER_FILE: Final = "event-listener.properties"
 LISTENER_PATH: Final = f"{LISTENER_DIR}/{LISTENER_FILE}"

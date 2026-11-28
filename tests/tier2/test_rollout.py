@@ -72,13 +72,30 @@ def _volumes_and_mounts(spec: dict) -> tuple[list[str], list[str]]:
     )
 
 
-async def test_an_admin_apply_restarts_the_coordinator_and_trino_loads_the_listener(
+async def test_a_listener_rolls_out_and_back_and_a_catalog_never_restarts_anything(
     e2e_client: AsyncClient, forward: PortForward, real_kubernetes: RealKubernetes
 ) -> None:
-    """The tracer bullet. The coordinator is replaced, comes back, and is running the
-    listener -- read from where the chart mounts it, with nothing mounted for it by Apchi."""
-    before = _volumes_and_mounts(await real_kubernetes.deployment_pod_spec("trino-coordinator"))
+    """One coordinator through a catalog, a listener and its removal. One scenario, because
+    each rollout here is the expensive part and each test paid its own and a reset (#300).
 
+    - **A catalogs-only Apply does not restart the coordinator.** Half the Sections reach the
+      Cluster without a restart; routine catalog work must not cost anybody their queries.
+    - **An Admin Apply restarts the coordinator and Trino loads the listener** -- read from
+      where the chart mounts it, with nothing mounted for it by Apchi.
+    - **The coordinator serves queries after the rollout**, as an End User would find it,
+      not only through the query Verification ran.
+    - **Removing the listener brings the coordinator back without it.** The case that
+      decided the old delivery: an empty Secret key under a subPath mount is a directory
+      Trino dies on. Here no mount names the key, and the pointer goes with it.
+    """
+    template = pod_template()
+    await e2e_client.post("/api/v1/catalogs", json=CATALOG)
+    record = await _apply(e2e_client)
+    assert record["stage"] == "succeeded", record.get("failure_reason")
+    assert "rolling_out" not in [event["stage"] for event in record["history"]]
+    assert pod_template() == template, "the pod template was not touched"
+
+    before = _volumes_and_mounts(await real_kubernetes.deployment_pod_spec("trino-coordinator"))
     record = await _admin_apply(e2e_client, HTTP)
 
     assert record["stage"] == "succeeded", record.get("failure_reason")
@@ -91,36 +108,11 @@ async def test_an_admin_apply_restarts_the_coordinator_and_trino_loads_the_liste
     )
     after = _volumes_and_mounts(await real_kubernetes.deployment_pod_spec("trino-coordinator"))
     assert after == before, "Apchi changed the coordinator's volumes for a listener"
-
     forward.restart()
     assert LOADED in coordinator_log(2000)
-
-
-async def test_the_coordinator_serves_queries_after_the_rollout(
-    e2e_client: AsyncClient, forward: PortForward
-) -> None:
-    """Verification already asserts this, but only by a query Apchi itself ran. This checks
-    the Cluster an End User would find."""
-    await e2e_client.post("/api/v1/catalogs", json=CATALOG)
-    assert (await _apply(e2e_client))["stage"] == "succeeded"
-
-    record = await _admin_apply(e2e_client, HTTP)
-    assert record["stage"] == "succeeded", record.get("failure_reason")
-
-    forward.restart()
     trino = Trino(url=f"http://127.0.0.1:{forward.port}")
-
     assert "kept" in await trino.catalogs()
     assert await trino.query("SELECT 1 FROM system.runtime.nodes LIMIT 1")
-
-
-async def test_removing_the_listener_brings_the_coordinator_back_without_it(
-    e2e_client: AsyncClient, forward: PortForward, real_kubernetes: RealKubernetes
-) -> None:
-    """The case that decided the old delivery: an empty Secret key under a subPath mount is a
-    directory Trino dies on. Here no mount names the key, and the pointer goes with it -- so
-    the coordinator comes back with no listener and nothing missing."""
-    assert (await _admin_apply(e2e_client, HTTP))["stage"] == "succeeded"
 
     record = await _admin_apply(e2e_client, None)
 
@@ -131,18 +123,3 @@ async def test_removing_the_listener_brings_the_coordinator_back_without_it(
     forward.restart()
     assert await Trino(url=f"http://127.0.0.1:{forward.port}").is_starting() is False
     assert LOADED not in coordinator_log(2000)
-
-
-async def test_a_catalogs_only_apply_does_not_restart_the_coordinator(
-    e2e_client: AsyncClient, real_kubernetes: RealKubernetes
-) -> None:
-    """Half the Sections reach the Cluster without a restart. Proven here by the pod
-    surviving: routine catalog work must not cost anybody their queries."""
-    before = pod_template()
-
-    await e2e_client.post("/api/v1/catalogs", json=CATALOG)
-    record = await _apply(e2e_client)
-
-    assert record["stage"] == "succeeded", record.get("failure_reason")
-    assert "rolling_out" not in [event["stage"] for event in record["history"]]
-    assert pod_template() == before, "the pod template was not touched"

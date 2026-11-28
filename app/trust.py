@@ -23,12 +23,14 @@ deployment that does not use the chart.
 
 **Everything here is read once, at startup, and the mounted file is never read again** (#193).
 That is a decision and not an oversight: a rotation therefore takes effect when the pod
-restarts. See `presented` for why the alternative was worse, and `rotated` for how an Admin
-finds out.
+restarts. Reloading was rejected: MongoDB holds its certificate as bytes in a context built
+with the client, so it could not follow without being rebuilt, and a CA reloaded for some
+destinations and not others splits trust, which is the failure this module exists to
+prevent. See `rotated` for how an Admin finds out.
 
-Both the bundle and the copies are written with `mkstemp`, so this module needs a **writable
-temporary directory**. A container hardened with `readOnlyRootFilesystem: true` would fail at
-startup; the chart does not set it, and a deployment that wants to would have to mount an
+Both the bundle and MongoDB's joined certificate are written with `mkstemp`, so this module needs a
+**writable temporary directory**. A container hardened with `readOnlyRootFilesystem: true` would
+fail at startup; the chart does not set it, and a deployment that wants to would have to mount an
 `emptyDir` over the temporary directory.
 """
 
@@ -147,45 +149,6 @@ def bundled_ca(ca_file: str | None) -> str | None:
 
 
 @cache
-def presented(certificate_file: str | None, key_file: str | None) -> tuple[str | None, str | None]:
-    """Private copies of the certificate and key Apchi presents, or `(None, None)`.
-
-    **Copies, rather than the mounted files themselves**, because the two libraries that
-    reach the coordinator read a certificate at different moments. The official Trino client
-    hands `requests` the two *paths* and `requests` opens them at every TLS handshake, while
-    httpx is given a context with the bytes already loaded into it. Against a mounted Secret
-    those disagree the instant one is rotated -- measured against a server reporting the CN it
-    was shown: the query session presented the new certificate and the liveness check the old
-    one, for as long as the pod lived (#193).
-
-    Both halves read one file Apchi owns instead, so they cannot diverge. The cost is that a
-    rotation needs a pod restart, which was the decision: MongoDB holds its certificate as
-    bytes in a context built when the client is, so it could not follow a reload without
-    rebuilding the client -- and a CA that reloaded for Trino alone would split trust across
-    destinations, which is the failure this module exists to prevent.
-
-    The copies are 0600, which the mount itself cannot be: the kubelet ORs 0440 into every
-    file's mode in a readOnly volume, so 0640 is the floor there (§13.2). So this puts a
-    private key in the container's temporary directory for the life of the process, and it is
-    a *more* restricted copy of a key already in the same filesystem -- the mounted one is
-    0640 and root-owned. Left for the container's exit to remove, like the bundle.
-    """
-    if certificate_file is None or key_file is None:
-        return None, None
-    return _private_copy(certificate_file), _private_copy(key_file)
-
-
-def _private_copy(path: str) -> str:
-    content = _read(path)
-    # mkstemp creates at 0600 by design, which is what a private key wants, so nothing is
-    # chmodded here -- unlike the CA bundle, which has to be widened to 0644.
-    handle, copy = mkstemp(prefix="apchi-presented-", suffix=".pem")
-    with open(handle, "wb") as destination:
-        destination.write(content)
-    return copy
-
-
-@cache
 def combined(certificate_file: str | None, key_file: str | None) -> str | None:
     """One private file holding the certificate and then its key, or None.
 
@@ -197,7 +160,8 @@ def combined(certificate_file: str | None, key_file: str | None) -> str | None:
     `Private key doesn't match certificate`, which it did. So each part is stripped and
     rejoined on its own line, whatever either file ends with.
 
-    0600 by way of `mkstemp`, like `presented`'s copies, and read once for the same reason.
+    0600 by way of `mkstemp`, which is what a private key wants, and read once: see the module
+    docstring.
     """
     if certificate_file is None or key_file is None:
         return None
@@ -223,25 +187,16 @@ def recorded(path: str | None) -> str | None:
     return path
 
 
-def verification(
-    ca_file: str | None, certificate_file: str | None = None, key_file: str | None = None
-) -> ssl.SSLContext | bool:
+def verification(ca_file: str | None) -> ssl.SSLContext | bool:
     """What httpx verifies a destination with, or True for its own default trust store.
 
-    A context rather than paths because httpx deprecated both `verify=<path>` and `cert=` in
-    favour of one built here (#188). `cafile=None` still loads the default CAs, so a client
-    certificate presented to a publicly signed destination needs no bundle.
-
-    The certificate paths are expected to be `presented`'s copies, not the mount: that is
-    what makes this context and the Trino client's session agree (#193).
+    A context rather than a path because httpx deprecated `verify=<path>` in favour of one
+    built here (#188).
     """
     bundle = bundled_ca(ca_file)
-    if bundle is None and certificate_file is None:
+    if bundle is None:
         return True
-    context = ssl.create_default_context(cafile=bundle)
-    if certificate_file is not None:
-        context.load_cert_chain(certificate_file, key_file)
-    return context
+    return ssl.create_default_context(cafile=bundle)
 
 
 def rotated() -> list[str]:

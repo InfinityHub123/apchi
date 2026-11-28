@@ -478,10 +478,6 @@
                 "type": "string"
               },
               {
-                "const": "event_listeners",
-                "type": "string"
-              },
-              {
                 "enum": [
                   "admin",
                   "pipeline",
@@ -591,7 +587,7 @@
         "type": "object"
       },
       "AuthMode": {
-        "description": "How a caller proves who they are (\u00a719, #128).\n\n`NONE` is the default because it is what Apchi does today -- every endpoint open -- and\nanything else would break every existing install on upgrade. Tokens are not a mode: they\nare a credential an authenticated user mints, so they need one of the others.",
+        "description": "How a caller proves who they are (\u00a719, #128).\n\n`NONE` is the default so that a new install answers with nothing to set up first; the\nchart's install notes say what it means, and `password` or `sso` is for anything other\npeople can reach. Tokens are not a mode: they are a credential an authenticated user\nmints, so they need one of the others.",
         "enum": [
           "none",
           "password",
@@ -3584,10 +3580,6 @@
                 "type": "string"
               },
               {
-                "const": "event_listeners",
-                "type": "string"
-              },
-              {
                 "type": "null"
               }
             ],
@@ -4791,10 +4783,6 @@
                   "type": "string"
                 },
                 {
-                  "const": "event_listeners",
-                  "type": "string"
-                },
-                {
                   "enum": [
                     "admin",
                     "pipeline",
@@ -5008,10 +4996,6 @@
                     "permissions",
                     "resource_groups"
                   ],
-                  "type": "string"
-                },
-                {
-                  "const": "event_listeners",
                   "type": "string"
                 },
                 {

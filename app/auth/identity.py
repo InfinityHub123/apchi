@@ -46,8 +46,7 @@ class Identity(BaseModel):
         return self.role == "admin"
 
 
-#: The caller in `none` mode. An **Admin**, and the choice matters: every endpoint is open
-#: today, so resolving an unauthenticated caller to an Operator would *remove* access to
-#: /admin/* that exists now, breaking installs on upgrade in the name of adding security to
-#: them. A Cluster that asks nobody to authenticate cannot distinguish the two roles anyway.
+#: The caller in `none` mode. An **Admin**, and the choice matters: an Operator would leave
+#: /admin/* with nobody able to reach it, and a Cluster that asks nobody to authenticate
+#: cannot tell the two roles apart anyway.
 NOBODY = Identity(subject=ANONYMOUS, role="admin", via="none")

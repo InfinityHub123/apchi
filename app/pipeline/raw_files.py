@@ -9,11 +9,11 @@ fail-closed authorization into a silently open Cluster, with the Operator's gran
 listed in the API so nothing looks wrong. "Admin wins on conflict" (§14) governs a *property*
 an Admin sets inside a file Apchi generates; it does not extend to replacing the file.
 
-**A path the deployment cannot mount a single file at.** Precondition 6 already refuses a
-single-file mount whose parent is covered by a whole-directory mount: the kubelet has no file
-to bind onto and runc fails the container with "not a directory". A deployment that mounts
-`/etc/trino` as one volume therefore cannot receive raw files there -- and an Admin should
-learn that when they write the file, not minutes later from an Apply that failed.
+**A path the deployment cannot mount a single file at.** The single-file-mount precondition already
+refuses a single-file mount whose parent is covered by a whole-directory mount: the kubelet has no
+file to bind onto and runc fails the container with "not a directory". A deployment that mounts
+`/etc/trino` as one volume therefore cannot receive raw files there -- and an Admin should learn
+that when they write the file, not minutes later from an Apply that failed.
 
 **A path outside Trino's configuration directory.** This is an escape hatch for Trino
 configuration, not a way to write to a container's filesystem.
@@ -53,7 +53,7 @@ def _owner_of(path: str, settings: Settings) -> str | None:
     Two kinds, and both have to be refused for different reasons:
 
     * a **file** Apchi mounts itself (`CoordinatorFile`) -- a raw file there would be a second
-      mount at one path, which precondition 4 already refuses at Apply time
+      mount at one path, which the Section-path precondition already refuses at Apply time
     * anything **inside a directory** Apchi fills (`CoordinatorDirectory`) -- the Admin mounts
       that Secret as a whole volume, so Apchi owns everything in it and a raw file would
       either be clobbered by the next render or never appear at all
@@ -137,8 +137,8 @@ async def _refuse_if_unmountable(
 ) -> None:
     """Refuse a path this deployment cannot deliver a single file to.
 
-    The same condition precondition 6 enforces before an Apply, asked earlier and about one
-    path. Read from the live pod template, because the answer is a property of how the
+    The same condition the single-file-mount precondition enforces before an Apply, asked earlier
+    and about one path. Read from the live pod template, because the answer is a property of how the
     platform mounted `/etc/trino` and not of anything Apchi decided.
 
     A Cluster Apchi cannot read the template of is **not** a refusal: the Admin's file is

@@ -277,3 +277,55 @@ async def test_an_apply_interrupted_during_validation_is_not_rolled_back(
     assert record["interrupted"] is True
     assert record["rollback"] is None
     assert record["stage"] == "failed"
+
+
+async def test_an_apply_whose_outcome_cannot_be_recorded_is_resolved_once_mongodb_answers(
+    settings: Settings,
+    fake_kubernetes: FakeKubernetes,
+    trino_cluster: DockerContainer,
+    trino_validation: DockerContainer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MongoDB gone mid-Apply, briefly: shorter than the liveness probe takes to restart
+    Apchi, so no startup recovery is coming. The Apply could neither advance nor record that
+    it failed, and stayed in flight -- the Candidate frozen until somebody restarted the pod.
+    It is resolved as an interruption is, once MongoDB answers: failed, the Cluster put back,
+    the Candidate released."""
+    from pymongo.errors import ServerSelectionTimeoutError
+
+    from app.pipeline import applies as pipeline
+
+    monkeypatch.setattr(pipeline, "STORE_RETRY_SECONDS", 0.05)
+    async with _apchi(settings, fake_kubernetes, trino_cluster, trino_validation) as client:
+        await client.post("/api/v1/catalogs", json=KEPT)
+        await _succeed(client)
+        await client.post("/api/v1/catalogs", json=ADDED)
+
+        store = client.app_under_test.state.apply_store  # type: ignore[attr-defined]
+        advance, fail = store.advance, store.fail
+        outage = {"calls": 0}
+
+        async def unreachable(*args: object, **kwargs: object) -> None:
+            outage["calls"] += 1
+            raise ServerSelectionTimeoutError("no servers")
+
+        async def advance_until_verifying(apply_id: str, stage: object, **kwargs: object) -> None:
+            if getattr(stage, "value", None) == "verifying" and outage["calls"] < 3:
+                await unreachable()
+            await advance(apply_id, stage, **kwargs)  # type: ignore[arg-type]
+
+        async def fail_while_down(*args: object, **kwargs: object) -> None:
+            if outage["calls"] < 3:
+                await unreachable()
+            await fail(*args, **kwargs)
+
+        monkeypatch.setattr(store, "advance", advance_until_verifying)
+        monkeypatch.setattr(store, "fail", fail_while_down)
+        started = await client.post("/api/v1/applies")
+        record = await _settled(client, started.json()["id"])
+
+        assert record["stage"] == "failed", record
+        assert record["rollback"] == "succeeded", record
+        assert set(fake_kubernetes.secrets[SECRET]) == {"kept.properties"}
+        staged = await client.post("/api/v1/catalogs", json={**ADDED, "name": "after"})
+        assert staged.status_code == 201, "the Candidate is released"

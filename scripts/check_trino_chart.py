@@ -65,7 +65,7 @@ TRUST_VALUES = VALUES + (
     "javaTruststore.existingSecret=truststore",
 )
 #: Trino serving HTTPS itself and exposed by passthrough: a second port, an initContainer and
-#: two more volumes on the coordinator, and a config.properties the eighth precondition reads.
+#: two more volumes on the coordinator.
 HTTPS_VALUES = VALUES + (
     "--set",
     "trino.https.enabled=true",
@@ -102,8 +102,8 @@ class _Cluster:
 
     async def deployment_pod_spec_if_present(self, deployment: str) -> dict[str, Any] | None:
         """The worker's template, from the same render. Served rather than refused because
-        precondition 8 reads both roles (#184), and a chart whose worker leaks keys should
-        fail here rather than on somebody's first Apply."""
+        the credential precondition reads both roles (#184), and a chart whose worker leaks
+        keys should fail here rather than on somebody's first Apply."""
         return self._pod_specs.get(deployment)
 
     def __getattr__(self, name: str) -> Any:
@@ -176,8 +176,8 @@ def _permission_problems(documents: list[dict[str, Any]]) -> list[str]:
     root-only and Trino -- uid 1000 -- cannot read its own private keys. A chart that
     shipped one without the other would either leak keys or fail to start. §13.2.
 
-    Kept after §16 grew precondition 8, which refuses the same thing at runtime on both
-    roles (#184), because this catches it a stage earlier and in a form that one cannot.
+    Kept after §16 grew the credential precondition, which refuses the same thing at runtime on
+    both roles (#184), because this catches it a stage earlier and in a form that one cannot.
     It reads the chart as rendered, where a volume that asks for no mode has none -- the API
     server fills `defaultMode` in with 0644, so a pod template read back from a live cluster
     never shows the absent case. And it needs no cluster, so a chart that would leak keys
