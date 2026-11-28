@@ -101,6 +101,11 @@ the new wiring, and Review shows that as `rewired`.
   Candidate released.
 - **Raw Files could outgrow the one Secret they share**, and failed the Admin Apply at the
   Secret write (#304). A write or an import that would take them past 1 MiB is refused.
+- **`quickstart.sh` re-run kept serving the old code.** It rebuilt the image under the same tag,
+  which Kubernetes cannot tell from the one running, so nothing restarted. A re-run now
+  restarts Apchi onto it, leaving Trino and the Snapshots alone. It also recognises a minikube
+  profile of any name, not only `minikube`, and prints the right Service for a `RELEASE` that
+  does not say apchi.
 - **A catalog named `system` was accepted**, then failed Validation as one Apchi could adopt
   (#304). It is Trino's own, and is refused when staged.
 
