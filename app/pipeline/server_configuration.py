@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Final
 from app.sections.server_configuration import Role, role_secret, secret_name
 
 if TYPE_CHECKING:  # a Cluster carries the adapters and the Admin values together
+    from app.sections.admin import AdminValues
     from app.sections.base import Cluster
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,24 @@ async def changed_roles(cluster: "Cluster") -> set[Role]:
     for role in ROLES:
         live = await cluster.kubernetes.read_secret_if_present(secret_name(role, cluster.settings))
         if live != role_secret(role, cluster.admin.server_configuration, cluster.settings):
+            moved.add(role)
+    return moved
+
+
+async def rewired_roles(cluster: "Cluster", applied: "AdminValues") -> set[Role]:
+    """Which roles' files differ from what the Admin values last applied render to.
+
+    With those values unchanged, what moved is the rest of what renders the files -- the
+    wiring the chart passes Apchi, `trino.https.*`, a port, a mount -- or the Secret itself,
+    edited by hand. Apchi writes a missing Secret at startup and never one that exists, so
+    after such a chart upgrade the pods restart on the old files until an Apply delivers.
+    """
+    moved: set[Role] = set()
+    for role in ROLES:
+        live = await cluster.kubernetes.read_secret_if_present(secret_name(role, cluster.settings))
+        if live is not None and live != role_secret(
+            role, applied.server_configuration, cluster.settings
+        ):
             moved.add(role)
     return moved
 

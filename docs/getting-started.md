@@ -177,7 +177,7 @@ curl -s $A/review | python3 -m json.tool
     {"section": "resource_groups", "changes": []}
   ],
   "cost": {"restarts_coordinator": false, "rollout_sections": [], "restarts_workers": false,
-           "queries_at_risk": null, "warning": null}
+           "queries_at_risk": null, "warning": null, "rewired": false}
 }
 ```
 
@@ -344,7 +344,8 @@ curl -s $A/review | python3 -c 'import sys,json; print(json.dumps(json.load(sys.
   "rollout_sections": ["resource_groups"],
   "restarts_workers": false,
   "queries_at_risk": 0,
-  "warning": "Applying this restarts the Trino coordinator, which terminates every running and queued query. Trino cannot drain a coordinator, so there is no way to avoid it."
+  "warning": "Applying this restarts the Trino coordinator, which terminates every running and queued query. Trino cannot drain a coordinator, so there is no way to avoid it.",
+  "rewired": false
 }
 ```
 
@@ -379,7 +380,8 @@ curl -s $A/review | python3 -c 'import sys,json; d=json.load(sys.stdin); print(j
     "rollout_sections": ["resource_groups"],
     "restarts_workers": false,
     "queries_at_risk": 0,
-    "warning": "Applying this restarts the Trino coordinator, which terminates every running and queued query. Trino cannot drain a coordinator, so there is no way to avoid it."
+    "warning": "Applying this restarts the Trino coordinator, which terminates every running and queued query. Trino cannot drain a coordinator, so there is no way to avoid it.",
+    "rewired": false
   }
 }
 ```
@@ -537,7 +539,8 @@ helm upgrade apchi charts/apchi -n apchi --reuse-values \
 On a new install that is all. On one already running, as here, the coordinator restarts with
 the HTTPS port and its certificate mounted but its old `config.properties`: Apchi writes a
 Secret only when it is missing, and never at startup over one that exists. Review shows the
-difference as a pending coordinator restart, and an Admin Apply delivers it:
+difference as a pending coordinator restart with `"rewired": true` -- Trino's files moved
+without any Admin value moving -- and an Admin Apply delivers it:
 
 ```sh
 curl -s -X POST $A/admin/applies
