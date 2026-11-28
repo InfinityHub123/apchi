@@ -5,21 +5,22 @@ Installs Apchi and the Trino cluster it configures, as one release.
 Published to GHCR on every tag:
 
 ```sh
-helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.3.0 \
+helm install apchi oci://ghcr.io/infinityhub123/charts/apchi --version 0.4.0 \
   -n trino --set mongodb.uri=mongodb://your-mongo:27017
 ```
 
 Or from a clone, while changing Apchi itself:
 
 ```sh
-helm install apchi charts/apchi -n trino --set mongodb.uri=mongodb://your-mongo:27017
+helm install apchi charts/apchi -n trino --set mongodb.uri=mongodb://your-mongo:27017 \
+  --set trino.https.existingSecret=trino-tls
 ```
 
-One release holds Apchi (a Deployment, a Service, a ServiceAccount and a namespaced Role), the
-six Secrets Apchi writes configuration into, and Trino: one coordinator, its workers and their
-Service. Apchi is configured from the same helpers that name the Trino Deployments, so the two
-cannot disagree. The Secrets are install hooks, so they exist before the coordinator starts --
-Trino reads two of them while loading and refuses to boot when either is missing.
+One release holds Apchi (a Deployment, a Service, a ServiceAccount and a namespaced Role) and
+Trino: one coordinator, its workers and their Service. Apchi is configured from the same helpers
+that name the Trino Deployments, so the two cannot disagree. Apchi writes the Secrets Trino
+mounts its configuration from when it starts, and Trino's pods wait in `ContainerCreating`
+until they exist -- Trino reads some of them while loading and refuses to boot without them.
 
 To try it with nothing set up, `./scripts/quickstart.sh` from the repository root brings up
 this chart and a MongoDB on minikube or kind in one command.
@@ -33,9 +34,9 @@ fine for trying Apchi out, and it discards every Snapshot when its pod restarts.
 
 **Nothing about Trino's names.** Its Deployments are `<trino.name>-coordinator` and
 `<trino.name>-worker` and its Service `<trino.name>`, `trino` by default, and Apchi is told
-exactly those. The Secret names under `secrets.*` are likewise created and mounted by this one
-chart; `scripts/check_trino_chart.py` fails CI if the coordinator would mount one the chart
-does not create.
+exactly those. The Secret names under `secrets.*` are likewise the ones Apchi writes and this
+chart mounts; `scripts/check_trino_chart.py` fails CI if a pod would mount one Apchi does not
+write.
 
 ## Values
 
@@ -58,7 +59,7 @@ does not create.
 | `auth.oidc.usernameClaim` | `preferred_username` | The person's Apchi username. Not `sub`, which providers routinely make an opaque blob, and the audit records an actor somebody must be able to read. It follows that a provider which *changes* a login name produces a new Apchi user |
 | `auth.oidc.roleClaim`, `auth.oidc.adminGroups` | `groups`, `""` | Everyone who authenticates is an Operator; a member of one of `adminGroups` is an Admin. Empty means **nobody** is an Admin, which closes `/admin/*` rather than opening it |
 | `audit.retentionDays` | `""` | How long §20's audit history is kept. **Empty means forever, deliberately** — a trail that deletes itself is worse than one that grows. Setting it creates a TTL index, so history past it is discarded |
-| `candidateMaxBytes` | `15728640` | The most the Configuration Candidate may occupy. It is **one** MongoDB document, which MongoDB caps at 16MB, so this is a ceiling on all six Sections together rather than a per-Section quota. Below 16MB to leave room for BSON overhead and the Snapshot an Apply makes of the same content |
+| `candidateMaxBytes` | `15728640` | The most the Configuration Candidate may occupy. It is **one** MongoDB document, which MongoDB caps at 16MB, so this is a ceiling on all five Sections together rather than a per-Section quota. Below 16MB to leave room for BSON overhead and the Snapshot an Apply makes of the same content |
 | `logging.level`, `logging.json` | `null` | INFO and console lines when null. An explicit level can be raised during an incident without a rebuild |
 | `logging.debug` | `false` | Debugging mode: DEBUG unless `logging.level` says otherwise, each line naming the logger and line it came from, and every call to Kubernetes, Trino and MongoDB logged by name and timing. Payloads never, so it is safe to turn on in production. Dependencies' own debug output stays off, because PyMongo's prints Snapshots and the Kubernetes client's prints Secrets |
 | `trino.user` | `apchi` | The identity Apchi issues DDL as, and the only one granted `owner` on catalogs |
@@ -146,13 +147,14 @@ cluster-scoped rule.
 
 Apchi writes into eight Secrets: the catalog seed, the access-control rules, the user-mapping
 file, the client certificates, Resource Groups, the raw files, and Trino's own files for each
-role -- the coordinator's including its Event Listener. **This chart creates none of them.** Apchi writes each one that is
-missing when it starts -- rendered from the latest Snapshot and the Admin values in force, which
+role -- the coordinator's including its Event Listener. It also creates the internal shared
+secret Trino's nodes sign requests with. **This chart creates none of them.** Apchi writes each
+one that is missing when it starts -- rendered from the latest Snapshot and the Admin values in force, which
 on a new install is the empty configuration -- and never rewrites one that exists. Trino's pods
 wait in `ContainerCreating` until they appear, which Kubernetes retries by itself.
 
-The chart used to create them as Helm `pre-install` hooks, which Helm runs once. **Argo CD does
-not run Helm**: it turns those hooks into sync hooks and runs them on every sync, deleting and
+Not Helm `pre-install` hooks, which Helm runs once, because **Argo CD does not run Helm**: it
+turns those hooks into sync hooks and runs them on every sync, deleting and
 recreating each Secret with the chart's starting contents. Measured on kind with automated sync:
 one sync for an unrelated pod annotation emptied the catalog seed, reset the access-control rules
 to fail-open, and left the coordinator crash-looping on emptied Secrets its mounts still read
@@ -161,9 +163,6 @@ from. `tests/argo` runs that scenario in CI against the real chart and a real Ar
 Because no release owns them, `helm uninstall` and an Argo CD prune leave them behind, which is
 correct: they hold the Cluster's configuration and, for the catalog seed, its only durable copy.
 Remove them deliberately or not at all.
-
-**Upgrading from a chart that created them:** nothing to do. The Secrets already exist, so Apchi
-leaves them as they are, and a chart without the hooks no longer touches them.
 
 ## The Trino cluster
 
@@ -180,12 +179,15 @@ chart cannot drift into something Apchi refuses. CI runs it. It proves:
    itself, so every `CREATE CATALOG` would fail. An `emptyDir` is what belongs there.
 4. **Nothing but Apchi is mounted at the paths Apchi owns.** Two volumes over one file means
    whichever wrote last wins, silently.
-5. **`security.refresh-period` is set.** Without it Trino reads the access-control rules
-   once at startup and never again.
-6. **`/etc/trino` is mounted file by file.** Kubernetes will not place a single file inside a
+5. **`/etc/trino` is mounted file by file.** Kubernetes will not place a single file inside a
    read-only directory volume -- runc fails the container with `not a directory` and Trino
-   never starts -- and Apchi mounts `resource-groups.properties` there itself. The official `trinodb/charts` chart mounts the
-   whole directory, which is why Apchi does not support it (ADR-0008).
+   never starts -- and Apchi mounts `resource-groups.properties` there itself. The official
+   `trinodb/charts` chart mounts the whole directory, which is why Apchi does not support it
+   (ADR-0008).
+6. **Every credential volume is restricted, and still readable**, on both roles.
+7. **Each role mounts every file Apchi renders for it from Apchi's Secret, and nothing else
+   under `/etc/trino`.** Apchi renders all of them (ADR-0010), so a file from anywhere else is
+   a second owner, and a missing mount is a change Apchi applies and Trino never reads.
 
 **Every Trino pod serves its metrics to any named user** (#285, #288). Each one answers
 `/metrics` on its own port, and the rules Apchi writes for both roles let anyone read them:
