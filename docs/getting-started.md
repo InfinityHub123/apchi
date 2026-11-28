@@ -30,7 +30,9 @@ If you just want it running:
 ```
 
 That builds the image into your cluster, installs the Helm chart — Apchi, its Trino and a
-MongoDB — and prints what to do next. `--delete` removes all of it.
+MongoDB — and prints what to do next. It works against a kind cluster of any name or a
+minikube profile of any name, whichever `kubectl` points at. Run it again after changing Apchi
+and it rebuilds the image and restarts Apchi on it; Trino and your Snapshots stay as they are. `--delete` removes all of it.
 The rest of this page is the same thing done a step at a time, which is worth reading once
 because each step explains what Apchi is doing.
 
