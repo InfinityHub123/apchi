@@ -503,6 +503,7 @@ async def test_an_unapplied_admin_change_is_delivered_by_the_next_apply_whoever_
 
     review = (await applying_client.get("/api/v1/review")).json()
     assert review["cost"]["restarts_coordinator"] is True
+    assert review["cost"]["rewired"] is False, "the Admin moved these files, not the chart"
 
     record = await _apply(applying_client, APPLIES)
 
@@ -520,14 +521,21 @@ async def test_wiring_the_chart_changed_shows_as_a_restart_and_the_next_apply_de
     applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
 ) -> None:
     """What the coordinator holds was rendered with the chart's old wiring -- here, by hand.
-    Apchi never rewrites it at startup, so Review is where the difference shows."""
+    Apchi never rewrites it at startup, so Review is where the difference shows, and it says
+    why: no Admin value moved, so the files did (#308). After an Apply, which is what records
+    the values the Cluster has."""
+    assert (await _apply(applying_client))["stage"] == "succeeded"
     stale = dict(fake_kubernetes.secrets[SERVER_CONFIG_SECRET])
     stale["node.properties"] = "node.environment=old\nnode.data-dir=/data/trino\n"
     fake_kubernetes.secrets[SERVER_CONFIG_SECRET] = stale
 
-    assert (await applying_client.get("/api/v1/review")).json()["cost"]["restarts_coordinator"]
+    cost = (await applying_client.get("/api/v1/review")).json()["cost"]
+    assert cost["restarts_coordinator"] is True
+    assert cost["rewired"] is True
 
     await _apply(applying_client, APPLIES)
+
+    assert (await applying_client.get("/api/v1/review")).json()["cost"]["rewired"] is False
 
     assert (
         "node.environment=production"
@@ -837,3 +845,17 @@ async def test_an_import_whose_raw_files_outgrow_their_secret_is_refused(
     assert response.status_code == 422, response.text
     assert "1048576" in response.text
     assert (await as_admin.get("/api/v1/admin/files")).json() == []
+
+
+async def test_before_any_apply_review_claims_no_rewiring(
+    applying_client: AsyncClient, fake_kubernetes: FakeKubernetes
+) -> None:
+    """Nothing records what the Cluster has until an Apply succeeds, and the values before the
+    last edit are not that -- two unapplied edits would read as the chart's doing."""
+    await _put(applying_client, PROPERTIES)
+    await _put(applying_client, {"config.properties": {"query.max-execution-time": "3h"}})
+
+    cost = (await applying_client.get("/api/v1/review")).json()["cost"]
+
+    assert cost["restarts_coordinator"] is True
+    assert cost["rewired"] is False

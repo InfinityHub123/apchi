@@ -1567,6 +1567,12 @@ export interface components {
              */
             restarts_workers: boolean;
             /**
+             * Rewired
+             * @description Whether Trino's own files on the Cluster differ from what the Admin values last applied render to. Nothing an Operator or an Admin staged moved them: the chart changed what it wires -- `trino.https.*`, a port, a mount -- or someone edited the Secret by hand. The pods run the old files until an Apply delivers, and an Admin Apply does that without the Candidate (POST /api/v1/admin/applies).
+             * @default false
+             */
+            rewired: boolean;
+            /**
              * Rollout Sections
              * @description Which Sections the Rollout is for, in Section order. §21 requires an Operator to see which changes force a restart and which do not, and a client cannot work it out from `Section.requires_rollout`: a Section also forces a Rollout when what Apchi would render is not what the Cluster has mounted. A name here with no entry in the diff is a Rollout that no staged change accounts for.
              */

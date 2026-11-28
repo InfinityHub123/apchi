@@ -9,6 +9,7 @@ import { bytes, clock, plural } from "../ui/format";
 import { Pill } from "../ui/Pill";
 import { ErrorNote, Loading, PageHead } from "../ui/States";
 import { useChangedSince } from "../review/changedSince";
+import { useIdentity } from "../auth/useAuth";
 
 type Filter = "all" | "none" | "rollout" | "mine";
 
@@ -89,6 +90,8 @@ export function ReviewScreen() {
         </Link>
       </PageHead>
 
+      {r.cost.rewired && <RewiredCard />}
+
       {!r.has_changes ? (
         <div className="card cp">
           <b>Nothing is staged.</b>{" "}
@@ -161,6 +164,41 @@ function LastValidation() {
         </span>
       )}
     </>
+  );
+}
+
+/**
+ * Trino's own files moved with no Admin value moving: the chart changed what it wires, or the
+ * Secret was edited by hand. Shown whether or not anything is staged, because this restart
+ * happens at the next Apply either way and nothing in the Candidate explains it.
+ */
+function RewiredCard() {
+  const admin = useIdentity().data?.role === "admin";
+  return (
+    <section className="card" aria-label="Trino's files changed" style={{ borderColor: "var(--amber-bd)" }}>
+      <div className="chd" style={{ background: "var(--amber-bg)", borderColor: "var(--amber-bd)" }}>
+        <Pill tone="a">Rollout</Pill>
+        <span className="ct" style={{ color: "#7a4705" }}>
+          Trino's files changed outside Apchi
+        </span>
+        <span className="sm" style={{ color: "var(--amber)" }}>
+          running queries will be terminated
+        </span>
+      </div>
+      <div className="cp">
+        The coordinator runs files that differ from what the Admin values last applied render to,
+        and no one staged the difference: the chart changed what it wires — HTTPS, a port, a mount —
+        or someone edited the Secret by hand. The pods keep the old files until the next Apply,
+        which rewrites them and restarts the coordinator.{" "}
+        {admin ? (
+          <>
+            An <Link to="/admin">Admin Apply</Link> delivers them without the Candidate.
+          </>
+        ) : (
+          <>Any Apply delivers them, yours included; an Admin can also apply them on their own.</>
+        )}
+      </div>
+    </section>
   );
 }
 

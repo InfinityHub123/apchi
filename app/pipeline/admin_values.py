@@ -141,6 +141,15 @@ class AdminStore:
         logger.warning("restored the admin values a failed apply replaced")
         return previous
 
+    async def applied(self) -> AdminValues | None:
+        """The values the last successful Apply delivered, or None before one has.
+
+        Without `previous`'s fallback: that is the right answer for a rollback, and the wrong
+        one for a question about what the Cluster has, which before any Apply is not known.
+        """
+        applied = await self._collection.find_one({"_id": _APPLIED_ID})
+        return None if applied is None else _as_values(applied)
+
     async def previous(self) -> AdminValues:
         """What a rollback restores: the values the last successful Apply delivered.
 

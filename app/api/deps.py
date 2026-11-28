@@ -54,11 +54,13 @@ async def cluster(request: Request) -> Cluster:
     Read every time rather than cached: Review's job is to report what applying *now* would
     cost, and an Admin change between two Reviews is exactly the thing that must show up.
     """
+    store = admin_store(request)
     return Cluster(
         trino=request.app.state.trino,
         kubernetes=request.app.state.kubernetes,
         settings=request.app.state.settings,
-        admin=await admin_store(request).load(),
+        admin=await store.load(),
+        admin_applied=await store.applied(),
     )
 
 

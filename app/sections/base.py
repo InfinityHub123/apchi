@@ -214,6 +214,9 @@ class Cluster:
     #: whole of it -- an Admin editing them mid-Apply must not change what that Apply is
     #: delivering, for the reason invariant 4 freezes the Candidate.
     admin: AdminValues = field(default_factory=AdminValues)
+    #: The Admin values the last successful Apply delivered, where an operation reports on the
+    #: Cluster rather than changing it. None before any Apply, and everywhere else.
+    admin_applied: AdminValues | None = None
 
 
 class SectionPlan(Protocol):

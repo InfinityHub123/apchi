@@ -132,3 +132,26 @@ test("an empty Candidate's Review says so", async ({ page }) => {
   await page.goto("/review");
   await expect(page.getByText("Nothing is staged.")).toBeVisible();
 });
+
+test("files the chart rewired are named even when nothing is staged", async ({ page }) => {
+  await stubApi(page, {
+    "GET /api/v1/review": {
+      ...REVIEW_STAGED,
+      has_changes: false,
+      sections: [],
+      cost: { ...REVIEW_STAGED.cost, rollout_sections: [], restarts_coordinator: true, rewired: true },
+    },
+  });
+  await page.goto("/review");
+  const card = page.getByRole("region", { name: "Trino's files changed" });
+  await expect(card).toContainText("the chart changed what it wires");
+  await expect(card.getByRole("link", { name: "Admin Apply" })).toHaveAttribute("href", "/admin");
+  await expect(page.getByText("Nothing is staged.")).toBeVisible();
+});
+
+test("nothing is said about rewiring when the files are what was applied", async ({ page }) => {
+  await stubApi(page);
+  await page.goto("/review");
+  await expect(page.getByRole("region", { name: "Catalog finance_pg" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Trino's files changed" })).toHaveCount(0);
+});
