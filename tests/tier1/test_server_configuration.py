@@ -821,3 +821,19 @@ def test_the_probe_quotes_the_line_trino_gives_its_reason_on(log: str, reason: s
     from app.pipeline.validation import _why
 
     assert reason in _why(log)
+
+
+async def test_an_import_whose_raw_files_outgrow_their_secret_is_refused(
+    as_admin: AsyncClient,
+) -> None:
+    """The write-path limit holds on the import too, which replaces every raw file at once."""
+    from app.sections.raw_files import MAX_CONTENT_BYTES
+
+    files = {f"/etc/trino/big_{index}.properties": "x" * MAX_CONTENT_BYTES for index in range(5)}
+    response = await as_admin.put(
+        "/api/v1/admin/configuration", json=_admin_document({"raw_files": files})
+    )
+
+    assert response.status_code == 422, response.text
+    assert "1048576" in response.text
+    assert (await as_admin.get("/api/v1/admin/files")).json() == []

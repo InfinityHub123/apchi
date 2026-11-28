@@ -274,12 +274,14 @@ async def test_a_name_already_on_the_cluster_fails_validation(
 ) -> None:
     """The ephemeral pod cannot catch this one: it starts empty, so the collision
     exists only on the Cluster. Caught before Apply writes anything."""
-    await applying_client.post("/api/v1/catalogs", json={**MEMORY, "name": "system"})
+    trino = applying_client._transport.app.state.trino  # type: ignore[attr-defined]
+    await trino.query('CREATE CATALOG "outside" USING memory')
+    await applying_client.post("/api/v1/catalogs", json={**MEMORY, "name": "outside"})
 
     verdict = await _validation(applying_client)
 
     assert verdict["outcome"] == "failed"
-    assert verdict["failures"][0]["resource"] == "system"
+    assert verdict["failures"][0]["resource"] == "outside"
     assert "already exists on the Cluster" in verdict["failures"][0]["reason"]
 
 

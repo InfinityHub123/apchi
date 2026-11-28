@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.api.applies import in_flight_conflict
 from app.api.deps import (
     AdminStoreDep,
     ApplyStoreDep,
@@ -23,8 +24,8 @@ from app.api.deps import (
     MaintenanceStoreDep,
     MutationsEnabled,
 )
-from app.api.errors import Conflict, NotFound, UnprocessablePayload
-from app.pipeline.applies import ApplyRecord, ApplyRunner
+from app.api.errors import NotFound, UnprocessablePayload
+from app.pipeline.applies import ApplyInFlight, ApplyRecord, ApplyRunner
 from app.pipeline.configuration import (
     AdminImport,
     Configuration,
@@ -37,7 +38,7 @@ from app.sections import SectionName
 from app.sections.admin import MAX_PRESERVED_MAPPINGS, AdminValues
 from app.sections.certificate_mapping.model import CertificateMappingWrite
 from app.sections.certificate_mapping.section import validate_patterns
-from app.sections.raw_files import RawFile, RawFileWrite, normalised
+from app.sections.raw_files import RawFile, RawFileWrite, normalised, too_large
 from app.sections.server_configuration import (
     RENDERED_PATHS,
     ServerConfiguration,
@@ -282,14 +283,13 @@ async def start_admin_apply(request: Request, applies: ApplyStoreDep) -> ApplyRe
     It freezes the Candidate exactly as an Operator Apply does. Both mutate one Cluster,
     and the pipeline's guarantees depend on nothing else changing underneath.
     """
-    if (running := await applies.in_flight()) is not None:
-        raise Conflict(
-            f"Apply {running.id} is already in flight. The Candidate is frozen until it finishes."
-        )
     latest = await request.app.state.snapshot_store.latest()
-    record = await applies.create(
-        base_snapshot=None if latest is None else latest.number, kind="admin_apply"
-    )
+    try:
+        record = await applies.create(
+            base_snapshot=None if latest is None else latest.number, kind="admin_apply"
+        )
+    except ApplyInFlight as busy:
+        raise in_flight_conflict(busy) from busy
     runner: ApplyRunner = request.app.state.admin_apply_runner
     runner.start(record)
     logger.info("admin apply started", extra={"apply": record.id})
@@ -449,9 +449,16 @@ async def write_raw_file(
         cluster.settings,
         existing=len([p for p in values.raw_files if p != _leading_slash(path)]),
     )
-    updated = values.model_copy(
-        update={"raw_files": {**values.raw_files, normalised_path: write.content}}
-    )
+    files = {**values.raw_files, normalised_path: write.content}
+    # Checked here as well as on the model: `model_copy` does not validate.
+    if (problem := too_large(files)) is not None:
+        raise UnprocessablePayload(
+            problem,
+            details=[
+                {"property": "content", "problem": "the raw files' Secret would be too large"}
+            ],
+        )
+    updated = values.model_copy(update={"raw_files": files})
     await admin.save(updated)
     # The path and the size, never the content -- the same rule the listing follows, and the
     # reason this content is kept out of the log by origin rather than by field name.
